@@ -62,6 +62,29 @@ def test_a_green_left_active_is_a_note_the_core_step_0a_restores_over(
     assert verdict.refusals == () and "restores the record's deployment over it" in verdict.notes[0]
 
 
+def test_a_stopped_core_blue_refuses_before_the_lease_as_step_0a_would(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of #319: predicted here, nothing is quiesced or repaired under the lease."""
+
+    world.compute = "STOPPED"
+
+    verdict = _verdict(world, monkeypatch)
+    assert [refusal.code for refusal in verdict.refusals] == [codes.ROLLBACK_RECORD_DRIFT]
+    assert "blue_stopped" in verdict.refusals[0].message and "owner break-glass" in verdict.refusals[0].message
+    assert world.apps.mutations == []
+
+
+def test_a_stopped_app_over_a_green_left_active_is_the_restores_note(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.activate_green()
+    world.compute = "STOPPED"  # a killed run's candidate, stopped: step 0a's restore starts it
+
+    verdict = _verdict(world, monkeypatch)
+    assert verdict.refusals == () and "restores the record's deployment over it" in verdict.notes[0]
+
+
 def test_an_agentic_record_refuses_the_core_clause_as_present(world: CoreWorld, monkeypatch: pytest.MonkeyPatch) -> None:
     contract.save_versioned_record(world, scope=rr.SCOPE, record=rr.v6_record())
 

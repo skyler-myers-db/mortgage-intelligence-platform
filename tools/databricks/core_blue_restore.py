@@ -7,12 +7,14 @@ treatment is quiesced, the record is loaded through the tier gate
 * the active deployment is not the record's (a run killed after a green
   activation and before its signed capture): blue is restored first (tier b,
   below), with treatment left quiesced;
-* otherwise the record's own bindings are restored when a killed run left a
-  candidate's (the restore-owned repair, the one ``apps.update`` site), and
-  identity, the core resource proof and health are proven against the record.
-  A stopped App refuses (``blue_stopped``): the start-and-re-pin of tier a is
-  M0-PR8's for v5 and v6, and for v7 it waits for spike S7 (how a start
-  snapshots source), so the release never starts a stopped core blue.
+* otherwise a stopped App refuses first (``blue_stopped``), before any
+  binding repair: the start-and-re-pin of tier a is M0-PR8's for v5 and v6,
+  and for v7 it waits for spike S7 (how a start snapshots source), so the
+  release never starts a stopped core blue (the pre-stop probe predicts the
+  refusal before the lease). Then the record's own bindings are restored when
+  a killed run left a candidate's (the restore-owned repair, the one
+  ``apps.update`` site), and identity, the core resource proof and health are
+  proven against the record.
 
 ``restore_core_blue`` is tier b, the only rollback once green was activated:
 blue's restore payload (``blue_restore_proof.tier_b_payload``: the immutable
@@ -76,6 +78,11 @@ from tools.databricks.core_blue import (
 )
 
 DEPLOY_TIMEOUT = timedelta(minutes=20)
+# The step-0a refusal for a stopped core blue; the pre-stop probe predicts it.
+BLUE_STOPPED = (
+    "the core blue is stopped: the release never starts it (tier a for a v7 record waits for "
+    "spike S7); start it with the owner break-glass, then re-run"
+)
 
 
 def redeploy_core_blue(
@@ -289,18 +296,15 @@ def ensure_core_blue(
                 tree=tree,
                 run_git_sha=run_git_sha,
             )
+        # Before any binding repair: a stopped blue is left exactly as it is.
+        if is_stopped(workspace, app_name=app_name):
+            raise CoreBlueRefused("blue_stopped", BLUE_STOPPED)
         live_core_bindings(workspace, app_name=app_name)  # a serving binding refuses, unrepaired
         lease()
         restore_signed_app_resource_contract(
             workspace, app_name=app_name, resources=record["app_resources"]
         )
         verify_core_blue(workspace, record, app_name=app_name)
-        if is_stopped(workspace, app_name=app_name):
-            raise CoreBlueRefused(
-                "blue_stopped",
-                "the core blue is stopped: the release never starts it (tier a for a v7 record "
-                "waits for spike S7); start it with the owner break-glass, then re-run",
-            )
         health(record, active)
         verify_core_blue(workspace, record, app_name=app_name)
         if active_deployment_id(workspace, app_name=app_name) != active:

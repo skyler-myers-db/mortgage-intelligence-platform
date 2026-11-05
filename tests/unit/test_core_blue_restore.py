@@ -105,6 +105,20 @@ def test_a_stopped_core_blue_is_never_started_by_step_0a(world: CoreWorld) -> No
     assert "start" not in world.apps.mutations and world.treatments[-1] == "quiesce"
 
 
+def test_a_stopped_core_blue_refuses_before_any_binding_repair(world: CoreWorld) -> None:
+    """Review of #319: the refusal comes before the repair, so a stopped blue is left exactly as it is."""
+
+    world.compute = "STOPPED"
+    job = {"name": "candidate_job", "job": {"id": "999", "permission": "CAN_MANAGE_RUN"}}
+    world.resources = [*copy.deepcopy(rr.APP_RESOURCES), job]
+    lease_calls = world.lease_calls
+
+    with pytest.raises(core_blue.CoreBlueRefused) as refused:
+        core_blue_restore.ensure_core_blue(world, **world.kwargs())
+    assert refused.value.code == "blue_stopped"
+    assert world.apps.mutations == [] and world.resources[-1] == job, "no binding repair"
+    assert world.lease_calls == lease_calls
+
 
 def test_an_empty_slot_or_a_tombstone_has_no_core_blue(world: CoreWorld) -> None:
     world.apply("unadopt")

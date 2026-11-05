@@ -33,7 +33,10 @@ App still serves:
   v7 record) as ``rollback_record_present``; a failed signature as
   ``rollback_record_tampered``; a drifted identity or binding as
   ``rollback_record_drift``. An active deployment that is not the record's is
-  a note, as above: the core step 0a restores the record's over it.
+  a note, as above: the core step 0a restores the record's over it. A stopped
+  App over the record's own deployment refuses as ``rollback_record_drift``
+  (``blue_stopped``): the core step 0a never starts a core blue, so it would
+  refuse under the lease after quiescing blue's treatment; here nothing is.
 
 * **adopt phase** (``--phase adopt|unadopt``, M2-PR7): the record is judged
   the way adopt-live will judge it, with the tier-aware reader. No record (or
@@ -55,7 +58,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tools.databricks.app_deployment_rollback import verified_signed_last_good_contract
-from tools.databricks.app_deployment_state import active_deployment_id
+from tools.databricks.app_deployment_state import active_deployment_id, latest_succeeded
 from tools.databricks.app_rollback_bootstrap_gate import assert_rollback_record_absent
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
@@ -67,8 +70,10 @@ from tools.databricks.app_rollback_secret_scope import (
     expected_app_rollback_scope,
 )
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
+from tools.databricks.app_start_deployment import is_stopped
 from tools.databricks.blue_tier_gate import BlueTierRefused
 from tools.databricks.core_blue import CoreBlueRefused, load_core_blue, verify_core_blue
+from tools.databricks.core_blue_restore import BLUE_STOPPED
 from tools.databricks.prestop_refusals import (
     ROLLBACK_RECORD_ABSENT,
     ROLLBACK_RECORD_DRIFT,
@@ -84,6 +89,8 @@ ACTIVE_DEPLOYMENT = active_deployment_id
 # The core tier's step-0a reads (app_core_rollback ensure, M2-PR7b).
 CORE_LOAD = load_core_blue
 CORE_VERIFY = verify_core_blue
+CORE_LATEST = latest_succeeded
+CORE_STOPPED = is_stopped
 
 # First-install journal states whose App the recovery under the lease deletes.
 JOURNAL_OWNED_STATES = frozenset({"recover", "unclaimed"})
@@ -266,8 +273,24 @@ def _core_signed_verdict(
     try:
         CORE_VERIFY(workspace, record, app_name=app_name)
         active = ACTIVE_DEPLOYMENT(workspace, app_name=app_name)
+        latest = str(getattr(CORE_LATEST(workspace, app_name=app_name), "deployment_id", "") or "")
+        # The core step 0a's own branch: over the record's deployment it proves
+        # blue in place, and refuses a stopped one before any repair.
+        in_place = active == record["deployment_id"] and latest == active
+        stopped = in_place and CORE_STOPPED(workspace, app_name=app_name)
     except Exception as exc:  # noqa: BLE001 - the core step 0a reads it the same way
         return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_DRIFT, str(exc)),), ())
+    if stopped:
+        return RollbackRecordVerdict(
+            (
+                PrestopRefusal(
+                    ROLLBACK_RECORD_DRIFT,
+                    "the signed core blue is stopped, so the core step 0a would refuse it "
+                    f"(blue_stopped) under the lease after quiescing its treatment: {BLUE_STOPPED}",
+                ),
+            ),
+            (),
+        )
     where = "is the record's" if active == record["deployment_id"] else (
         "is not the record's, so the core step 0a restores the record's deployment over it"
     )
