@@ -993,8 +993,9 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
   `cotality_source_*` bundle variables. `databricks.yml` hands those to the
   feature pipeline's configuration. The pipeline has no default source: a run
   whose configuration does not name one fails before it reads a table.
-- They are client profile fields: public, so in CI they are variables of the
-  client's GitHub Environment, which `deploy-dev.yml` reads whole through the
+- Locally they are local deploy controls in `.env.local`. They are client
+  profile fields: public, so in CI they are variables of the client's GitHub
+  Environment, which `deploy-dev.yml` reads whole through the
   resolve-client-profile action (M1-PR7); `nightly.yml` stays parked.
 - The App reads the same three names as settings
   (`backend/config/cotality_source_settings.py`), canonical when unset, with
