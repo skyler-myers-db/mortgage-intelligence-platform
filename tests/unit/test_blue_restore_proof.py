@@ -162,7 +162,7 @@ def test_a_tampered_copy_refuses_the_proof_and_the_restore(adopted: World) -> No
         _prepare(adopted)
     assert refused.value.code == "copy_tampered"
     with pytest.raises(proof.RestoreProofRefused) as refused:
-        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record)
+        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record, agentic_tier="off")
     assert refused.value.code == "copy_tampered"
 
 
@@ -205,8 +205,38 @@ def test_tier_b_needs_the_recorded_payload(adopted: World) -> None:
     assert record is not None
 
     with pytest.raises(proof.RestoreProofRefused) as refused:
-        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record)
+        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record, agentic_tier="off")
     assert refused.value.code == "no_restore_payload"
+
+
+def test_tier_b_refuses_a_record_whose_tier_is_not_the_profiles(adopted: World) -> None:
+    """A core blue never restores under an agentic profile; nothing is re-hashed first."""
+
+    payload = _restore_payload(adopted)
+    _prepare(adopted, restore_payload=payload)
+    record = adopted.record()
+    assert record is not None and record["tier"] == "core"
+    rehashed: list[str] = []
+
+    def tree(_workspace: Any, path: str) -> str:
+        rehashed.append(path)
+        return str(record["source_tree_sha256"])
+
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        proof.tier_b_payload(
+            adopted, app_name=rr.APP_NAME, record=record, agentic_tier="on", tree=tree
+        )
+    assert refused.value.code == "blue_tier_mismatch" and rehashed == []
+    plan = proof.unverified_frontend_plan(app_name=rr.APP_NAME, record=record)
+    restored = proof.tier_b_payload(
+        adopted,
+        app_name=rr.APP_NAME,
+        record=record,
+        agentic_tier="off",
+        unverified_frontend_ack=ack_digest("restore_unverified_frontend", plan),
+        tree=tree,
+    )
+    assert restored == payload and rehashed, "the profile's own tier restores"
 
 
 def test_an_unverified_frontend_restore_needs_its_own_ack(adopted: World) -> None:
@@ -219,13 +249,18 @@ def test_an_unverified_frontend_restore_needs_its_own_ack(adopted: World) -> Non
     for ack in (None, ack_digest("no_rollback_for", plan), "0" * 64):
         with pytest.raises(proof.RestoreProofRefused) as refused:
             proof.tier_b_payload(
-                adopted, app_name=rr.APP_NAME, record=record, unverified_frontend_ack=ack
+                adopted,
+                app_name=rr.APP_NAME,
+                record=record,
+                agentic_tier="off",
+                unverified_frontend_ack=ack,
             )
         assert refused.value.code in {"ack_missing", "ack_mismatch"}
     restored = proof.tier_b_payload(
         adopted,
         app_name=rr.APP_NAME,
         record=record,
+        agentic_tier="off",
         unverified_frontend_ack=ack_digest("restore_unverified_frontend", plan),
     )
     assert restored == payload and adopted.apps.mutations == []

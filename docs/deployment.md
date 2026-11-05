@@ -2919,8 +2919,12 @@ retired`, every other field kept), so a later adopt starts clean; with no
 adopted record it retires nothing, so the bind's unadopt recovery still runs
 in either tier, and a captured blue refuses (`record_present`). Only adopt and
 supersede refuse the agentic tier. Over a tombstone, the v5/v6 reader's
-remedy is a re-adoption (`--phase adopt`): the one-time unsigned rebase's
-bootstrap gate refuses over any signed record, a tombstone included.
+remedy (the same text in either tier) is a re-adoption in the core tier:
+`--phase adopt` from a profile whose `MIP_AGENTIC_TIER` is off. adopt-live
+refuses the agentic tier (`tier_agentic`) and the one-time unsigned rebase's
+bootstrap gate refuses over any signed record, a tombstone included, so an
+agentic-tier profile has no route over a tombstone until the agentic tier can
+adopt.
 
 **The acks.** The owner attestation is deferred (review mode
 `single_maintainer_audited`), so each mode prints the sha256 of its plan's
@@ -2962,8 +2966,9 @@ tier's own invariant), so a core record never restores an agentic surface.
 Golden v5 and v6 records verify byte-identically.
 
 Where the tier is checked today: adopt-live signs the core tier only; the
-pre-activation proof refuses a v7 blue whose tier is not the profile's
-`MIP_AGENTIC_TIER` (`blue_tier_mismatch`); and `app_deployment_rollback
+pre-activation proof and `tier_b_payload` (before it re-hashes the copy)
+refuse a v7 blue whose tier is not the profile's `MIP_AGENTIC_TIER`
+(`blue_tier_mismatch`); and `app_deployment_rollback
 inspect` re-proves the record's own tier (core: the App identity and exactly
 the record's core bindings, never the Gateway; agentic: v6 inspect's own
 Gateway resource proof, its reviewed-function owner the signed payload's).

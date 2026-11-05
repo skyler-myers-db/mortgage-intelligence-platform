@@ -6,8 +6,12 @@ exact-field schema stored in v6's current-record slot and signed with its own
 algorithm name. Its fields:
 
 * ``tier``: ``core`` or ``agentic``, which must equal the profile's tier
-  (``MIP_AGENTIC_TIER`` off or on) for any capture or adoption; a restore
-  re-proves the record's own tier.
+  (``MIP_AGENTIC_TIER`` off or on). Enforced today: adopt-live signs the core
+  tier only; the pre-activation proof and the tier-b restore payload refuse a
+  record of the other tier (``blue_tier_mismatch``,
+  tools/databricks/blue_restore_proof.py); ``inspect`` re-proves the record's
+  own tier. The capture writer and the restore deploy, with its own resource
+  proof, are the core release path's (M2-PR7b).
   - **core**: the resource proof is exactly the core App bindings the profile
     binds (SQL warehouse, Genie space, Lakebase database, jobs, secrets:
     ``app_rollback_resource_contract.RESOURCE_KINDS``). A serving-endpoint,
@@ -449,7 +453,7 @@ def unsigned(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def assert_record_tier(record: Mapping[str, Any], *, agentic_tier: str) -> None:
-    """A record's tier must equal the profile's (any capture, adoption or restore)."""
+    """A record's tier must equal the profile's (the pre-activation proof and tier b today)."""
 
     if record.get("tier") != tier_of_profile(agentic_tier):
         raise V7RecordError(

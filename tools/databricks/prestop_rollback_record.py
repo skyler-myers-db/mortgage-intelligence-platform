@@ -85,8 +85,9 @@ _REMEDY_ABSENT = (
     "For the one-time adoption of an App deployed outside this script, re-run with "
     "MIP_REBASE_UNVERIFIED_APP=1 (that path stops and quarantines the App until signed "
     "capture), or, over a retired adopt-live tombstone (where that rebase refuses), "
-    "re-adopt with --phase adopt; otherwise restore the record from the deploy that "
-    "captured it. Then re-run."
+    "re-adopt with --phase adopt from a core-tier profile (MIP_AGENTIC_TIER off: adopt-live "
+    "refuses the agentic tier as tier_agentic); otherwise restore the record from the "
+    "deploy that captured it. Then re-run."
 )
 _REMEDY_TAMPERED = (
     "The record or its scope failed verification: do not deploy over it. Compare the "
