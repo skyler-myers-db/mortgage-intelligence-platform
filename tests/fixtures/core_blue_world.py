@@ -108,6 +108,7 @@ class CoreWorld(World):
             "health": self.serves,
             "lease": self.lease,
             "treatment": self.converge_treatment,
+            "run_git_sha": GREEN_SHA,  # the restoring run's commit
         }
         values.update(overrides)
         return values

@@ -251,6 +251,7 @@ def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> 
     plan = proof.unverified_frontend_plan(
         app_name=rr.APP_NAME,
         record={**record, "restore_payload_sha256": contract._payload_digest(payload)},
+        run_git_sha=GREEN_SHA,
     )
     frontend_ack = ack_digest("restore_unverified_frontend", plan)
     # Before activation: blue is restorable only once that exact ack is given (M2-PR7b).
@@ -267,11 +268,20 @@ def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> 
     for ack in (None, ack_digest("no_rollback_for", plan), "0" * 64):
         with pytest.raises(proof.RestoreProofRefused) as refused:
             proof.tier_b_payload(
-                unverified, app_name=rr.APP_NAME, record=record, unverified_frontend_ack=ack
+                unverified,
+                app_name=rr.APP_NAME,
+                record=record,
+                unverified_frontend_ack=ack,
+                run_git_sha=GREEN_SHA,
             )
         assert refused.value.code in {"ack_missing", "ack_mismatch"}
+        assert f"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND={frontend_ack}" in str(refused.value)
     restored = proof.tier_b_payload(
-        unverified, app_name=rr.APP_NAME, record=record, unverified_frontend_ack=frontend_ack
+        unverified,
+        app_name=rr.APP_NAME,
+        record=record,
+        unverified_frontend_ack=frontend_ack,
+        run_git_sha=GREEN_SHA,
     )
     assert restored == payload and unverified.apps.mutations == []
     # Re-proven at the next activation, the recorded payload still needs the ack.
@@ -279,6 +289,41 @@ def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> 
         _prepare(unverified)
     assert refused.value.code == "unverified_frontend_unacked"
     assert "re-proven now" in _prepare(unverified, unverified_frontend_ack=frontend_ack)
+
+
+def test_the_unverified_frontend_ack_covers_one_run_never_a_later_release(unverified: World) -> None:
+    """Review of #319: one digest is the activation gate's and the same run's tier-b restore's, no other run's."""
+
+    payload = _restore_payload(unverified)
+    record = unverified.record()
+    assert record is not None
+    recorded = {**record, "restore_payload_sha256": contract._payload_digest(payload)}
+    plans = {
+        sha: proof.unverified_frontend_plan(app_name=rr.APP_NAME, record=recorded, run_git_sha=sha)
+        for sha in (GREEN_SHA, "e" * 40)
+    }
+    this_run = ack_digest("restore_unverified_frontend", plans[GREEN_SHA])
+    assert this_run != ack_digest("restore_unverified_frontend", plans["e" * 40])
+    _prepare(unverified, restore_payload=payload, unverified_frontend_ack=this_run)
+    stored = unverified.record()
+    assert stored is not None
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        _prepare(unverified, green_git_sha="e" * 40, green_release_id=f"{'e' * 12}-{'f' * 12}",
+                 unverified_frontend_ack=this_run)
+    assert refused.value.code == "unverified_frontend_unacked", "a later release needs its own digest"
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        proof.tier_b_payload(
+            unverified, app_name=rr.APP_NAME, record=stored, unverified_frontend_ack=this_run,
+            run_git_sha="e" * 40,
+        )
+    assert refused.value.code == "ack_mismatch"
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        proof.tier_b_payload(unverified, app_name=rr.APP_NAME, record=stored, unverified_frontend_ack=this_run)
+    assert refused.value.code == "run_commit_invalid", "no commit is never a run's"
+    restored = proof.tier_b_payload(
+        unverified, app_name=rr.APP_NAME, record=stored, unverified_frontend_ack=this_run, run_git_sha=GREEN_SHA
+    )
+    assert restored == payload
 
 
 def test_the_cli_refuses_with_exit_2_and_prints_the_ack_to_give(

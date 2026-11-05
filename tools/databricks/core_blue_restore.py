@@ -116,6 +116,7 @@ def restore_core_blue(
     restore_treatment: bool = True,
     tree: Callable[[Any, str], str] = tree_digest,
     timeout: timedelta = DEPLOY_TIMEOUT,
+    run_git_sha: str = "",
 ) -> dict[str, Any]:
     """Tier b over a v7 core record; returns the re-pinned record."""
 
@@ -151,6 +152,7 @@ def restore_core_blue(
             record=record,
             unverified_frontend_ack=unverified_frontend_ack,
             tree=tree,
+            run_git_sha=run_git_sha,
         )
         try:
             ensure_started(workspace, app_name=app_name)
@@ -196,6 +198,7 @@ def ensure_core_blue(
     tier_transition_ack: str | None = None,
     unverified_frontend_ack: str | None = None,
     tree: Callable[[Any, str], str] = tree_digest,
+    run_git_sha: str = "",
 ) -> dict[str, Any]:
     """Step 0a over a v7 core record: prove blue, or restore it; treatment stays quiesced."""
 
@@ -229,6 +232,7 @@ def ensure_core_blue(
                 expected_rollback_deployment_id=record["deployment_id"],
                 restore_treatment=False,
                 tree=tree,
+                run_git_sha=run_git_sha,
             )
         live_core_bindings(workspace, app_name=app_name)  # a serving binding refuses, unrepaired
         lease()

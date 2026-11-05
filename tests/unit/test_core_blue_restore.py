@@ -105,6 +105,7 @@ def test_a_stopped_core_blue_is_never_started_by_step_0a(world: CoreWorld) -> No
     assert "start" not in world.apps.mutations and world.treatments[-1] == "quiesce"
 
 
+
 def test_an_empty_slot_or_a_tombstone_has_no_core_blue(world: CoreWorld) -> None:
     world.apply("unadopt")
 

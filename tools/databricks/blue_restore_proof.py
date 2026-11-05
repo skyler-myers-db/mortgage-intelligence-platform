@@ -34,7 +34,10 @@ signed blue, ``prepare_activation`` requires blue's tier-b restore payload:
   when that exact ack is given now (``MIP_ACK_RESTORE_UNVERIFIED_FRONTEND``,
   over the payload's own digest); without it, activation refuses
   (``unverified_frontend_unacked``, printing both digests) unless the
-  ``no_rollback_for`` ack is given, and nothing is recorded.
+  ``no_rollback_for`` ack is given, and nothing is recorded. The ack covers
+  this blue, this payload and the commit of the run that gives it: the
+  activation gate and the same run's tier-b restore ask for one digest, and a
+  later run (another commit) needs its own, which the refusal prints.
 
 No record, or a retired tombstone, has no blue to protect. Blue's tier must
 be the profile's (``MIP_AGENTIC_TIER``; tools/databricks/blue_tier_gate.py): a
@@ -146,11 +149,20 @@ def no_rollback_plan(
     }
 
 
-def unverified_frontend_plan(*, app_name: str, record: Mapping[str, Any]) -> dict[str, str]:
+def unverified_frontend_plan(
+    *, app_name: str, record: Mapping[str, Any], run_git_sha: str
+) -> dict[str, str]:
+    """The canonical plan a ``restore_unverified_frontend`` ack covers: this blue and payload, this run."""
+
+    try:
+        commit = release_contract.check_commit(run_git_sha)
+    except release_contract.ReleaseContractError as exc:
+        raise RestoreProofRefused("run_commit_invalid", f"the run's commit is invalid: {exc}") from exc
     return {
         "app_name": app_name,
         "restore_to": sha256_text(str(record["deployment_id"])),
         "restore_payload_sha256": str(record["restore_payload_sha256"]),
+        "run_git_sha": commit,
     }
 
 
@@ -161,8 +173,13 @@ def tier_b_payload(
     record: Mapping[str, Any],
     unverified_frontend_ack: str | None = None,
     tree: Callable[[Any, str], str] = tree_digest,
+    run_git_sha: str = "",
 ) -> dict[str, object]:
-    """Blue's tier-b restore payload, re-proven now; the caller deploys it (M2-PR7b)."""
+    """Blue's tier-b restore payload, re-proven now; the caller deploys it (M2-PR7b).
+
+    ``run_git_sha`` is the restoring run's commit, which an unverified
+    frontend's ack covers; a verified frontend never reads it.
+    """
 
     if record.get("version") != V7_RECORD_VERSION:
         raise RestoreProofRefused(
@@ -177,15 +194,15 @@ def tier_b_payload(
     if _payload_digest(payload) != record["restore_payload_sha256"]:
         raise RestoreProofRefused("payload_digest", "the restore payload digest does not match")
     if record["frontend_provenance"] != "verified":
+        plan = unverified_frontend_plan(app_name=app_name, record=record, run_git_sha=run_git_sha)
         try:
-            require_ack(
-                "restore_unverified_frontend",
-                unverified_frontend_plan(app_name=app_name, record=record),
-                unverified_frontend_ack,
-            )
+            require_ack("restore_unverified_frontend", plan, unverified_frontend_ack)
         except AckRefused as exc:
             raise RestoreProofRefused(
-                exc.code, f"blue's frontend/dist is unverified: {exc}"
+                exc.code,
+                f"blue's frontend/dist is unverified: {exc}. To restore it, export "
+                f"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND={ack_digest('restore_unverified_frontend', plan)} "
+                "for this run",
             ) from exc
     return dict(payload)
 
@@ -244,7 +261,7 @@ def prepare_activation(
     frontend_ack = (
         None
         if digest is None
-        else _unacked_frontend(app_name, record, str(digest), unverified_frontend_ack)
+        else _unacked_frontend(app_name, record, str(digest), unverified_frontend_ack, green_git_sha)
     )
     if digest is not None and frontend_ack is None:
         if candidate is None:
@@ -309,14 +326,17 @@ def _candidate(
 
 
 def _unacked_frontend(
-    app_name: str, record: Mapping[str, Any], digest: str, ack: str | None
+    app_name: str, record: Mapping[str, Any], digest: str, ack: str | None, run_git_sha: str
 ) -> str | None:
-    """None when blue's frontend is verified or its exact ack is given, else the ack to give."""
+    """None when blue's frontend is verified or its exact ack is given, else the ack to give.
+
+    This run's commit: the same digest is the one its own tier-b restore asks for.
+    """
 
     if record["frontend_provenance"] == "verified":
         return None
     plan = unverified_frontend_plan(
-        app_name=app_name, record={**record, "restore_payload_sha256": digest}
+        app_name=app_name, record={**record, "restore_payload_sha256": digest}, run_git_sha=run_git_sha
     )
     try:
         require_ack("restore_unverified_frontend", plan, ack)

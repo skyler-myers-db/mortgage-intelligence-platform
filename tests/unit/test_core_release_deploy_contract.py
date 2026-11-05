@@ -142,8 +142,11 @@ def test_the_unverified_frontend_ack_reaches_the_core_proof_restore_and_step_0a(
     env = {"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND": FRONTEND_ACK}
     _result, calls = _run(tmp_path / "proof", "prove_blue_restorable_before_activation\n", env=env)
     assert calls[-1][calls[-1].index("--restore-unverified-frontend-ack") + 1] == FRONTEND_ACK
+    activation_commit = _flags(calls[-1])["--source-git-sha"]
     _result, calls = _run(tmp_path / "restore", "restore_signed_blue_while_quiesced\n", env=env)
     assert calls[0][calls[0].index("--restore-unverified-frontend-ack") + 1] == FRONTEND_ACK
+    # The ack covers the run's commit (review of #319): one digest for the gate and the same run's restore.
+    assert _flags(calls[0])["--deployment-source-git-sha"] == activation_commit == BASE["SOURCE_GIT_SHA"]
     _result, calls = _run(tmp_path / "ensure", "prove_or_restore_core_blue /tmp/out.env\n", env=env)
     assert calls[0][:2] == ["app_core_rollback", "ensure"]
     assert calls[0][calls[0].index("--restore-unverified-frontend-ack") + 1] == FRONTEND_ACK

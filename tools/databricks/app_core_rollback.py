@@ -62,7 +62,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--treatment-warehouse-id", default="")
     parser.add_argument("--treatment-catalog", default="mip")
     parser.add_argument("--out-env", type=Path)
-    # ensure and restore (MIP_ACK_RESTORE_UNVERIFIED_FRONTEND, a one-run export)
+    # ensure and restore (MIP_ACK_RESTORE_UNVERIFIED_FRONTEND, a one-run export
+    # over this run's --deployment-source-git-sha)
     parser.add_argument("--expected-rollback-deployment-id", default="")
     parser.add_argument("--restore-unverified-frontend-ack", default="")
     # capture
@@ -213,6 +214,7 @@ def run(args: argparse.Namespace, workspace: Any) -> str:
                 treatment=treatment,
                 tier_transition_ack=args.tier_transition_ack,
                 unverified_frontend_ack=args.restore_unverified_frontend_ack,
+                run_git_sha=args.deployment_source_git_sha,
             )
         else:
             record = core_blue_restore.restore_core_blue(
@@ -224,6 +226,7 @@ def run(args: argparse.Namespace, workspace: Any) -> str:
                 tier_transition_ack=args.tier_transition_ack,
                 unverified_frontend_ack=args.restore_unverified_frontend_ack,
                 expected_rollback_deployment_id=args.expected_rollback_deployment_id or None,
+                run_git_sha=args.deployment_source_git_sha,
             )
     if args.out_env is not None:
         _write_env(args.out_env, binding_values(record))
