@@ -2709,9 +2709,9 @@ runs). A live phase is CI-only; locally every phase runs with `--dry-run`.
 
 | Phase | Lease | What it does |
 |---|---|---|
-| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. Nothing is written to the workspace; the PlanReport upload to the plan-reports folder is M1-PR7's. |
-| `release` | yes | The run with no `--phase` minus exactly the data jobs (silver, gold and its grant reconcile, the stale-rate guard, the lifecycle sync and the KPI snapshot), which it never runs, submits or triggers. It prints `data jobs deferred to --phase data`. The core tier refuses it before the lease like a run with no phase, until M2-PR7b. |
-| `data` | yes, its own | Silver (unless `--skip-silver`), then `mip_scheduled_refresh` (FRED, gold, lifecycle mirror, KPI snapshot and its outcome gate), each followed by the reviewed-function grant reconcile and verify when its graph touches gold, then the data smoke. No pre-stop probe, no bundle plan or apply, and no Apps call but one read-only `apps get` of the App's service principal. |
+| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. Nothing is written to the workspace: its pre-stop probes run with `--genie-turn off`, so the one Genie turn they otherwise ask (the probes' only call that is not a GET or a list; it opens a conversation) is the release's alone. The PlanReport upload to the plan-reports folder is M1-PR7's. `tests/unit/test_plan_phase_live_shape.py` pins every command a live plan phase runs. |
+| `release` | yes | The run with no `--phase` minus exactly the data jobs of steps 6-9b (silver, gold and its grant reconcile, the stale-rate guard, the lifecycle sync and the KPI snapshot), which it never runs, submits or triggers. It prints `data jobs deferred to --phase data`. The core tier refuses it before the lease like a run with no phase, until M2-PR7b. |
+| `data` | yes, its own | Silver (unless `--skip-silver`), then `mip_scheduled_refresh` (FRED, gold, lifecycle mirror, KPI snapshot and its outcome gate), each followed by the reviewed-function grant reconcile and verify when its graph touches gold, then the data smoke. No pre-stop probe, no bundle plan or apply, and no Apps write: its Apps calls are reads only, the preflight's (`apps list`, `apps get`) and the App identity pinned to its signed rollback record. |
 
 **Budgets** (`tools/databricks/phase_budget.py`). Each phase's prediction is a
 reviewed sum of per-step budgets, calibrated to the 240-minute envelope the
@@ -2734,8 +2734,18 @@ the first governed run owes the live timings.
   pipeline it starts is bound there too, and each was deployed by this
   deployer's bundle (`deployment.kind` BUNDLE, its metadata file under the
   client target's root). The definition digest is the sha256 of the closure's
-  live job settings and pipeline specs. `touches_gold` fails closed: only a
-  silver, ref or catalog-DDL SQL file or the FRED or KPI script is gold-free.
+  bound ids, live job settings and pipeline specs: a job recreated under a new
+  id is another definition, as is any settings or spec change. It does not
+  cover the deployed SQL and Python a task names by path, so a release that
+  changes only that content keeps the digest (see the rerun ack below).
+  `touches_gold` fails closed: only a silver, ref or catalog-DDL SQL file or
+  the FRED or KPI script is gold-free. The live digest is compared with
+  itself (plan, run, ledger), never with a digest of the bundle's own config:
+  a job edited out of band after its bundle deploy, its deployment metadata
+  intact, is digested and run as it is. That is an explicit, unspiked
+  assumption: no section 7 spike covers the Jobs API's `settings.deployment`
+  shape, the first governed data phase owes its live capture, and any other
+  shape refuses.
 - `begin`, `run`, `close` (under the lease): a signed ledger beside the lease
   (`<lease root>/<app>.data-phase-ledger.json`, the proof key's Ed25519 scheme
   the quiesce journal uses) holds one generation per data phase. Each run's
@@ -2743,26 +2753,51 @@ the first governed run owes the live timings.
   attempt)>`, is journaled before the run-now. A rerun re-attaches to a run
   still going, skips one that succeeded, and runs only a terminal-failed one
   (TERMINATED other than SUCCESS, SKIPPED, INTERNAL_ERROR) as the next attempt,
-  with a new token. A run still going at the deadline exits 4: re-run
-  `--phase data` and it re-attaches. Nothing is ever cancelled.
+  with a new token. Every run it re-attaches to, or that a token resend
+  answers, must be a run of the bound job id. One job runs at a time: no
+  resume, run-now, close or retirement while another entry of the generation
+  still runs, planned in this phase or not. A run still going at the deadline
+  exits 4: re-run `--phase data` and it re-attaches. Nothing is ever
+  cancelled.
 - **Stale definition.** An open generation whose entry ran under another
-  definition (a release redeployed the job between a failed attempt and this
-  phase) refuses with the sha256 of its reset plan (purpose
-  `data_ledger_supersede`). Review it, then export
+  definition or job id (a release changed the job's settings, or the job was
+  recreated, between a failed attempt and this phase) refuses with the sha256
+  of its reset plan (purpose `data_ledger_supersede`). Review it, then export
   `MIP_ACK_DATA_LEDGER_SUPERSEDE=<that sha256>` for one run (shell only, never
   `.env.local`). The runner recomputes the plan, refuses on any difference, and
-  never supersedes while a stale run is still active.
+  never supersedes while any run of the generation is still active.
+- **Rerun.** An open generation with nothing stale can still need every job
+  again: a data smoke that fails after both jobs succeeded (gold scored before
+  a later FRED refresh), a release that changed only the deployed SQL, or a
+  run the Jobs API no longer returns. Each resume prints the sha256 of the
+  generation's rerun plan (purpose `data_ledger_rerun`); review it, then
+  export `MIP_ACK_DATA_LEDGER_RERUN=<that sha256>` for one run (shell only,
+  never `.env.local`). The runner recomputes it and refuses on any difference,
+  never retires while a run is active (an unreadable run is judged by its
+  job's active runs), and neither ack ever satisfies the other's purpose.
 - **Attack O11.** After every job whose graph touches gold or the UC
   functions, the data phase runs `reconcile_reviewed_function_execute_grants`
   (moved verbatim to `scripts/lib/deploy_reviewed_function_grants_lifecycle.sh`
   so both phases run the same function) and its read-only
-  `verify_reviewed_function_execute_grants`. A failure of either exits 4 and
-  refuses success: no later job runs and the generation stays open.
+  `verify_reviewed_function_execute_grants`, whatever the job did but a run
+  still going (exit 4, re-attached later): a failed or refused job is repaired
+  too, as the release's governed job boundary repairs, and the phase exits
+  with the job's own code. A failure of either refuses success: no later job
+  runs and the generation stays open. The grantee is the App's service
+  principal only while it is the one its signed last-good rollback record pins
+  (`tools/databricks/data_phase_app_identity.py`) and is not the account
+  credential's client; otherwise the phase refuses before its ledger.
+- **No overlap.** A data phase that exits 4 releases the lease with its job
+  still running. A release, or a run with no `--phase`, reads the ledger right
+  after taking its lease (`job_phase_runner quiet`, read-only) and refuses
+  while any entry of an open generation still runs.
 
 The runner's run-now is the one reviewed run-now site
 (`tools/databricks/stop_primitive_map.JOB_RUN_SITES`), its mutating modes are
-the data-phase library's alone, and every shell `databricks bundle run <job>` is
-a reviewed site (`SHELL_JOB_RUN_SITES`).
+the data-phase library's alone, every shell `databricks bundle run <job>` is
+a reviewed site (`SHELL_JOB_RUN_SITES`), and no tool, job source or shell file
+starts or stops a pipeline update (`PIPELINE_RUN_SITES` is empty): silver
+refreshes only as `mip_refresh_silver`.
 
 **First install: awaiting owner bootstrap** (`tools/databricks/first_install_bootstrap.py`).
 The account principal manages only the service principals it was enumerated
@@ -2786,9 +2821,18 @@ in place of deleting the journal-owned App, the bundle apply proves the App is
 still bound exactly as its journal recorded, and the gate consumes the marker
 once the check passes. From there it is an ordinary first install, whose
 failure is compensated as before. A run with no `--phase` never reaches the
-gate. Owed live: what the account principal may read of a rule set it does not
-manage yet (a refusal reads as "not held"), and whether a step before the gate
-in the resumed run needs that grant.
+gate, never resumes the kept App and never deletes it silently: its step 0a
+refuses (exit 2, the App kept) with the sha256 of the marker's retire plan
+(purpose `first_install_bootstrap_retire`). To abandon that first install,
+review it and export `MIP_ACK_FIRST_INSTALL_BOOTSTRAP_RETIRE=<that sha256>` for
+one run (shell only, never `.env.local`): the marker is retired and that run's
+recovery deletes the App, with any owner grant on its identity, as any
+interrupted first install. A marker naming a claim the journal no longer holds
+(its first install was deleted since) is stale: it protects nothing, reads as
+absent and is replaced by the next marker, so no manual step clears it. Owed
+live: what the account principal may read of a rule set it does not manage yet
+(a refusal reads as "not held"), and whether a step before the gate in the
+resumed run needs that grant.
 
 **Data phase on a first install.** The release's gold-dependent tail (the
 Genie trusted assets, the agentic tier's Lakebase synced tables, Agent
