@@ -689,6 +689,21 @@ uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 \
 python tools/requirements_digest.py --write   # only uv.lock and requirements.in are digested
 ```
 
+**The deploy job's hashed install (M1-PR7).** `requirements-deploy.hashes.txt`
+is `uv.lock` again, with every distribution's sha256: the App runtime closure
+only, never the dev tools. `deploy-dev.yml`'s `build` job (no ID token)
+downloads its wheelhouse from it, and the `deploy` job installs from that
+wheelhouse alone (`pip install --no-index --find-links <wheelhouse>
+--require-hashes`), so no package index is reached by a job that can request
+an ID token. Every `uv.lock` refresh regenerates it in the same change
+(`tests/unit/test_requirements_deploy_hashes.py` fails until it does):
+
+```bash
+uv pip compile requirements.in -c uv.lock --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_28 --generate-hashes --format requirements.txt \
+  --output-file requirements-deploy.hashes.txt
+```
+
 Both locks are compiled for the App's platform (next section). The dev
 closure has no machine-keyed dependency today: compiled for
 `aarch64-apple-darwin` and for `x86_64-manylinux_2_28`, it pins the same 20
