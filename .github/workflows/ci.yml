@@ -467,9 +467,24 @@ jobs:
     # ran one of its five tests and hid two broken ones for several waves.
     # Real-data end-to-end runs remain in nightly.yml against the deployed
     # app with workspace credentials.
+    #
+    # Every job that launches a browser runs INSIDE the pinned Playwright
+    # image, the literal of the @playwright/test pin, as e2e-visual always
+    # has: the browsers and their system packages come from the image, so no
+    # job runs `playwright install --with-deps` and none touches apt. On
+    # 2026-11-05 the runner's Ubuntu mirror served those packages at ~40 KB/s
+    # (21.9 MB in 9m08s) and two jobs died at their timeouts inside the
+    # install step before any test ran (runs 42057978132 and 42097023431),
+    # while the same image pulled in 19-30 s in every run that day. No
+    # secrets reach the container: this workflow references none.
+    # tests/unit/test_ci_frontend_gates.py pins the image and the absence of
+    # any browser install.
     name: e2e (parse + governed handoff fixture)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -489,9 +504,6 @@ jobs:
         run: npx playwright test --list
       - name: Build production frontend
         run: npm --prefix frontend run build
-      - name: Install Chromium
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
       - name: Execute governed handoff and layout-stability fixtures
         working-directory: frontend
         env:
@@ -539,7 +551,12 @@ jobs:
     # Slowest shard (10.3 min) + the slowest setup seen (8.6 min, with that
     # 7m25s Chromium install) is ~19 min; 25 keeps headroom for both at once
     # and for suite growth. A shard nearing it means add one to the matrix.
+    # The install step is gone (the pinned image below, see
+    # playwright-offline); the cap is unchanged.
     timeout-minutes: 25
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      options: --ipc=host
     strategy:
       # Every shard finishes, so the merged report holds every failure.
       fail-fast: false
@@ -561,9 +578,6 @@ jobs:
           fi
       - name: Build production frontend
         run: npm --prefix frontend run build
-      - name: Install Chromium
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
       - name: Run the fixture harness (one shard)
         # --reporter replaces the config's list + github + html for this run:
         # the shard keeps list and github and writes blob-report/report-<i>.zip
@@ -605,11 +619,25 @@ jobs:
     # headroom. The built-dist step now also stages the App release (about
     # 40 s on a loaded developer machine, mostly the .br checks; not yet
     # measured on a runner).
+    #
+    # It runs in the pinned image (see playwright-offline), on the same
+    # runner hardware, with the same Chromium build (chromium-1248) the host
+    # install downloaded, so the calibrated budgets keep their meaning; only
+    # the install step left the setup. The cap is unchanged.
     name: e2e (fixture perf + interaction budgets, single worker)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v6
+      - name: Trust the checkout for git (the container runs as root)
+        # The workspace belongs to the runner user, so git refuses it to
+        # root as "dubious ownership"; actions/checkout trusts it only in
+        # its own temporary git config. The App release stage below runs
+        # git (rev-parse, ls-files) on it.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -625,6 +653,12 @@ jobs:
       - name: Build production frontend
         run: npm --prefix frontend run build
       - uses: actions/setup-python@v6
+        # The runner's tool cache is mounted at /__t and holds CPython builds
+        # for the RUNNER's Ubuntu, not the image's (noble). A container-local
+        # tool cache makes setup-python install the build its manifest names
+        # for the image's own release, from GitHub, never apt.
+        env:
+          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -644,9 +678,6 @@ jobs:
         env:
           MIP_REQUIRE_FRONTEND_DIST: '1'
         run: pytest -q tests/unit/test_frontend_build_artifacts.py tests/unit/test_app_release_built_dist.py
-      - name: Install Chromium
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
       - name: Run the perf and interaction budgets (single worker)
         # The specs playwright.config.ts's PERF_SPEC collects measure timing,
         # so they run alone on one worker and only here (MIP_PERF=1; every
@@ -829,9 +860,14 @@ jobs:
     # manual Firefox forced-colors pass. A known engine defect is a test.fixme
     # naming its owner lane and finding id, never a silent skip. No secrets;
     # every page is synthetic fixture data.
+    # Runs in the pinned image (see playwright-offline), which carries WebKit
+    # and Firefox with their system packages.
     name: e2e (fixture, WebKit + Firefox forced colors)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -843,13 +879,15 @@ jobs:
         run: npm --prefix frontend ci
       - name: Build production frontend
         run: npm --prefix frontend run build
-      - name: Install WebKit and Firefox
-        working-directory: frontend
-        run: npx playwright install --with-deps webkit firefox
       - name: Run the cross-engine projects
         env:
           MIP_CROSS_ENGINE: '1'
           E2E_FIXTURE_WORKERS: '2'
+          # Firefox refuses to start as root under a $HOME another user owns
+          # ("Firefox is unable to launch if the $HOME folder isn't owned by
+          # the current user"), and the runner mounts /github/home owned by
+          # the runner user. HOME=/root is the fix that error names.
+          HOME: /root
         run: npm --prefix frontend run e2e:fixture:ci
       - name: Upload the cross-engine report
         if: failure()

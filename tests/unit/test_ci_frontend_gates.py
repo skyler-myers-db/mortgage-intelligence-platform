@@ -28,6 +28,13 @@ The parse job (``playwright-offline``) runs the whole route-fulfilled
 layout-stability spec: a ``--grep`` there ran one of its five tests and hid
 two broken ones, and the product layout shift behind one of them, for waves.
 
+Every job that launches a browser runs inside the image of the pin, and no
+job runs ``playwright install``: on 2026-11-05 ``--with-deps`` met an Ubuntu
+mirror serving ~40 KB/s and two jobs timed out inside the install step
+(runs 42057978132 and 42097023431). The perf job trusts its checkout for git
+as root and installs CPython into a container-local tool cache; the
+cross-engine run step sets ``HOME=/root`` so Firefox starts as root.
+
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
 """
@@ -178,6 +185,43 @@ def test_the_vrt_container_is_the_image_of_the_playwright_pin() -> None:
         assert lock[f"node_modules/{name}"]["version"] == pin, f"{name} in the lock is not the {pin} pin"
 
 
+# The jobs that launch a browser. A new one joins this set, and the image.
+BROWSER_JOBS = {"playwright-offline", "e2e-fixture-shard", "e2e-fixture-perf", "e2e-visual", "e2e-cross-engine"}
+
+
+def _pin_image() -> str:
+    package = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
+    return f"mcr.microsoft.com/playwright:v{package['devDependencies']['@playwright/test']}-noble"
+
+
+def _runs_a_browser(job: dict[str, Any]) -> bool:
+    runs = [str(step.get("run", "")) for step in job.get("steps", [])]
+    return any("playwright test" in run or "e2e:fixture" in run for run in runs)
+
+
+def test_every_browser_job_runs_in_the_pinned_image_and_installs_no_browser() -> None:
+    """2026-11-05: `--with-deps` met a ~40 KB/s apt mirror and two jobs timed out installing.
+
+    The browsers and their system packages come from the image of the pin,
+    so no job's success depends on the runner's apt mirror. The container
+    carries no registry credentials (the image is public, the workflow
+    references no secrets).
+    """
+    jobs = _jobs()
+    assert {name for name, job in jobs.items() if _runs_a_browser(job)} == BROWSER_JOBS
+    expected = _pin_image()
+    for name in sorted(BROWSER_JOBS):
+        container = jobs[name]["container"]
+        assert container["image"] == expected, f"{name} runs outside the image of the pin"
+        assert container["options"] == "--ipc=host", name
+        assert set(container) == {"image", "options"}, f"{name}: the container takes no credentials, env or volumes"
+    for name, job in jobs.items():
+        for step in job.get("steps", []):
+            run = str(step.get("run", ""))
+            for banned in ("playwright install", "install-deps", "apt-get", "apt install"):
+                assert banned not in run, f"{name}: {step.get('name', run)!r} runs {banned!r}"
+
+
 def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> None:
     """Audit a11y-05 item 2: the jsx-a11y ratchet is a named CI step and part of `npm run lint`."""
     steps = _jobs()["frontend-tests"]["steps"]
@@ -265,6 +309,14 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
 
     assert build < python < install < check
     assert steps[check]["env"]["MIP_REQUIRE_FRONTEND_DIST"] == "1"
+    # Inside the image the job runs as root on a checkout the runner user
+    # owns, and the release stage runs git: the workspace is trusted first.
+    trust = _step_index(steps, 'git config --global --add safe.directory "$GITHUB_WORKSPACE"')
+    assert _step_index(steps, "actions/checkout@") < trust < check
+    # The runner's /__t tool cache holds CPython built for the runner's
+    # Ubuntu; a container-local cache installs the build for the image's.
+    tool_cache = steps[python]["env"]["AGENT_TOOLSDIRECTORY"]
+    assert tool_cache.startswith("/") and not tool_cache.startswith("/__"), tool_cache
     # The same required-dist step stages that dist as deploy.sh step 1 does.
     assert (ROOT / RELEASE_STAGE_TEST).is_file()
     assert _step_index(steps, RELEASE_STAGE_TEST) == check
@@ -293,17 +345,20 @@ def _playwright_regex(name: str) -> re.Pattern[str]:
     return re.compile(literal.group(1))
 
 
-def test_the_cross_engine_job_installs_webkit_and_firefox_and_gates() -> None:
+def test_the_cross_engine_job_runs_webkit_and_firefox_from_the_pinned_image_and_gates() -> None:
     job = _jobs()["e2e-cross-engine"]
     assert job["name"] == "e2e (fixture, WebKit + Firefox forced colors)"
     assert job["runs-on"] == "ubuntu-latest"
     assert "continue-on-error" not in job
+    # WebKit and Firefox come from the image (the test above pins it and the
+    # absence of any `playwright install`).
+    assert job["container"]["image"] == _pin_image()
     steps = job["steps"]
-    install = steps[_step_index(steps, "npx playwright install --with-deps webkit firefox")]
-    assert install["working-directory"] == "frontend"
     run = steps[_step_index(steps, "npm --prefix frontend run e2e:fixture:ci")]
     assert run["env"]["MIP_CROSS_ENGINE"] == "1"
     assert run["env"]["E2E_FIXTURE_WORKERS"] == "2"
+    # Firefox will not start as root under the runner user's /github/home.
+    assert run["env"]["HOME"] == "/root"
     assert all("continue-on-error" not in step for step in steps)
     assert "secrets." not in yaml.safe_dump(job), "the cross-engine job is credential-free"
 
