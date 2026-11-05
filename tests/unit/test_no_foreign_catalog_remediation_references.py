@@ -6,7 +6,7 @@ the deploy stop branches that ran it in M0-PR5, and M4-PR2 deleted the tool,
 its ``foreign_catalog_binding_*`` modules (catalog state, signed journal,
 signed manifest, binding-policy parser), the auditor helpers only the manifest
 called, their tests and their doc sections. This scan holds every tracked file
-to zero mentions of them, except this file.
+to zero mentions of them, except this file and the dated records below.
 
 Two names deliberately survive, and neither is the tool:
 
@@ -16,8 +16,9 @@ Two names deliberately survive, and neither is the tool:
   ``0`` cannot mask the file. Only the files below may name it, and the
   workflow never does.
 * ``retire_foreign_catalog_binding_policy``: M4-PR1's refusal of the retired
-  ``MIP_UC_FOREIGN_CATALOG_BINDING_POLICY``. The word boundaries below leave
-  it alone.
+  ``MIP_UC_FOREIGN_CATALOG_BINDING_POLICY``. One lookbehind spares exactly that
+  prefix; no alternative has a leading word boundary, so an underscore-prefixed
+  spelling (``test_foreign_catalog_binding_journal``) is still seen.
 
 The read-only binding check that borrowed the policy module's binding-type set
 (``_catalog_bindings``, which the owner's exposure-candidate listing still
@@ -25,10 +26,12 @@ calls) keeps it, now defined in the auditor, and still refuses an incomplete,
 unknown or duplicate binding.
 
 The scan is ``git grep -P`` (``git grep -E`` has no ``\\b`` on macOS), so the
-positive control proves it finds each alternative in this file before any
-absence is trusted. It reads counts per path, never a matched line, and leaves
-out the ``.env.*`` templates: agents cannot read them under the repository's
-permission settings.
+positive control proves it finds each alternative in this file, and each
+prefixed spelling in a probe file, before any absence is trusted. It reads
+counts per path, never a matched line, and leaves out the ``.env.*``
+templates: agents may not read them, even indirectly, under the repository's
+permission settings. A template that copied the flag into ``.env.local`` would
+still refuse (``test_prestop_refusal_matrix.py``).
 """
 
 from __future__ import annotations
@@ -55,14 +58,14 @@ DELETED_MODULES = (
     "foreign_catalog_binding_policy",
 )
 DELETED = (
-    r"\bconverge_foreign_catalog_workspace_bindings\b"
-    r"|\bforeign_catalog_binding_"
-    r"|\bparse_foreign_catalog_binding_policy\b"
-    r"|\bremediate_foreign_catalog_bindings\b"
+    r"converge_foreign_catalog_workspace_bindings"
+    r"|(?<!retire_)foreign_catalog_binding_"
+    r"|parse_foreign_catalog_binding_policy"
+    r"|remediate_foreign_catalog_bindings"
     r"|foreign-catalog-binding"
     r"|foreign-catalog-manifest"
-    r"|\b_assert_metastore_owner_inventory_identity\b"
-    r"|\b_account_group_evidence\b"
+    r"|_assert_metastore_owner_inventory_identity"
+    r"|_account_group_evidence"
 )
 # Positive-control spellings, one per alternative above (the scan must find
 # each here): converge_foreign_catalog_workspace_bindings
@@ -70,6 +73,21 @@ DELETED = (
 # remediate_foreign_catalog_bindings foreign-catalog-binding-event
 # mip-foreign-catalog-manifest _assert_metastore_owner_inventory_identity
 # _account_group_evidence
+# Prefixed spellings the scan must also see (the deleted test files' names and
+# the deleted parser tests'), and the surviving names it must not.
+PREFIXED = (
+    "tests/unit/test_converge_foreign_catalog_workspace_bindings.py",
+    "tests/unit/test_foreign_catalog_binding_journal.py",
+    "def test_foreign_catalog_binding_policy_rejects_an_unknown_workspace",
+    "test_remediate_foreign_catalog_bindings_is_refused",
+    "auditor.x_assert_metastore_owner_inventory_identity",
+    "self_account_group_evidence",
+)
+SURVIVING = (
+    "retire_foreign_catalog_binding_policy",
+    "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY",
+    "_REMEDIATE_FOREIGN_CATALOG_BINDINGS",
+)
 REFUSED_FLAG = "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"
 # Each file that may name the refused flag, and why.
 FLAG_FILES = {
@@ -82,6 +100,10 @@ FLAG_FILES = {
     "tests/unit/test_live_install_no_go_docs.py": "GRANTS.md's record of the deletion",
 }
 _TEMPLATES = (":(exclude).env*", ":(exclude,glob)**/.env*")
+# Dated records, not code, tests, workflows or docs (as in the retired CI staging
+# install's ratchet): an agent-memory note or an audit report may record the
+# deleted tooling by name.
+DATED_RECORDS = (".claude/agent-memory/", "docs/audits/")
 _GUARD_START = "# >>> foreign-catalog remediation refused >>>\n"
 _GUARD_END = "# <<< foreign-catalog remediation refused <<<\n"
 
@@ -107,7 +129,34 @@ def _counts(pattern: str, *paths: str) -> Counter[str]:
     return counts
 
 
-def test_the_scan_finds_every_alternative_in_its_own_file() -> None:
+def _probe(tmp_path: Path, lines: tuple[str, ...]) -> int:
+    """How many of ``lines`` the scan's own ``git grep -P`` matches, in an untracked probe file."""
+
+    probe = tmp_path / "probe.txt"
+    probe.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    result = subprocess.run(
+        ["git", "grep", "--no-index", "-c", "-P", "-e", DELETED, "--", probe.name],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode in (0, 1), f"git grep -P failed (exit {result.returncode}); is git built with PCRE?"
+    return int(result.stdout.rpartition(":")[2] or 0)
+
+
+def _offenders(counts: Counter[str], *allowed: str) -> list[str]:
+    """Every matching path outside ``allowed`` and the dated records, with its line count."""
+
+    return sorted(
+        f"{path} ({count} lines)"
+        for path, count in counts.items()
+        if path not in allowed and not path.startswith(DATED_RECORDS)
+    )
+
+
+def test_the_scan_finds_every_alternative_in_its_own_file(tmp_path: Path) -> None:
     """The positive control: an absence below means nothing unless each alternative matches here."""
 
     assert _counts(DELETED)[SELF] > 0
@@ -115,14 +164,35 @@ def test_the_scan_finds_every_alternative_in_its_own_file() -> None:
     assert len(alternatives) == 8
     for alternative in alternatives:
         assert _counts(alternative, SELF)[SELF] > 0, f"git grep -P found no {alternative!r} here"
-    # The boundaries spare the surviving M4-PR1 guard: the scan sees it as a
-    # name, so its absence from the deleted names is a fact, not a blind spot.
+    # No leading boundary: each prefixed spelling is seen, one line apiece.
+    assert _probe(tmp_path, PREFIXED) == len(PREFIXED)
+    # The lookbehind spares the surviving M4-PR1 guard (and the scan is case
+    # sensitive, so the two flags' names): the scan sees the guard as a name,
+    # so its absence from the deleted names is a fact, not a blind spot.
+    assert _probe(tmp_path, SURVIVING) == 0
     assert _counts(r"\bretire_foreign_catalog_binding_policy\b")["scripts/lib/deploy_estate_inventory_lifecycle.sh"]
     assert not _counts(DELETED, "scripts/lib/deploy_estate_inventory_lifecycle.sh")
 
 
+def test_only_code_tests_workflows_and_docs_are_held_to_zero() -> None:
+    counts = Counter(
+        {
+            SELF: 9,
+            ".claude/agent-memory/reviewer/project_note.md": 2,
+            "docs/audits/2026-08-platform-audit.md": 1,
+            "docs/deployment.md": 1,
+            "tests/unit/test_foreign_catalog_binding_journal.py": 3,
+        }
+    )
+
+    assert _offenders(counts, SELF) == [
+        "docs/deployment.md (1 lines)",
+        "tests/unit/test_foreign_catalog_binding_journal.py (3 lines)",
+    ]
+
+
 def test_no_tracked_file_but_this_one_names_the_deleted_tooling() -> None:
-    offenders = sorted(f"{path} ({count} lines)" for path, count in _counts(DELETED).items() if path != SELF)
+    offenders = _offenders(_counts(DELETED), SELF)
 
     assert offenders == [], "remove these mentions of the deleted remediation tooling: " + ", ".join(offenders)
 
@@ -137,7 +207,7 @@ def test_no_deleted_module_can_be_imported(module: str) -> None:
 def test_only_the_refusal_and_its_records_name_the_refused_flag() -> None:
     counts = _counts(rf"\b{REFUSED_FLAG}\b")
 
-    assert set(counts) <= set(FLAG_FILES), sorted(set(counts) - set(FLAG_FILES))
+    assert _offenders(counts, *FLAG_FILES) == []
     assert not any(path.startswith(".github/") for path in counts), "no workflow may pass the flag"
     assert counts["scripts/deploy.sh"] > 0, "the positive control: the refusal names it"
 
