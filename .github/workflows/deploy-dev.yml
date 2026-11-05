@@ -202,8 +202,10 @@ jobs:
           name: prebuilt-release
           path: ${{ runner.temp }}/prebuilt-release
       - name: Verify the prebuilt release against its manifest
-        # Stdlib only, before a single wheel is installed: every file is
-        # re-hashed, and the manifest's own sha256 is the build job's output.
+        # Stdlib and git only, before a single wheel is installed: every file
+        # is re-hashed, the manifest's own sha256 is the build job's output,
+        # and the staged App source must be this checkout's commit byte for
+        # byte (the build job ran npm; only the dist's bytes are its).
         env:
           MIP_PREBUILT_RELEASE_SHA256: ${{ needs.build.outputs.manifest-sha256 }}
         run: |

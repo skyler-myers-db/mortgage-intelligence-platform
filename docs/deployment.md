@@ -297,6 +297,19 @@ the staged closure with its manifest. `deploy-dev.yml` uses it so that its
   re-hashes every file and refuses a missing, extra, resized or changed one,
   a symlink or other non-regular file, a listed path that is not a plain
   relative path, an empty part, another commit or another requirements file.
+- The manifest proves transport only: the build job runs npm, and both
+  manifests are its own word. So every check also re-derives the release's
+  tracked half from the deploying checkout's own commit, with the stage's
+  git-side plan and refusals (`app_runtime_closure.tracked_blobs`): the files
+  `app-release/source` holds outside `frontend/dist` must be exactly the
+  closure files git tracks at the commit, each with its blob's size and
+  sha256; `app-release/source/frontend/dist` must be `dist/`;
+  `app-release/manifest.json` must be this commit's release manifest and list
+  exactly the staged files; and the staged dist must pass the stdlib dist
+  review again, against the commit's `frontend/public`. A `.br`'s decode check
+  needs node, which the deploy job does not run, so those are the build job's
+  check alone, as every byte of the built JavaScript is the build job's. Only
+  the dist's bytes come from the build job.
 - Step 1 re-hashes it again, replaces `frontend/dist` and
   `.databricks/app-release` whole with copies, re-hashes the copies and reads
   the release id from the staged manifest as usual (`app_release_contract
@@ -3887,7 +3900,8 @@ key.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, and its first step turns that into
   `MIP_JOB_DEADLINE_EPOCH`. It re-hashes the artifact against the build job's
-  manifest digest before it installs anything, installs with
+  manifest digest, and checks its staged App source against its own checkout
+  of the commit, before it installs anything, installs with
   `pip install --no-index --find-links <wheelhouse> --require-hashes`, runs the
   resolve-client-profile action, the OIDC proof and the dispatch preflight,
   then `./scripts/deploy.sh -t client --phase <phase> --no-confirm

@@ -25,12 +25,32 @@ sha256 and size. ``verify`` and ``install`` refuse, naming a path or a field
 and never file contents: a manifest whose own sha256 is not the expected one,
 another schema, commit or requirements digest, a missing, extra, resized or
 changed file, a symlink or any non-regular file, a path that is not a plain
-relative POSIX path, and a layout part that is absent or empty. ``install``
-then copies ``dist`` and ``app-release`` into place (each destination is
-replaced whole) and re-hashes the copies against the same manifest.
+relative POSIX path, and a layout part that is absent or empty.
 
-Stdlib only, so the deploy job can verify the wheelhouse before installing
-anything. Exit 0 on success, 2 on a refusal.
+**Provenance.** The manifest proves transport only: the build job runs npm,
+and both manifests are its own word. So ``verify`` then re-derives the
+release's tracked half from the checkout it runs in (``--repo``, the deploy
+job's own, at ``--git-sha``), with the stage's own git-side plan and refusals
+(tools/databricks/app_runtime_closure.tracked_blobs), and refuses unless:
+
+* the files ``app-release/source`` holds outside ``frontend/dist`` are
+  exactly the closure files git tracks at the commit, each with its blob's
+  size and sha256;
+* ``app-release/source/frontend/dist`` and ``dist`` are the same files;
+* ``app-release/manifest.json`` is a release manifest for this commit that
+  lists exactly the staged files;
+* the staged dist passes the stdlib dist review again, against the
+  frontend/public files git tracks at the commit. A ``.br``'s decode check
+  needs node, which the deploy job does not run: those files were checked by
+  the build job only, as every byte of the built JavaScript is the build
+  job's.
+
+Only the dist's bytes come from the build job. ``install`` then copies
+``dist`` and ``app-release`` into place (each destination is replaced whole)
+and re-hashes the copies against the same manifest.
+
+Stdlib and git only, so the deploy job can verify the release before
+installing anything. Exit 0 on success, 2 on a refusal.
 """
 
 from __future__ import annotations
@@ -44,12 +64,21 @@ import shutil
 import stat
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from tools.databricks import app_release_contract as release_contract
+from tools.databricks import app_runtime_closure as closure
+from tools.databricks.app_runtime_dist import review_dist
 
 SCHEMA = "mip.prebuilt-release.v1"
 MANIFEST = "SHA256SUMS.json"
 PARTS = ("dist", "app-release", "wheelhouse")
 INSTALLED_PARTS = ("dist", "app-release")
+SOURCE = "app-release/source/"
+STAGED_DIST = f"{SOURCE}{closure.DIST_PATH}/"
+DIST = "dist/"
+RELEASE_MANIFEST = "app-release/manifest.json"
 _SHA = re.compile(r"[0-9a-f]{40}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _CHUNK = 1 << 20
@@ -143,8 +172,58 @@ def _compare(want: Mapping[str, object], have: Mapping[str, Mapping[str, int | s
             raise Refused(f"{label}: {len(paths)} files {kind}, first {paths[0]}")
 
 
-def verify(root: Path, *, git_sha: str, requirements: Path, expected_manifest_sha256: str) -> dict[str, object]:
-    """Re-hash every file under ``root`` against its manifest; return the manifest."""
+@dataclass(frozen=True)
+class Verified:
+    """The manifest, and what ``verify`` re-derived: counts only."""
+
+    manifest: dict[str, object]
+    tracked: int
+    dist: int
+    build_only_brotli: int
+
+
+def _under(listed: Mapping[str, object], prefix: str, *, outside: str | None = None) -> dict[str, object]:
+    return {
+        rel.removeprefix(prefix): entry
+        for rel, entry in listed.items()
+        if rel.startswith(prefix) and not (outside and rel.startswith(outside))
+    }
+
+
+def _blob_entry(data: bytes) -> dict[str, int | str]:
+    return {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+
+
+def provenance(root: Path, listed: Mapping[str, object], *, repo: Path, git_sha: str) -> Verified:
+    """Refuse unless the release's tracked half is ``repo``'s commit, byte for byte (see the module doc)."""
+
+    try:
+        commit, tracked, public = closure.tracked_blobs(repo=repo, ref=git_sha)
+    except closure.StageError as exc:
+        raise Refused(f"this checkout cannot stage the App closure at the commit: {exc}") from None
+    if commit != git_sha:
+        raise Refused("--git-sha does not name this checkout's commit")
+    want = {name: _blob_entry(data) for name, data in tracked.items()}
+    _compare(want, _under(listed, SOURCE, outside=STAGED_DIST), "the staged App source against this checkout's commit")
+    staged_dist = _under(listed, STAGED_DIST)
+    _compare(_under(listed, DIST), staged_dist, "the staged dist against the release's dist")
+    try:
+        described = release_contract.read_manifest(root / RELEASE_MANIFEST, expected_commit=git_sha)
+    except release_contract.ReleaseContractError as exc:
+        reason = "unreadable" if str(exc).startswith("cannot read") else str(exc)
+        raise Refused(f"{RELEASE_MANIFEST}: {reason}") from None
+    entries = {entry.path: {"sha256": entry.sha256, "size": entry.size} for entry in described.entries}
+    _compare(entries, _under(listed, SOURCE), f"the staged files against {RELEASE_MANIFEST}")
+    review = review_dist(root / STAGED_DIST, public, brotli=None)
+    if review.problems:
+        raise Refused(f"the staged dist fails the dist review: {len(review.problems)} problems, first {review.problems[0]}")
+    return Verified({}, len(want), len(staged_dist), len(review.omitted))
+
+
+def verify(
+    root: Path, *, git_sha: str, requirements: Path, expected_manifest_sha256: str, repo: Path
+) -> Verified:
+    """Re-hash every file under ``root`` against its manifest, then check its provenance against ``repo``."""
 
     body = _load(root, expected_manifest_sha256)
     if body.get("git_sha") != git_sha:
@@ -154,7 +233,8 @@ def verify(root: Path, *, git_sha: str, requirements: Path, expected_manifest_sh
     listed = body["files"]
     assert isinstance(listed, dict)
     _compare(listed, walk(root), "the prebuilt release")
-    return body
+    found = provenance(root, listed, repo=repo, git_sha=git_sha)
+    return Verified(body, found.tracked, found.dist, found.build_only_brotli)
 
 
 def install(
@@ -165,10 +245,13 @@ def install(
     expected_manifest_sha256: str,
     dist_out: Path,
     stage_out: Path,
+    repo: Path,
 ) -> int:
-    """Verify, copy dist and app-release into place, re-hash the copies; return the file count."""
+    """Verify (provenance included), copy dist and app-release into place, re-hash the copies; return the file count."""
 
-    body = verify(root, git_sha=git_sha, requirements=requirements, expected_manifest_sha256=expected_manifest_sha256)
+    body = verify(
+        root, git_sha=git_sha, requirements=requirements, expected_manifest_sha256=expected_manifest_sha256, repo=repo
+    ).manifest
     listed = body["files"]
     assert isinstance(listed, dict)
     placed: dict[str, dict[str, int | str]] = {}
@@ -196,6 +279,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--requirements", required=True, type=Path)
         if name != "manifest":
             command.add_argument("--expect-manifest-sha256", required=True)
+            command.add_argument("--repo", type=Path, default=Path.cwd(), help="the deploying checkout (default: cwd)")
         if name == "install":
             command.add_argument("--dist-out", required=True, type=Path)
             command.add_argument("--stage-out", required=True, type=Path)
@@ -212,12 +296,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             "git_sha": args.git_sha,
             "requirements": args.requirements,
             "expected_manifest_sha256": args.expect_manifest_sha256.strip(),
+            "repo": args.repo,
         }
         if args.command == "verify":
-            body = verify(args.root, **common)
-            files = body["files"]
+            found = verify(args.root, **common)
+            files = found.manifest["files"]
             assert isinstance(files, dict)
             print(f"[prebuilt-release] verified {len(files)} files against {MANIFEST} (read-only)")
+            print(
+                f"[prebuilt-release] provenance: {found.tracked} staged source files are this checkout's commit; "
+                f"{found.dist} dist files passed the dist review again ({found.build_only_brotli} .br decode "
+                "checks are the build job's)"
+            )
             return 0
         count = install(args.root, dist_out=args.dist_out, stage_out=args.stage_out, **common)
         print(f"[prebuilt-release] installed {count} files (dist and the staged App closure), re-hashed")

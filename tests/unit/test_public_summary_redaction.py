@@ -35,11 +35,11 @@ import yaml
 
 from tests.fixtures.client_profiles import EXPOSURE, paychex_shaped_profile, split_contexts
 from tests.fixtures.deploy_sandbox import ANSI, sandbox
+from tests.fixtures.prebuilt_release import seal
 from tools.clients import profile as views
 from tools.clients.environment import from_github, resolve
 from tools.clients.redact import ForeignNames
 from tools.clients.schema import FIELD_CLASS, FieldClass
-from tools.databricks import prebuilt_release
 from tools.databricks.deploy_plan_report import LookupRecord, PlanReport, Refusal
 
 REPO = Path(__file__).resolve().parents[2]
@@ -127,10 +127,7 @@ def dispatch(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
         )
     )
     release = tmp_path / "prebuilt"
-    for rel, data in {"dist/index.html": b"<!doctype html>", "app-release/manifest.json": b"{}", "wheelhouse/a.whl": b"PK"}.items():
-        (release / rel).parent.mkdir(parents=True, exist_ok=True)
-        (release / rel).write_bytes(data)
-    digest = prebuilt_release.write_manifest(release, git_sha=head, requirements=checkout / "requirements-deploy.hashes.txt")
+    digest = seal(checkout, release, requirements=checkout / "requirements-deploy.hashes.txt")
     deploy_env = {
         **runner,
         "GITHUB_WORKFLOW_REF": preflight["GITHUB_WORKFLOW_REF"],
@@ -209,7 +206,7 @@ def test_the_synthetic_dispatch_shape_passes_every_step(dispatch: dict[str, Any]
     assert "environment protections: environment_protections_unreadable" in preflight, "S8's worst case, recorded"
     run = ANSI.sub("", dict(dispatch["steps"])["Run the client phase"].stdout)
     assert "plan phase complete: read-only, stopped before the lease" in run
-    assert "[prebuilt-release] verified 3 files against SHA256SUMS.json (read-only)" in run
+    assert "[prebuilt-release] provenance: " in run and "staged source files are this checkout's commit" in run
 
 
 def test_the_public_log_holds_no_identifier_secret_or_foreign_name(dispatch: dict[str, Any]) -> None:

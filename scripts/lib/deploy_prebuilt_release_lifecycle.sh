@@ -8,6 +8,9 @@
 # wheelhouse digest this tree's requirements-deploy.hashes.txt. Every file is
 # re-hashed before any Databricks call, and again in step 1 right before the
 # copy takes the place of the build and the stage; any difference refuses.
+# Each check also re-derives the staged App source from this checkout's own
+# commit (git blobs, byte for byte) and reviews the dist again: the build job
+# runs npm, so only the dist's bytes are taken from it.
 # The lender mark is the one build input a prebuilt release cannot carry: it
 # is a local file (tools/branding/lender_mark.py), so a configured mark
 # refuses here and builds locally instead.
@@ -31,7 +34,7 @@ verify_prebuilt_release() {
   mapfile -t args < <(prebuilt_release_args)
   echo "${DIM}\$ $PYTHON -m tools.databricks.prebuilt_release verify --root <prebuilt release> --git-sha ${SOURCE_GIT_SHA} ...${RST}"
   if ! "$PYTHON" -m tools.databricks.prebuilt_release verify "${args[@]}"; then
-    echo "${RED}[deploy] the prebuilt release is not the one its manifest describes; refusing before any Databricks call. Nothing was changed.${RST}" >&2
+    echo "${RED}[deploy] the prebuilt release is not the one its manifest describes, or its staged source is not this checkout's commit; refusing before any Databricks call. Nothing was changed.${RST}" >&2
     exit 2
   fi
 }
