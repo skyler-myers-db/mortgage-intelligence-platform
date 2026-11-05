@@ -298,6 +298,11 @@ elif [[ "$DRY_RUN" -eq 0 ]]; then
   if ! tier_is_agentic; then
     _PRESTOP_TIER_ARGS=(--agentic-tier off)
   fi
+  # --phase plan writes nothing (M1-PR6): its probes ask no Genie turn, which
+  # would open a conversation; the release's own probes ask it before its stop.
+  if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
+    _PRESTOP_TIER_ARGS+=(--genie-turn off)
+  fi
   step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
   run_with_account_identity \
     "$PYTHON" -m tools.databricks.deploy_prestop_probes \
@@ -326,7 +331,9 @@ else
   export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
   echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
   step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
-  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and one Genie turn"
+  _PRESTOP_GENIE_TURN="one Genie turn"
+  [[ "${DEPLOY_PHASE:-}" != "plan" ]] || _PRESTOP_GENIE_TURN="no Genie turn (--phase plan; the release asks it)"
+  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and ${_PRESTOP_GENIE_TURN}"
   echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
 fi
 # >>> adopt phase: plan >>>

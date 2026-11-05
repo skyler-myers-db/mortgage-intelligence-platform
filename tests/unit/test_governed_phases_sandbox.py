@@ -4,7 +4,8 @@ Each run is ``scripts/deploy.sh --dry-run`` in the sandbox clone
 (tests/fixtures/deploy_sandbox.py), whose stub ``databricks`` fails on
 anything but ``--version``, so the stub's log shows that no phase makes a
 Databricks call in a dry run. A dry run proves nothing about a live run's
-writes: the read-only data plan is pinned by
+writes: what a live ``--phase plan`` runs is pinned by
+tests/unit/test_plan_phase_live_shape.py, and the read-only data plan by
 tests/unit/test_job_phase_runner_safety.py. The matrix:
 
 * **release** is the run with no ``--phase`` minus exactly the data jobs
@@ -15,7 +16,8 @@ tests/unit/test_job_phase_runner_safety.py. The matrix:
 * **data** runs only the job phase runner, the reconcile and verify after each
   gold-touching job, and the data smoke: no bundle plan or apply, no App tool
   and no ``databricks apps`` command, no pre-stop probe.
-* **plan** plans only read-only commands and predicts every phase's budget.
+* **plan** plans only read-only commands, asks no Genie turn and predicts
+  every phase's budget.
 * **no phase** prints none of the phase banners and keeps every data step, in
   today's order (the base-vs-head transcript identity is the PR's proof).
 """
@@ -201,6 +203,9 @@ def test_the_plan_phase_plans_only_read_only_commands_and_every_phase_budget(run
     for phase in ("plan", "release", "data"):
         assert re.search(rf"phase budget: {phase} predicts \d+ min \(limit 330, margin 15\)", out), phase
     assert "app_deployment_lease" not in result.stdout
+    assert "and no Genie turn (--phase plan; the release asks it)" in out
+    for other in ("none", "release"):
+        assert "and one Genie turn" in ANSI.sub("", runs[other].stdout), other
 
 
 def test_no_phase_keeps_every_data_step_in_todays_order(runs: dict[str, subprocess.CompletedProcess[str]]) -> None:
