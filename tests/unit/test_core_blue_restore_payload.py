@@ -5,7 +5,8 @@ rebuilds blue's tier-b restore payload with the real payload builder, as the
 emergency recipe built the adopted deployment, and hands it to the
 pre-activation proof only when its env-name set is exactly blue's: D0's 32
 names, with neither agentic switch and no lease even though the governed run
-exports one.
+exports one, nor the profile's optional role names D0 never carried even
+though client #1's profile sets them.
 """
 
 from __future__ import annotations
@@ -60,6 +61,68 @@ def test_d0s_restore_payload_is_rebuilt_with_its_32_names_and_its_own_commit() -
     assert env["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0", "as the emergency recipe built it"
     assert payload["source_code_path"] == record["restore_source_path"], "the immutable copy"
     assert os.environ["MIP_GIT_SHA"] == "e" * 40 and os.environ["MIP_APP_DEPLOYMENT_LEASE_ID"] == rr.LEASE_ID
+
+
+def _governed_inputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **overrides: str | None) -> dict[str, str]:
+    """The governed run's inputs: .env.local is the client profile, its controls exported."""
+
+    from tests.fixtures.client_profiles import core_tier_profile, env_file_text
+    from tools.clients import profile as views
+    from tools.clients.environment import RawProfile, resolve
+    from tools.databricks import app_deploy_payload
+
+    values = core_tier_profile(**overrides)
+    env_local = tmp_path / "profile.env.local"
+    env_local.write_text(env_file_text({**values, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8")
+    monkeypatch.setattr(app_deploy_payload, "ENV_LOCAL", env_local)
+    controls = views.deploy_controls(resolve(RawProfile(values=values)))
+    for name, value in controls.items():  # resolve_client_profile exports these
+        monkeypatch.setenv(name, value)
+    return controls
+
+
+def test_the_governed_runs_client_profile_rebuilds_d0s_32_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review of #319: client #1's profile sets the optional role fields, which D0 never carried."""
+
+    from tools.clients.profile import OPTIONAL_PAYLOAD_ENV_NAMES
+
+    controls = _governed_inputs(monkeypatch, tmp_path)
+    assert set(OPTIONAL_PAYLOAD_ENV_NAMES) <= set(controls), "the profile sets every optional field"
+
+    payload, why = core_blue.blue_restore_payload(_adopted(sorted(D0_NAMES)), **INPUTS)
+
+    assert payload is not None, why
+    names = sorted(str(item["name"]) for item in payload["env_vars"])  # type: ignore[union-attr]
+    assert names == sorted(D0_NAMES), "blue's exact set: the optional names D0 lacks are left out"
+    with_one = sorted({*D0_NAMES, "MIP_AUDITOR_IDENTITIES"})
+    payload, why = core_blue.blue_restore_payload(_adopted(with_one), **INPUTS)
+    assert payload is not None, why
+    env = {item["name"]: item.get("value") for item in payload["env_vars"]}  # type: ignore[union-attr]
+    assert env["MIP_AUDITOR_IDENTITIES"] == controls["MIP_AUDITOR_IDENTITIES"], "one blue carried, kept"
+
+
+def test_only_the_profiles_optional_names_are_left_out_never_a_required_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from tests.fixtures.client_profiles import core_tier_profile
+    from tools.clients import profile as views
+    from tools.clients.environment import RawProfile, resolve
+    from tools.clients.profile import OPTIONAL_PAYLOAD_ENV_NAMES
+
+    full = views.app_payload_env(resolve(RawProfile(values=core_tier_profile())))
+    bare = views.app_payload_env(
+        resolve(RawProfile(values=core_tier_profile(**dict.fromkeys(OPTIONAL_PAYLOAD_ENV_NAMES))))
+    )
+    assert sorted(set(full) - set(bare)) == sorted(OPTIONAL_PAYLOAD_ENV_NAMES), "the list is the profile's own"
+    _governed_inputs(monkeypatch, tmp_path)
+    payload, why = core_blue.blue_restore_payload(_adopted(sorted({*D0_NAMES, "MIP_OTEL_ENDPOINT"})), **INPUTS)
+    assert payload is None and "lacks MIP_OTEL_ENDPOINT" in why
+    names = sorted(D0_NAMES)
+    names.remove("MIP_RUM_ENABLED")  # a name the builder always ships, blue lacking it, still refuses
+    payload, why = core_blue.blue_restore_payload(_adopted(names), **INPUTS)
+    assert payload is None and "adds MIP_RUM_ENABLED" in why
 
 
 def test_a_blue_whose_set_holds_both_switches_gets_them_as_zero() -> None:
