@@ -213,8 +213,19 @@ def test_provenance_is_checked_against_the_named_commit_in_the_deploying_checkou
     git(repo, "commit", "-qam", "later")
 
     assert _verify(root, requirements, repo, digest, git_sha=sealed).tracked > 0, "the sealed commit, not HEAD"
+    # make_repo commits the same tree, identity and message every time, so a
+    # second one made in the same second (a fast CI runner) IS the sealed
+    # commit, and an amend still leaves that object in the store. Build the
+    # other checkout from its own tree, and prove it lacks the commit.
+    unrelated = _mkdir(tmp_path / "unrelated")
+    git(unrelated, "init", "-q")
+    (unrelated / "README.md").write_text("an unrelated history\n", encoding="utf-8")
+    git(unrelated, "add", "-A")
+    git(unrelated, "commit", "-q", "-m", "an unrelated history")
+    held = subprocess.run(["git", "-C", str(unrelated), "cat-file", "-e", f"{sealed}^{{commit}}"], capture_output=True)
+    assert held.returncode != 0, "the other checkout must not hold the sealed commit"
     with pytest.raises(release.Refused, match="cannot stage the App closure at the commit"):
-        release.provenance(root, _listed(root), repo=make_repo(_mkdir(tmp_path / "unrelated")), git_sha=sealed)
+        release.provenance(root, _listed(root), repo=unrelated, git_sha=sealed)
 
 
 def test_install_replaces_each_destination_whole_and_rehashes_the_copy(tmp_path: Path) -> None:
