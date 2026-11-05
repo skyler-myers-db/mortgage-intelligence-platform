@@ -623,13 +623,17 @@ jobs:
     # It runs in the pinned image (see playwright-offline), on the same
     # runner hardware, with the same Chromium build (chromium-1248) the host
     # install downloaded, so the calibrated budgets keep their meaning; only
-    # the install step left the setup. The cap is unchanged.
+    # the install step left the setup. The cap is unchanged. A container
+    # step is not given the runner's ImageOS, so each calibration record
+    # names the image it ran in instead (MIP_CI_IMAGE, fixture/calibration.ts).
     name: e2e (fixture perf + interaction budgets, single worker)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
       image: mcr.microsoft.com/playwright:v1.64.0-noble
       options: --ipc=host
+    env:
+      MIP_CI_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble
     steps:
       - uses: actions/checkout@v6
       - name: Trust the checkout for git (the container runs as root)

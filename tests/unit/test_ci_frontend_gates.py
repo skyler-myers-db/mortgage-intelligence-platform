@@ -87,6 +87,14 @@ def test_the_perf_budget_step_is_unconditional() -> None:
     assert "continue-on-error" not in perf, "perf-budget is calibrated on the reference runner and gates"
 
 
+def test_the_perf_calibration_names_the_image_it_ran_in() -> None:
+    """A container step is not given the runner's ImageOS; the record names the image instead."""
+    job = _jobs()[PERF_JOB]
+    assert job["env"]["MIP_CI_IMAGE"] == job["container"]["image"]
+    calibration = (FRONTEND / "tests" / "e2e" / "fixture" / "calibration.ts").read_text(encoding="utf-8")
+    assert "image: read('MIP_CI_IMAGE')," in calibration
+
+
 def test_the_perf_calibration_is_uploaded_after_the_perf_step() -> None:
     """Audit runtime-09 / quality-08: every perf run's calibration JSON is an artifact."""
     steps = _jobs()[PERF_JOB]["steps"]
