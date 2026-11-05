@@ -83,6 +83,21 @@ def _deploy(checkout: Path, env: dict[str, str], *args: str) -> subprocess.Compl
     )
 
 
+# ``mktemp -t mip-x.XXXXXX.env`` names its file two ways. BSD (macOS) keeps
+# the template and appends a random tail: ``mip-x.XXXXXX.env.AbC123de``. GNU
+# (the Linux CI runner) replaces the X's: ``mip-x.lwE9vH.env``. Both become
+# ``mip-x.<random>.env``; nothing else in a command is rewritten.
+_MKTEMP_NAME = re.compile(
+    r"(/mip-[a-z0-9-]+)\."
+    r"(?:XXXXXX(?P<bsd_ext>\.[a-z]+)?\.[A-Za-z0-9]+|[A-Za-z0-9]{6}(?P<gnu_ext>\.[a-z]+)?)"
+    r"(?=[\s'\",;:)]|$)"
+)
+
+
+def _mktemp_normal(match: re.Match[str]) -> str:
+    return f"{match.group(1)}.<random>{match.group('bsd_ext') or match.group('gnu_ext') or ''}"
+
+
 def _normal(commands: list[str]) -> list[str]:
     """Each sandbox commits its own overlay: its sha and mktemp names differ, nothing else."""
 
@@ -90,7 +105,7 @@ def _normal(commands: list[str]) -> list[str]:
     for command in commands:
         command = re.sub(r"\b[0-9a-f]{40}\b", "<sha>", command)
         command = re.sub(r"\b[0-9a-f]{12}(-dry-run)?\b", "<release>", command)
-        out.append(re.sub(r"(XXXXXX[.a-z]*)\.\w+", r"\1.<random>", command))
+        out.append(_MKTEMP_NAME.sub(_mktemp_normal, command))
     return out
 
 
