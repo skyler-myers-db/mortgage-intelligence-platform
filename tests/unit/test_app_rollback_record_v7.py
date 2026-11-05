@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -159,6 +160,32 @@ def test_a_tombstones_remedy_is_the_re_adoption_the_bootstrap_gate_allows(
         == (prestop.ROLLBACK_RECORD_ABSENT)
     ), "every consumer still reads a tombstone as no record"
     assert "--phase adopt" in prestop._REMEDY_ABSENT
+
+
+def test_an_agentic_tier_unadopts_remedy_names_the_core_tier_its_re_adoption_needs(
+    tmp_path: Path,
+) -> None:
+    """Unadopt runs in either tier, adopt in the core tier only: the remedy says which."""
+
+    from tests.fixtures.adopt_live_world import World, make_repo
+    from tools.databricks import adopt_live
+    from tools.databricks import prestop_rollback_record as prestop
+
+    repo, main, side = make_repo(tmp_path)
+    world = World(repo=repo, main=main, side=side)
+    world.apply()
+    world.apply("unadopt", tier="on")
+    with pytest.raises(RuntimeError) as retired:
+        _load(world)
+    message = str(retired.value)
+    assert message.startswith("no server-owned last-good App rollback contract exists")
+    assert "--phase adopt from a profile whose MIP_AGENTIC_TIER is off" in message
+    assert "tier_agentic" in message and "in the core tier" in message
+    assert "MIP_AGENTIC_TIER off" in prestop._REMEDY_ABSENT
+    with pytest.raises(adopt_live.AdoptLiveRefused) as agentic:
+        adopt_live.compute_plan(world, "adopt", world.target(tier="on"), world.readers())
+    assert agentic.value.code == "tier_agentic", "the agentic tier cannot take the remedy"
+    assert world.apply()["provenance"] == "adopted", "the core tier's re-adoption the remedy names"
 
 
 @pytest.mark.parametrize("tamper", ("field", "algorithm"))

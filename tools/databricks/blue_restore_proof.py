@@ -7,7 +7,8 @@ Restore tiers (plan §4.7):
   once the active deployment is no longer blue: a start would then snapshot
   green's source.
 * **tier b** redeploys blue's restore payload from the immutable,
-  digest-verified copy. ``tier_b_payload`` re-hashes the copy (a tampered or
+  digest-verified copy. ``tier_b_payload`` refuses a record whose tier is not
+  the profile's (``blue_tier_mismatch``), re-hashes the copy (a tampered or
   added file refuses), requires the payload a release proved before activation,
   and refuses an ``unverified`` frontend without the
   ``restore_unverified_frontend`` ack. The deploy call itself is the core
@@ -74,6 +75,7 @@ from tools.databricks.app_rollback_record_contract import (
 from tools.databricks.app_rollback_record_v7 import (
     V7RecordError,
     assert_core_resource_proof,
+    assert_record_tier,
     unsigned,
     validated_v7_record,
 )
@@ -171,6 +173,7 @@ def tier_b_payload(
     *,
     app_name: str,
     record: Mapping[str, Any],
+    agentic_tier: str,
     unverified_frontend_ack: str | None = None,
     tree: Callable[[Any, str], str] = tree_digest,
     run_git_sha: str = "",
@@ -185,6 +188,10 @@ def tier_b_payload(
         raise RestoreProofRefused(
             "not_v7", "tier b of a v5 or v6 record is the signed-blue restore's"
         )
+    try:
+        assert_record_tier(record, agentic_tier=agentic_tier)
+    except V7RecordError as exc:
+        raise RestoreProofRefused("blue_tier_mismatch", str(exc)) from exc
     if record.get("restore_payload") is None:
         raise RestoreProofRefused(
             "no_restore_payload", "the record carries no restore payload proven before activation"

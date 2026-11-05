@@ -13,12 +13,15 @@ with the deploy's proof-signing key, verified by the lease's own key registry:
 * ``freeze`` writes ``<app>.freeze-<marker id>.json`` create-only: a new
   marker id, the freezing identity, ``created_at`` and ``until`` (epoch
   seconds, in the future and at most MAX_FREEZE_SECONDS ahead). It refuses
-  while a marker for the App is still frozen. It never sets a permission
+  while a marker for the App is still frozen, and it is signed before the root
+  is touched, so a refused freeze changes nothing. It never sets a permission
   (``prepare_root``): the owner runs it from their own shell, and converging
   the root's ACL for them would remove the deployer's MANAGE and break a run
   that holds the lease. A missing root is created bare (the first lease
-  acquisition converges it); an existing one must be exactly protected for
-  the App lease's own holder and writer, checked read-only.
+  acquisition converges it). An existing one is checked read-only: exactly
+  protected for the App lease's own holder and writer, or, when the App has
+  no lease record yet, held by no accessor but admins and the freezing
+  identity (``freeze_root_unprotected`` otherwise).
 * ``thaw`` writes ``<app>.freeze-<marker id>.thaw.json`` create-only, bound
   to the freeze marker's sha256. Nothing is ever overwritten or deleted.
 
@@ -45,9 +48,10 @@ While frozen, publish refuses with exit 2 unless one of:
   App lifts no freeze.
 
 Who can publish while no marker is frozen: the publisher lists the lease root
-on every publish, so once a governed lease has created it (its holder
-manages it, its writer reads it, admins manage it) a publishing identity
-that cannot list it refuses (``freeze_unreadable``) even with no marker; and
+on every publish, so once it exists (a governed lease creates it, its holder
+managing it, its writer reading it, admins managing it; or a freeze creates
+it bare until the first lease converges it) a publishing identity that
+cannot list it refuses (``freeze_unreadable``) even with no marker; and
 since markers are never deleted, every later publish needs the deploy's
 public verify key exported to read an expired or thawed marker as such.
 """
@@ -70,6 +74,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from databricks.sdk.errors import AlreadyExists, NotFound, ResourceAlreadyExists
 from databricks.sdk.service.workspace import ImportFormat
+from tools.databricks import app_deployment_lease_holder as lease_holder
 from tools.databricks import app_deployment_lease_support as lease_support
 from tools.databricks.operation_ack import AckRefused, ack_digest, require_ack
 
@@ -259,7 +264,31 @@ def judge_markers(workspace: Any, *, now: float | None = None) -> list[Marker]:
     return markers
 
 
-def prepare_root(workspace: Any, *, app_name: str, lease: Any) -> None:
+def _assert_bare_root(workspace: Any, *, lease: Any, holder: str, object_id: str) -> None:
+    """A root with no lease for the App: only admins and the freezing identity may hold it."""
+
+    holder_field = lease_holder.holder_acl_field(workspace, holder)
+    permissions = workspace.workspace.get_permissions("directories", object_id)
+    for entry in lease._items(lease._field(permissions, "access_control_list")):
+        levels = lease._permission_levels(entry)
+        group_name = str(lease._field(entry, "group_name") or "").strip().casefold()
+        named = any(
+            str(lease._field(entry, name) or "").strip()
+            for name in ("user_name", "service_principal_name")
+        )
+        if not levels:
+            continue
+        if levels != {"CAN_MANAGE"} or not (
+            lease_holder.is_holder_entry(holder_field, holder, entry)
+            or (group_name == "admins" and not named)
+        ):
+            raise RuntimeError(
+                "the root has an accessor other than admins and the freezing identity, and "
+                "the App has no lease record to name its holder and writer"
+            )
+
+
+def prepare_root(workspace: Any, *, app_name: str, lease: Any, holder: str) -> None:
     """The lease root for a marker, without ever setting a permission (see the module doc)."""
 
     try:
@@ -269,13 +298,17 @@ def prepare_root(workspace: Any, *, app_name: str, lease: Any) -> None:
         return
     try:
         record = lease._download(workspace, app_name=_app(app_name))
+        object_id = lease._root_object_id(workspace)
         if record is None:
-            return  # no lease for this App yet: its first acquisition converges the root
+            # No lease for this App yet (a root a freeze created bare, or another
+            # App's): still judged read-only, so nobody else can delete a marker.
+            _assert_bare_root(workspace, lease=lease, holder=holder, object_id=object_id)
+            return
         lease._assert_protected_root(
             workspace,
             holder=str(record.get("holder") or "").strip(),
             writer_application_id=str(record.get("writer_application_id") or "").strip(),
-            object_id=lease._root_object_id(workspace),
+            object_id=object_id,
         )
     except RuntimeError as exc:
         raise FreezeRefused(
@@ -372,6 +405,18 @@ def freeze(
             "freeze_until_invalid",
             f"--until must be in the future and at most {MAX_FREEZE_SECONDS} s ahead",
         )
+    marker_id = str(uuid4())
+    document = {
+        "version": MARKER_VERSION,
+        "kind": "freeze",
+        "app_name": _app(app_name),
+        "marker_id": marker_id,
+        "frozen_by": holder,
+        "created_at": datetime.fromtimestamp(current, UTC).isoformat(),
+        "until": int(until),
+    }
+    # Signed before the root is touched: a refused freeze changes nothing.
+    signed = _sign(document, environ=environ)
     ensure_root()
     active = [
         marker
@@ -382,20 +427,7 @@ def freeze(
         raise FreezeRefused(
             "already_frozen", f"the App is already frozen by marker {active[0].marker_id}"
         )
-    marker_id = str(uuid4())
-    created = datetime.fromtimestamp(current, UTC).isoformat()
-    document = {
-        "version": MARKER_VERSION,
-        "kind": "freeze",
-        "app_name": _app(app_name),
-        "marker_id": marker_id,
-        "frozen_by": holder,
-        "created_at": created,
-        "until": int(until),
-    }
-    _write_create_only(
-        workspace, freeze_path(app_name, marker_id), _sign(document, environ=environ)
-    )
+    _write_create_only(workspace, freeze_path(app_name, marker_id), signed)
     return marker_id
 
 

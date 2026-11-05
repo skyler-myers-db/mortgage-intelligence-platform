@@ -12,7 +12,9 @@ adopted v7 in place, never shadowed by it.
   retired tombstone both read as absent, with the remedy that fits each (a
   tombstone's is a re-adoption: the one-time unsigned rebase refuses over any
   record, ``app_rollback_bootstrap_gate``), and any other v7 record refuses by
-  name (``V7_REFUSAL``) unless the caller is tier-aware (``accept_v7``).
+  name (``V7_REFUSAL``) unless the caller is tier-aware (``accept_v7``). The
+  tombstone's re-adoption is the core tier's only (adopt-live refuses the
+  agentic tier), so its remedy names that tier in either tier.
 
 Every helper is read through the contract module, so its monkeypatches apply.
 """
@@ -26,10 +28,14 @@ from tools.databricks import app_rollback_record_contract as contract
 
 ABSENT = "no server-owned last-good App rollback contract exists"
 _BOOTSTRAP = f"{ABSENT}; run the explicit bootstrap command before upgrading this existing App"
+# Tier-accurate in either tier (this reader is not told the run's tier): an
+# unadopt runs in both, but adopt-live signs the core tier only.
 _TOMBSTONE = (
-    f"{ABSENT} (the slot holds a retired adopt-live tombstone): re-adopt with "
-    "./scripts/deploy.sh --phase adopt, since the one-time unsigned rebase refuses over any "
-    "signed record, a tombstone included"
+    f"{ABSENT} (the slot holds a retired adopt-live tombstone): re-adopt in the core tier, "
+    "with ./scripts/deploy.sh --phase adopt from a profile whose MIP_AGENTIC_TIER is off, "
+    "since adopt-live refuses the agentic tier (tier_agentic, until the estate inventory of "
+    "M4-PR1) and the one-time unsigned rebase refuses over any signed record, a tombstone "
+    "included"
 )
 
 

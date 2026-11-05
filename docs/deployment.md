@@ -522,14 +522,18 @@ databricks apps deploy <app-name> --json @<payload> -p <profile>
 recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
 <app-name> --until <epoch>` (with the deploy's proof-signing key exported),
 and lifts it with `thaw --marker-id <id>`; both write a signed, create-only
-marker in the lease root and nothing is deleted. Neither ever sets a
-permission: a missing lease root is created bare (the first governed lease
-converges its ACL), and an existing one must be exactly protected for the
-App lease's own holder and writer, checked read-only
-(`freeze_root_unprotected` otherwise), so a freeze from the owner's shell
-never takes the root's MANAGE from the deployer. `app_release_source publish` reads every marker after its local checks
-and before any upload, and refuses with exit 2 while one is frozen. A marker
-reads as thawed or expired only when its signature verifies, so a shell
+marker in the lease root and nothing is deleted. A freeze is signed before
+the root is touched, so a refused one (no signing key, a bad `--until`)
+changes nothing. Neither ever sets a permission: a missing lease root is
+created bare (the first governed lease converges its ACL), and an existing
+one is checked read-only, exactly protected for the App lease's own holder
+and writer or, while the App has no lease record, held by no accessor but
+admins and the freezing identity (`freeze_root_unprotected` otherwise), so a
+freeze from the owner's shell never takes the root's MANAGE from the
+deployer and nobody else can delete its marker. `app_release_source publish`
+reads every marker after its local checks and before any upload, and
+refuses with exit 2 while one is frozen. A marker reads as thawed or
+expired only when its signature verifies, so a shell
 without the deploy's public verify key (`MIP_AI_GATEWAY_PROOF_VERIFY_KEY`)
 reads every marker as frozen: export that key to publish after a thaw. To
 publish one release folder while frozen anyway, add `--override-freeze
@@ -540,7 +544,8 @@ passes `--held-lease-app-name` and `--held-lease-id`, and its proven lease
 exempts that App's own markers only: the governed run under the signed lease
 is the coordinated path the freeze protects, and every other App's marker is
 still judged, so a lease taken on a decoy App lifts nothing. A lease root that
-does not exist changes nothing. Once a governed lease has created it, though,
+does not exist changes nothing. Once it exists, though (a governed lease
+creates it, or a freeze creates it bare until the first lease converges it),
 the publisher lists it on every publish, so the identity that runs this
 recipe must be able to list it (a workspace admin can: admins manage it), or
 the publish refuses (`freeze_unreadable`) even with no marker; and since
@@ -3019,9 +3024,14 @@ an older closure definition therefore refuses, and the remedy is a fresh
 emergency deploy of a current commit before the adoption. `frontend/dist` is
 compared with a dist adopt-live builds itself from the health sha when
 `MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
-that sha into a private temporary tree, then `npm ci` and `npm run build`
-there, with an allowlisted environment that holds no credential (the tools,
-npm's registry and proxy settings, and the reviewed tenant appearance). No CI
+that sha into a private temporary tree, then `npm ci --ignore-scripts` and
+`npm run build` there, with an allowlisted environment that holds no
+Databricks, proof or npm credential: the tools, an allowlist of npm's
+registry, cache and proxy settings (never an auth token or password, and no
+registry or proxy URL that carries userinfo), the reviewed tenant appearance,
+and npm's user and global config pointed at an empty private file, so
+`~/.npmrc` is never read. It is no sandbox: the build runs as the operator's
+OS user, like the deploy's own frontend build. No CI
 job keeps a dist artifact, and a directory an operator names proves nothing (a
 copy of the live dist itself compares equal), so no such input exists. Equal
 bytes are `verified`, and the plan and the record carry the digest of the dist
@@ -3042,8 +3052,12 @@ retired`, every other field kept), so a later adopt starts clean; with no
 adopted record it retires nothing, so the bind's unadopt recovery still runs
 in either tier, and a captured blue refuses (`record_present`). Only adopt and
 supersede refuse the agentic tier. Over a tombstone, the v5/v6 reader's
-remedy is a re-adoption (`--phase adopt`): the one-time unsigned rebase's
-bootstrap gate refuses over any signed record, a tombstone included.
+remedy (the same text in either tier) is a re-adoption in the core tier:
+`--phase adopt` from a profile whose `MIP_AGENTIC_TIER` is off. adopt-live
+refuses the agentic tier (`tier_agentic`) and the one-time unsigned rebase's
+bootstrap gate refuses over any signed record, a tombstone included, so an
+agentic-tier profile has no route over a tombstone until the agentic tier can
+adopt.
 
 **The acks.** The owner attestation is deferred (review mode
 `single_maintainer_audited`), so each mode prints the sha256 of its plan's
@@ -3086,8 +3100,12 @@ tier's own invariant), so a core record never restores an agentic surface.
 Golden v5 and v6 records verify byte-identically.
 
 Where the tier is checked today: adopt-live signs the core tier only; the
-pre-activation proof refuses a v7 blue whose tier is not the profile's
-`MIP_AGENTIC_TIER` (`blue_tier_mismatch`); and `app_deployment_rollback
+pre-activation proof and `tier_b_payload` (before it re-hashes the copy)
+refuse a v7 blue whose tier is not the profile's `MIP_AGENTIC_TIER`
+(`blue_tier_mismatch`), the proof's tier gate admitting a core blue under an
+agentic profile only with the exact `tier_transition` ack (the core restore,
+whose own load runs that gate, then hands `tier_b_payload` the core tier);
+and `app_deployment_rollback
 inspect` re-proves the record's own tier (core: the App identity and exactly
 the record's core bindings, never the Gateway; agentic: v6 inspect's own
 Gateway resource proof, its reviewed-function owner the signed payload's).

@@ -203,11 +203,15 @@ def restore_core_blue(
                 treatment("runtime")
             return record
 
+        # load_core_blue's gate judged blue against the profile's tier (a core
+        # blue under an agentic one only with its exact tier_transition ack)
+        # and returned a core record: tier b restores it as the core tier.
         def proven_payload() -> dict[str, object]:
             return tier_b_payload(
                 workspace,
                 app_name=app_name,
                 record=record,
+                agentic_tier="off",
                 unverified_frontend_ack=unverified_frontend_ack,
                 tree=tree,
                 run_git_sha=run_git_sha,

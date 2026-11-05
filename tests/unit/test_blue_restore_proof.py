@@ -172,7 +172,7 @@ def test_a_tampered_copy_refuses_the_proof_and_the_restore(adopted: World) -> No
         _prepare(adopted)
     assert refused.value.code == "copy_tampered"
     with pytest.raises(proof.RestoreProofRefused) as refused:
-        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record)
+        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record, agentic_tier="off")
     assert refused.value.code == "copy_tampered"
 
 
@@ -240,8 +240,52 @@ def test_tier_b_needs_the_recorded_payload(adopted: World) -> None:
     assert record is not None
 
     with pytest.raises(proof.RestoreProofRefused) as refused:
-        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record)
+        proof.tier_b_payload(adopted, app_name=rr.APP_NAME, record=record, agentic_tier="off")
     assert refused.value.code == "no_restore_payload"
+
+
+def test_tier_b_refuses_a_record_whose_tier_is_not_the_profiles(unverified: World) -> None:
+    """A core blue never restores under an agentic profile; nothing is re-hashed first."""
+
+    payload = _restore_payload(unverified)
+    record = unverified.record()
+    assert record is not None
+    plan = proof.unverified_frontend_plan(
+        app_name=rr.APP_NAME,
+        record={**record, "restore_payload_sha256": contract._payload_digest(payload)},
+        run_git_sha=GREEN_SHA,
+    )
+    frontend_ack = ack_digest("restore_unverified_frontend", plan)
+    _prepare(unverified, restore_payload=payload, unverified_frontend_ack=frontend_ack)
+    record = unverified.record()
+    assert record is not None and record["tier"] == "core"
+    rehashed: list[str] = []
+
+    def tree(_workspace: Any, path: str) -> str:
+        rehashed.append(path)
+        return str(record["source_tree_sha256"])
+
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        proof.tier_b_payload(
+            unverified,
+            app_name=rr.APP_NAME,
+            record=record,
+            agentic_tier="on",
+            unverified_frontend_ack=frontend_ack,
+            tree=tree,
+            run_git_sha=GREEN_SHA,
+        )
+    assert refused.value.code == "blue_tier_mismatch" and rehashed == []
+    restored = proof.tier_b_payload(
+        unverified,
+        app_name=rr.APP_NAME,
+        record=record,
+        agentic_tier="off",
+        unverified_frontend_ack=frontend_ack,
+        tree=tree,
+        run_git_sha=GREEN_SHA,
+    )
+    assert restored == payload and rehashed, "the profile's own tier restores"
 
 
 def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> None:
@@ -271,6 +315,7 @@ def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> 
                 unverified,
                 app_name=rr.APP_NAME,
                 record=record,
+                agentic_tier="off",
                 unverified_frontend_ack=ack,
                 run_git_sha=GREEN_SHA,
             )
@@ -280,6 +325,7 @@ def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> 
         unverified,
         app_name=rr.APP_NAME,
         record=record,
+        agentic_tier="off",
         unverified_frontend_ack=frontend_ack,
         run_git_sha=GREEN_SHA,
     )
@@ -313,15 +359,19 @@ def test_the_unverified_frontend_ack_covers_one_run_never_a_later_release(unveri
     assert refused.value.code == "unverified_frontend_unacked", "a later release needs its own digest"
     with pytest.raises(proof.RestoreProofRefused) as refused:
         proof.tier_b_payload(
-            unverified, app_name=rr.APP_NAME, record=stored, unverified_frontend_ack=this_run,
-            run_git_sha="e" * 40,
+            unverified, app_name=rr.APP_NAME, record=stored, agentic_tier="off",
+            unverified_frontend_ack=this_run, run_git_sha="e" * 40,
         )
     assert refused.value.code == "ack_mismatch"
     with pytest.raises(proof.RestoreProofRefused) as refused:
-        proof.tier_b_payload(unverified, app_name=rr.APP_NAME, record=stored, unverified_frontend_ack=this_run)
+        proof.tier_b_payload(
+            unverified, app_name=rr.APP_NAME, record=stored, agentic_tier="off",
+            unverified_frontend_ack=this_run,
+        )
     assert refused.value.code == "run_commit_invalid", "no commit is never a run's"
     restored = proof.tier_b_payload(
-        unverified, app_name=rr.APP_NAME, record=stored, unverified_frontend_ack=this_run, run_git_sha=GREEN_SHA
+        unverified, app_name=rr.APP_NAME, record=stored, agentic_tier="off",
+        unverified_frontend_ack=this_run, run_git_sha=GREEN_SHA,
     )
     assert restored == payload
 

@@ -33,17 +33,24 @@ def world(tmp_path: Path) -> World:
 def test_inspect_verifies_the_adopted_record_without_the_gateway(
     world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from tools.databricks import app_deployment_rollback as rollback
     from tools.databricks import app_deployment_rollback_cli as cli
+    from tools.databricks import app_rollback_gateway_proof as gateway_proof
 
     world.apply()
     monkeypatch.setattr(cli, "WorkspaceClient", lambda: world)
     monkeypatch.setenv("MIP_TEST_TOKEN", "token")
-    monkeypatch.setattr(
-        rollback,
-        "_stored_resource_proof",
-        lambda *_a, **_kw: pytest.fail("core never asks the Gateway"),
-    )
+    # The v7 path's own Gateway proof (cli.v7_gateway_proof, and the v6
+    # resolver it calls): a core record never reaches either, even swallowed.
+    asked: list[str] = []
+
+    def never(name: str) -> Any:
+        return lambda *_a, **_kw: asked.append(name) or pytest.fail("core never asks the Gateway")
+
+    for module, name in (
+        (cli, "v7_gateway_proof"),
+        (gateway_proof, "resolve_stored_gateway_resource_proof"),
+    ):
+        monkeypatch.setattr(module, name, never(name))
     out = tmp_path / "blue.env"
 
     argv = [
@@ -62,7 +69,7 @@ def test_inspect_verifies_the_adopted_record_without_the_gateway(
         and values["MIP_APP_ROLLBACK_TIER"] == "core"
     )
     assert values["MIP_APP_ROLLBACK_PROVENANCE"] == "adopted"
-    assert world.apps.mutations == []
+    assert world.apps.mutations == [] and asked == []
 
 
 def _inspect_argv(out: Path) -> list[str]:

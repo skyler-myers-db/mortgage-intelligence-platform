@@ -16,9 +16,11 @@ import pytest
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.core_blue_world import CoreWorld, adopted_core_world
 from tools.databricks import app_rollback_record_contract as contract
+from tools.databricks import blue_tier_gate as gate
 from tools.databricks import core_blue, core_blue_restore
 from tools.databricks.blue_restore_proof import RestoreProofRefused
 from tools.databricks.blue_tier_gate import BlueTierRefused
+from tools.databricks.operation_ack import ack_digest
 
 SERVING = {"name": "agent", "serving_endpoint": {"name": "mip-gateway", "permission": "CAN_QUERY"}}
 
@@ -315,6 +317,26 @@ def test_an_agentic_profile_stands_on_a_core_blue_only_with_the_exact_transition
         world, **world.kwargs(agentic_tier="on", tier_transition_ack=digest)
     )
     assert record["tier"] == "core" and world.apps.mutations == []
+
+
+def test_a_transition_acked_agentic_profile_restores_a_core_blue_by_the_core_proof(
+    world: CoreWorld,
+) -> None:
+    """The gate judges the profile's tier once; tier b then restores the core record as core."""
+
+    payload = world.prove_restore_payload()
+    world.activate_green()
+    record = world.record()
+    assert record is not None
+    plan = gate.tier_transition_plan(app_name=rr.APP_NAME, record=record, agentic_tier="on")
+
+    restored = core_blue_restore.restore_core_blue(
+        world,
+        **world.kwargs(agentic_tier="on", tier_transition_ack=ack_digest("tier_transition", plan)),
+        expected_rollback_deployment_id="deployment-blue",
+    )
+    assert world.apps.deployed == [payload] and restored["tier"] == "core"
+    assert restored["deployment_id"] == world.active != "deployment-green"
 
 
 def test_a_core_profile_never_stands_on_an_agentic_blue(world: CoreWorld) -> None:

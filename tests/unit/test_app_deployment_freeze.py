@@ -234,18 +234,19 @@ def _acl_workspace(caller: str) -> SimpleNamespace:
     )
 
 
-def _freeze_cli(workspace: Any, monkeypatch: pytest.MonkeyPatch) -> int:
+_LEASE_RECORD = {"holder": "deployer-app-id", "writer_application_id": "writer-id"}
+
+
+def _freeze_cli(
+    workspace: Any, monkeypatch: pytest.MonkeyPatch, record: dict[str, str] | None = _LEASE_RECORD
+) -> int:
     import argparse
     import time
 
     from tools.databricks import app_deployment_lease as lease
     from tools.databricks import app_deployment_lease_cli as lease_cli
 
-    monkeypatch.setattr(
-        lease,
-        "_download",
-        lambda *_a, **_kw: {"holder": "deployer-app-id", "writer_application_id": "writer-id"},
-    )
+    monkeypatch.setattr(lease, "_download", lambda *_a, **_kw: record)
     args = argparse.Namespace(
         action="freeze",
         app_name=rr.APP_NAME,
@@ -295,6 +296,60 @@ def test_freeze_creates_a_missing_root_bare_and_refuses_an_unprotected_one(
     assert _freeze_cli(drifted, monkeypatch) == 2
     assert "REFUSED freeze_root_unprotected" in capsys.readouterr().err
     assert freezer.judge_markers(drifted) == [], "nothing was written"
+
+
+def _entry(level: str, *, user: str = "", group: str = "") -> SimpleNamespace:
+    return SimpleNamespace(
+        user_name=user or None,
+        service_principal_name=None,
+        group_name=group or None,
+        all_permissions=[SimpleNamespace(permission_level=level)],
+    )
+
+
+def test_an_unsigned_freeze_refuses_before_it_creates_the_root(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = _acl_workspace("owner@lender.example")
+    monkeypatch.delenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY")
+
+    assert _freeze_cli(workspace, monkeypatch) == 2
+    assert "REFUSED freeze_unsigned" in capsys.readouterr().err
+    assert not workspace.workspace.exists(freezer.LEASE_ROOT), "a refused freeze changes nothing"
+    assert workspace.workspace.ops("mkdirs") == [] and workspace.workspace.ops("upload") == []
+
+
+_ADMINS = _entry("CAN_MANAGE", group="admins")
+
+
+@pytest.mark.parametrize(
+    ("acl", "allowed"),
+    (
+        ([_entry("CAN_MANAGE", group="users")], False),
+        ([_ADMINS, _entry("CAN_EDIT", user="peer@lender.example")], False),
+        ([_entry("CAN_READ", user="owner@lender.example")], False),
+        ([_ADMINS, _entry("CAN_MANAGE", user="owner@lender.example")], True),
+    ),
+)
+def test_an_existing_root_with_no_lease_record_is_still_judged_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    acl: list[SimpleNamespace],
+    allowed: bool,
+) -> None:
+    """A root a freeze created bare (or another App's): only admins and the freezer hold it."""
+
+    workspace = _acl_workspace("owner@lender.example")
+    workspace.workspace.mkdirs(freezer.LEASE_ROOT)
+    workspace.workspace.acl = list(acl)
+
+    code = _freeze_cli(workspace, monkeypatch, record=None)
+    assert workspace.workspace.set_permissions_calls == 0 and workspace.workspace.acl == acl
+    if allowed:
+        assert code == 0 and [m.app_name for m in freezer.judge_markers(workspace)] == [rr.APP_NAME]
+        return
+    assert code == 2 and "REFUSED freeze_root_unprotected" in capsys.readouterr().err
+    assert freezer.judge_markers(workspace) == [], "nothing was written"
 
 
 def test_a_lease_root_that_cannot_be_listed_refuses() -> None:
