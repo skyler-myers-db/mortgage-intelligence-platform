@@ -406,7 +406,9 @@ def test_the_cli_writes_a_private_file_and_prints_counts_and_the_digest_only(
     assert f"sha256 {digest}" in capsys.readouterr().out
 
 
-def test_the_cli_exits_three_on_a_gap_and_two_without_metastore_ownership(tmp_path: Path) -> None:
+def test_the_cli_exits_three_on_a_gap_and_two_without_metastore_ownership(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     gapped = estate_inventory.main(
         ["--out", str(tmp_path / "gapped.json")],
         workspace_factory=_hidden_workspace,
@@ -422,3 +424,60 @@ def test_the_cli_exits_three_on_a_gap_and_two_without_metastore_ownership(tmp_pa
 
     assert (gapped, refused) == (3, 2)
     assert not (tmp_path / "refused.json").exists()
+    # The tooling's own refusal lines name no catalog, so they print in full.
+    assert "InventoryRefused: run the estate inventory as the metastore's direct owner" in capsys.readouterr().err
+
+
+def test_the_cli_withholds_error_text_that_can_name_another_teams_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    secret = "secret-team-catalog"
+
+    def sdk_refusal() -> Any:
+        workspace = harness._workspace(
+            extra_catalogs=[harness.SimpleNamespace(name=secret, isolation_mode="ISOLATED", owner=harness.FOREIGN_OWNER)]
+        )
+
+        def get_bindings(_kind: str, name: str) -> Any:
+            raise PermissionDenied(f"User does not have MANAGE on Catalog '{name}'.", error_code="PERMISSION_DENIED")
+
+        workspace.workspace_bindings.get_bindings = get_bindings
+        return workspace
+
+    def foreign_runtime_error() -> Any:  # a plain RuntimeError raised outside the tooling
+        workspace = harness._workspace()
+
+        def catalogs(**_kwargs: Any) -> Any:
+            raise RuntimeError(f"the listing failed at {secret}")
+
+        workspace.catalogs.list = catalogs
+        return workspace
+
+    for factory, expected in (
+        (sdk_refusal, "REFUSED: PermissionDenied (PERMISSION_DENIED): its text is withheld"),
+        (foreign_runtime_error, "REFUSED: RuntimeError: its text is withheld"),
+    ):
+        out = tmp_path / "estate.json"
+        code = estate_inventory.main(["--out", str(out)], workspace_factory=factory, account_factory=harness._account, now=NOW)
+        captured = capsys.readouterr()
+        assert code == 2 and expected in captured.err and "nothing was written" in captured.err, captured.err
+        assert secret not in captured.out + captured.err and not out.exists()
+
+
+def test_a_document_the_parser_refuses_is_never_written(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    typeless = harness.SimpleNamespace(
+        name="typeless", isolation_mode="OPEN", owner=harness.FOREIGN_OWNER, catalog_type=None
+    )
+    out = tmp_path / "estate.json"
+
+    code = estate_inventory.main(
+        ["--out", str(out)],
+        workspace_factory=lambda: harness._workspace(extra_catalogs=[typeless]),
+        account_factory=harness._account,
+        now=NOW,
+    )
+
+    err = capsys.readouterr().err
+    assert code == 2 and "needs a canonical type" in err and "nothing was written" in err
+    assert list(tmp_path.iterdir()) == []  # neither the file nor a temporary one

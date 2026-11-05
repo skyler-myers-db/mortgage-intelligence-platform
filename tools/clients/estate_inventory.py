@@ -21,21 +21,27 @@ deploy's ``DATABRICKS_ACCOUNT_*`` credential) classifies every workspace
 assigned to the metastore; one it no longer has is recorded with the exact
 digest of its assignments.
 
-The reads themselves are ``tools/databricks/estate/collect.py``'s. The tool
-prints counts, gap counts and the ``estate`` digest, never a name,
-owner or id: export that digest as ``MIP_ACK_ESTATE_INVENTORY`` for the run
-that relies on the inventory, and store the file's content as the client's
-``MIP_ESTATE_INVENTORY_JSON`` GitHub Environment secret (at most 48 KB) or
-point ``MIP_ESTATE_INVENTORY_FILE`` at it. ``--summarize`` recomputes both
-from a written file. Exit 0: written, no gap; 3: written with gaps; 2: refused
-(nothing written).
+The install workspace is the ambient Databricks auth
+(``DATABRICKS_CONFIG_PROFILE``, or ``DATABRICKS_HOST`` and its credentials),
+as the owner. The reads themselves are ``tools/databricks/estate/collect.py``'s
+(its SDK surface is pinned by tests/unit/test_bootstrap_account_safety.py).
+The document is validated before it is written, so a refused one never is.
+The tool prints counts, gap counts and the ``estate`` digest, never a name,
+owner or id: an SDK, HTTP or file error prints its class and error code only,
+because its text can name another team's catalog. Export that digest as
+``MIP_ACK_ESTATE_INVENTORY`` for the run that relies on the inventory, and
+store the file's content as the client's ``MIP_ESTATE_INVENTORY_JSON`` GitHub
+Environment secret (at most 48 KB) or point ``MIP_ESTATE_INVENTORY_FILE`` at
+it. ``--summarize`` recomputes both from a written file. Exit 0: written, no
+gap; 3: written with gaps; 2: refused (nothing written).
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -45,10 +51,40 @@ from tools.databricks.estate import inventory as estate
 from tools.databricks.estate.collect import InventoryRefused, bound_readers, collect, owner_identity
 
 _PREFIX = "[mip-estate]"
+# This repository's tooling: a plain RuntimeError raised here carries a fixed line.
+_TOOLS = Path(__file__).resolve().parents[1]
+_OWN_REFUSALS = (InventoryRefused, estate.EstateInventoryRefusal, JournalRefused)
+_ERROR_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 
 
-def _print_summary(document: Mapping[str, Any], *, now: datetime, size: int) -> int:
-    parsed = estate.parse_inventory(canonical_json(document))
+def _raised_by_the_tooling(exc: BaseException) -> bool:
+    """One of the tooling's refusals, whose lines name no catalog, owner or id."""
+
+    if isinstance(exc, _OWN_REFUSALS):
+        return True
+    frame = exc.__traceback__
+    while frame is not None and frame.tb_next is not None:
+        frame = frame.tb_next
+    origin = Path(frame.tb_frame.f_code.co_filename).resolve() if frame is not None else None
+    return type(exc) is RuntimeError and origin is not None and origin.is_relative_to(_TOOLS)
+
+
+def _refusal_line(exc: BaseException) -> str:
+    """The refusal as printed: another error's text is withheld, its class and code kept."""
+
+    if _raised_by_the_tooling(exc):
+        return f"{exc.__class__.__name__}: {exc}"
+    code = getattr(exc, "error_code", None)
+    detail = code if isinstance(code, str) and _ERROR_CODE.fullmatch(code) else ""
+    reason = getattr(exc, "strerror", None) if not detail else None
+    detail = detail or (reason if isinstance(reason, str) and reason else "")
+    return (
+        f"{exc.__class__.__name__}{f' ({detail})' if detail else ''}: its text is withheld, "
+        "because it can name another team's catalog"
+    )
+
+
+def _print_summary(parsed: estate.EstateInventory, *, now: datetime, size: int) -> int:
     print(f"{_PREFIX} {estate.summary(parsed, now=now)}")
     if size > estate.SECRET_LIMIT_BYTES:
         print(f"{_PREFIX} {size} bytes: over the 48 KB secret limit; use {estate.INVENTORY_FILE_ENV}")
@@ -74,10 +110,13 @@ def main(
     parser.add_argument("--bound-workspace-profile", action="append", default=[])
     args = parser.parse_args(argv)
     moment = now or datetime.now(UTC)
+    written = False
     try:
         if args.summarize is not None:
             text = args.summarize.read_text(encoding="utf-8")
-            return _print_summary(estate.parse_inventory(text).document, now=moment, size=len(text.encode()))
+            return _print_summary(estate.parse_inventory(text), now=moment, size=len(text.encode()))
+        if args.out.exists() and not args.out.is_file():
+            raise InventoryRefused("--out must be a regular file path")
         from databricks.sdk import WorkspaceClient
 
         from tools.databricks.uc_owner_policy import account_client_from_env
@@ -92,13 +131,14 @@ def main(
             now=moment,
             bound_readers=readers,
         )
-        if args.out.exists() and not args.out.is_file():
-            raise InventoryRefused("--out must be a regular file path")
+        parsed = estate.parse_inventory(canonical_json(document))  # a refused document is never written
         write_private(args.out, document)
-        return _print_summary(document, now=moment, size=args.out.stat().st_size)
-    except (RuntimeError, JournalRefused, OSError) as exc:
-        print(f"{_PREFIX} REFUSED: {exc.__class__.__name__}: {exc}", file=sys.stderr)
-        print(f"{_PREFIX} nothing was written", file=sys.stderr)
+        written = True
+        return _print_summary(parsed, now=moment, size=args.out.stat().st_size)
+    except Exception as exc:  # noqa: BLE001 - every refusal prints a vetted line, never a traceback
+        print(f"{_PREFIX} REFUSED: {_refusal_line(exc)}", file=sys.stderr)
+        print(f"{_PREFIX} {'the file was written; run --summarize on it' if written else 'nothing was written'}",
+              file=sys.stderr)  # fmt: skip
         return 2
 
 
