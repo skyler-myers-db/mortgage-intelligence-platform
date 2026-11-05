@@ -507,8 +507,11 @@ as privilege-free.
 
 The pass enumerates every workspace assigned to the current metastore and
 requires exactly one direct, immutable-ID-matched `USER` assignment in the MIP
-workspace, with no direct or group-derived assignment to a workspace retained
-by the foreign-catalog policy. It separately checks the owner on every
+workspace, with no direct or group-derived assignment to any other assigned
+workspace. Every workspace that a binding-denied catalog in the estate
+inventory is bound to must be one of those other assigned workspaces, never
+the MIP workspace, and a workspace that no longer exists passes only with its
+exact defunct entry in the inventory. It separately checks the owner on every
 inventoried catalog, schema, table, function, volume, and registered model.
 Objects visible to MIP retain the full approved-owner workspace/account
 resolution. Every accessible object's owner must resolve exactly once as a

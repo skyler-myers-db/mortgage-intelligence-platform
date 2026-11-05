@@ -334,7 +334,10 @@ def _assert_runtime_workspace_assignment_boundary(
         workspace_id in approved_foreign_workspace_ids
         or not approved_foreign_workspace_ids.issubset(metastore_workspace_ids)
     ):
-        raise RuntimeError("foreign catalog policy references an invalid metastore workspace")
+        raise RuntimeError(
+            "the estate inventory binds a foreign catalog to the install workspace or to a workspace "
+            "not assigned to the metastore"
+        )
     for assigned_workspace_id in sorted(metastore_workspace_ids):
         direct_assignments: list[tuple[str, ...]] = []
         reviewed_group_assignments: dict[str, list[tuple[str, ...]]] = {}

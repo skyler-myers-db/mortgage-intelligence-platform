@@ -375,6 +375,14 @@ def test_grants_records_the_foreign_catalog_remediation_as_deleted() -> None:
         "with the App untouched."
     ) in paragraph
     assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS" not in DEPLOY_DEV.read_text(encoding="utf-8"), "the doc's claim"
+    # The assignment audit names what it checks now, not the policy M4-PR1 retired.
+    assert (
+        "with no direct or group-derived assignment to any other assigned workspace. Every workspace that a "
+        "binding-denied catalog in the estate inventory is bound to must be one of those other assigned "
+        "workspaces, never the MIP workspace, and a workspace that no longer exists passes only with its exact "
+        "defunct entry in the inventory."
+    ) in grants
+    assert "foreign-catalog policy" not in grants
     for retired in (
         "The command of record is the manual `deploy-dev` workflow",
         "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh",
