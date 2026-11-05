@@ -279,6 +279,31 @@ summary's `resources.apps.mip_app.source_code_path` equals
 resource payload (which may not carry it). The first governed
 `deploy-dev.yml` run on the CI install is the proof.
 
+### A prebuilt release (M1-PR7)
+
+`./scripts/deploy.sh --prebuilt-release <dir>` takes step 1's two outputs
+from a folder built elsewhere instead of building them: `frontend/dist` and
+the staged closure with its manifest. `deploy-dev.yml` uses it so that its
+`deploy` job, the one that holds an ID token, runs no Node and no npm; its
+`build` job, which holds none, makes the folder. The layout and the checks are
+`tools/databricks/prebuilt_release.py`'s:
+
+- `SHA256SUMS.json` lists every file of `dist/`, `app-release/` (the stage's
+  `source/` and `manifest.json`) and `wheelhouse/` with its sha256 and size,
+  plus the commit and the sha256 of the `requirements-deploy.hashes.txt` the
+  wheelhouse came from. The build job prints the manifest's own sha256.
+- `MIP_PREBUILT_RELEASE_SHA256` must be that sha256 (a one-run export, never
+  `.env.local`). Before any Databricks call, in a dry run too, deploy.sh
+  re-hashes every file and refuses a missing, extra, resized or changed one,
+  a symlink or other non-regular file, a listed path that is not a plain
+  relative path, an empty part, another commit or another requirements file.
+- Step 1 re-hashes it again, replaces `frontend/dist` and
+  `.databricks/app-release` whole with copies, re-hashes the copies and reads
+  the release id from the staged manifest as usual (`app_release_contract
+  release-id --expected-commit`). No npm runs, the frontend dependency check
+  is skipped, and a configured lender mark refuses: the mark is a local file
+  the build job cannot see, so that release builds locally.
+
 ## Emergency recovery: a slim per-release App source folder
 
 **Emergency recovery only. The command of record is `./scripts/deploy.sh -t

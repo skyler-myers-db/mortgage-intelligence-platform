@@ -94,6 +94,13 @@
 #                                       # watchdog ends the run's in-window
 #                                       # work before it, and its dead-man
 #                                       # restarts blue then
+#   ./scripts/deploy.sh -t client --phase release --prebuilt-release <dir>
+#                                       # step 1 takes the build job's
+#                                       # frontend/dist and staged App closure
+#                                       # instead of npm and the stage, after
+#                                       # re-hashing them against the manifest
+#                                       # whose sha256 MIP_PREBUILT_RELEASE_SHA256
+#                                       # names (M1-PR7; deploy-dev.yml's way)
 # The live install predating the client target is reached only through the
 # emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
@@ -156,6 +163,7 @@ TARGET="client"
 TARGET_SEEN=0
 DEPLOY_PHASE=""
 PHASE_SEEN=0
+PREBUILT_RELEASE_DIR=""
 
 # `for arg in "$@"` iterates a pre-expanded snapshot, so an inner
 # `shift` to grab `-t <target>`'s value doesn't actually consume the
@@ -221,8 +229,22 @@ while [[ $# -gt 0 ]]; do
         DEPLOY_PHASE="$2"; shift 2
       fi
       PHASE_SEEN=1 ;;
+    --prebuilt-release|--prebuilt-release=*)
+      # The build job's release (M1-PR7, scripts/lib/deploy_prebuilt_release_lifecycle.sh).
+      if [[ "$1" == --prebuilt-release=* ]]; then
+        PREBUILT_RELEASE_DIR="${1#--prebuilt-release=}"; shift
+      elif [[ $# -lt 2 ]]; then
+        echo "[deploy] missing value for --prebuilt-release (expected the release folder's absolute path)" >&2
+        exit 2
+      else
+        PREBUILT_RELEASE_DIR="$2"; shift 2
+      fi
+      if [[ "$PREBUILT_RELEASE_DIR" != /* || ! -d "$PREBUILT_RELEASE_DIR" || -L "$PREBUILT_RELEASE_DIR" ]]; then
+        echo "[deploy] --prebuilt-release must name an existing folder by its absolute path" >&2
+        exit 2
+      fi ;;
     -h|--help)
-      sed -n '2,116p' "$0"
+      sed -n '2,123p' "$0"
       exit 0
       ;;
     *)
@@ -609,6 +631,8 @@ trap quiesce_window_deadline_reached USR1
 . "$REPO_ROOT/scripts/lib/deploy_reviewed_function_grants_lifecycle.sh"
 # shellcheck source=scripts/lib/deploy_governed_phases_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_governed_phases_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_prebuilt_release_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_prebuilt_release_lifecycle.sh"
 
 # >>> foreign-catalog remediation refused >>>
 # The foreign-catalog binding remediation rewrote the isolation mode and
@@ -626,6 +650,11 @@ if [[ "$_REMEDIATE_FOREIGN_CATALOG_BINDINGS" != "0" ]]; then
 fi
 unset _REMEDIATE_FOREIGN_CATALOG_BINDINGS
 # <<< foreign-catalog remediation refused <<<
+# >>> prebuilt release: verify >>>
+# Re-hash the build job's release against its manifest before any Databricks
+# call, in a dry run too (M1-PR7, scripts/lib/deploy_prebuilt_release_lifecycle.sh).
+[[ -z "${PREBUILT_RELEASE_DIR:-}" ]] || verify_prebuilt_release
+# <<< prebuilt release: verify <<<
 
 # Deploy step files: the orchestration below is sliced verbatim, in reviewed
 # order, into scripts/lib/deploy_step_*.sh. Each step file is sourced into this

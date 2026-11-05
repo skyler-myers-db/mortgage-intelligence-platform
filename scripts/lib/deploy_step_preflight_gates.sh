@@ -215,14 +215,14 @@ else
 fi
 
 # >>> frontend dependency freshness: check >>>
-# Step 1 builds the App source from frontend/package-lock.json; an install
-# that drifted from the lock would ship a build the lock never described
-# (W5a carryover, audit stack-10). Check and report here, before the prompt;
-# the repair (`npm ci`) runs only after it. A shared/symlinked install is
-# never mutated. Exit codes of tools/frontend_deps_check.py: 0 fresh,
-# 10 stale or missing, 11 shared; anything else is a hard preflight error.
+# Step 1 builds the App source from frontend/package-lock.json; an install that drifted from the lock
+# would ship a build the lock never described (W5a carryover, audit stack-10). Check and report here,
+# before the prompt; the repair (`npm ci`) runs only after it. A shared/symlinked install is never
+# mutated. Exit codes of tools/frontend_deps_check.py: 0 fresh, 10 stale or missing, 11 shared; anything
+# else is a hard preflight error. A --prebuilt-release (M1-PR7) builds nothing here: no check, no npm
+# (the deploy job that passes one has no Node), and step 1 takes the build job's dist instead.
 FRONTEND_DEPS_STATE="skipped"
-if [[ -f tools/frontend_deps_check.py ]]; then
+if [[ -f tools/frontend_deps_check.py && -z "${PREBUILT_RELEASE_DIR:-}" ]]; then
   _frontend_deps_rc=0
   "$PYTHON" -m tools.frontend_deps_check || _frontend_deps_rc=$?
   case "$_frontend_deps_rc" in
@@ -241,7 +241,7 @@ if [[ -f tools/frontend_deps_check.py ]]; then
     exit 2
   fi
 else
-  echo "  frontend deps: skipped (tools/frontend_deps_check.py is not in this tree)"
+  case "${PREBUILT_RELEASE_DIR:-}" in "") echo "  frontend deps: skipped (tools/frontend_deps_check.py is not in this tree)" ;; *) echo "  frontend deps: skipped (a prebuilt release carries its built dist)" ;; esac
 fi
 # <<< frontend dependency freshness: check <<<
 
