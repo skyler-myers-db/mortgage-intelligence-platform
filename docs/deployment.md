@@ -522,14 +522,18 @@ databricks apps deploy <app-name> --json @<payload> -p <profile>
 recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
 <app-name> --until <epoch>` (with the deploy's proof-signing key exported),
 and lifts it with `thaw --marker-id <id>`; both write a signed, create-only
-marker in the lease root and nothing is deleted. Neither ever sets a
-permission: a missing lease root is created bare (the first governed lease
-converges its ACL), and an existing one must be exactly protected for the
-App lease's own holder and writer, checked read-only
-(`freeze_root_unprotected` otherwise), so a freeze from the owner's shell
-never takes the root's MANAGE from the deployer. `app_release_source publish` reads every marker after its local checks
-and before any upload, and refuses with exit 2 while one is frozen. A marker
-reads as thawed or expired only when its signature verifies, so a shell
+marker in the lease root and nothing is deleted. A freeze is signed before
+the root is touched, so a refused one (no signing key, a bad `--until`)
+changes nothing. Neither ever sets a permission: a missing lease root is
+created bare (the first governed lease converges its ACL), and an existing
+one is checked read-only, exactly protected for the App lease's own holder
+and writer or, while the App has no lease record, held by no accessor but
+admins and the freezing identity (`freeze_root_unprotected` otherwise), so a
+freeze from the owner's shell never takes the root's MANAGE from the
+deployer and nobody else can delete its marker. `app_release_source publish`
+reads every marker after its local checks and before any upload, and
+refuses with exit 2 while one is frozen. A marker reads as thawed or
+expired only when its signature verifies, so a shell
 without the deploy's public verify key (`MIP_AI_GATEWAY_PROOF_VERIFY_KEY`)
 reads every marker as frozen: export that key to publish after a thaw. To
 publish one release folder while frozen anyway, add `--override-freeze
@@ -540,7 +544,8 @@ passes `--held-lease-app-name` and `--held-lease-id`, and its proven lease
 exempts that App's own markers only: the governed run under the signed lease
 is the coordinated path the freeze protects, and every other App's marker is
 still judged, so a lease taken on a decoy App lifts nothing. A lease root that
-does not exist changes nothing. Once a governed lease has created it, though,
+does not exist changes nothing. Once it exists, though (a governed lease
+creates it, or a freeze creates it bare until the first lease converges it),
 the publisher lists it on every publish, so the identity that runs this
 recipe must be able to list it (a workspace admin can: admins manage it), or
 the publish refuses (`freeze_unreadable`) even with no marker; and since

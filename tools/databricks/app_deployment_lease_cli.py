@@ -102,7 +102,7 @@ def freeze_action(lease: Any, workspace: Any, args: Any, parser: Any) -> int:
                 # Never the lease's own _ensure_protected_root: it would make this
                 # caller the root's only manager and break a run holding the lease.
                 ensure_root=lambda: freezer.prepare_root(
-                    workspace, app_name=args.app_name, lease=lease
+                    workspace, app_name=args.app_name, lease=lease, holder=holder
                 ),
                 environ=dict(os.environ),
             )
