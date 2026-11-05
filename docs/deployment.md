@@ -2901,9 +2901,14 @@ an older closure definition therefore refuses, and the remedy is a fresh
 emergency deploy of a current commit before the adoption. `frontend/dist` is
 compared with a dist adopt-live builds itself from the health sha when
 `MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
-that sha into a private temporary tree, then `npm ci` and `npm run build`
-there, with an allowlisted environment that holds no credential (the tools,
-npm's registry and proxy settings, and the reviewed tenant appearance). No CI
+that sha into a private temporary tree, then `npm ci --ignore-scripts` and
+`npm run build` there, with an allowlisted environment that holds no
+Databricks, proof or npm credential: the tools, an allowlist of npm's
+registry, cache and proxy settings (never an auth token or password, and no
+registry or proxy URL that carries userinfo), the reviewed tenant appearance,
+and npm's user and global config pointed at an empty private file, so
+`~/.npmrc` is never read. It is no sandbox: the build runs as the operator's
+OS user, like the deploy's own frontend build. No CI
 job keeps a dist artifact, and a directory an operator names proves nothing (a
 copy of the live dist itself compares equal), so no such input exists. Equal
 bytes are `verified`, and the plan and the record carry the digest of the dist

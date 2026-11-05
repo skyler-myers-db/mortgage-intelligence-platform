@@ -18,10 +18,13 @@ adopt-live trusts nothing the live folder says about itself:
   only source maps), and a directory an operator names proves nothing (a
   copy of the live dist itself would compare equal), so the only reference is
   the one ``build_reference_dist`` builds here: ``git archive`` of that sha
-  into a private temporary tree, then ``npm ci`` and ``npm run build`` there,
-  with an allowlisted environment that holds no credential. No build, a
-  failed one, a different Node, a re-compressed ``.br`` or a lender mark the
-  build cannot stage all read as ``unverified``, never as verified.
+  into a private temporary tree, then ``npm ci --ignore-scripts`` and
+  ``npm run build`` there, with an allowlisted environment that holds no
+  Databricks, proof or npm credential (``build_environment``). It is no
+  sandbox: the build runs as the operator's OS user, like the deploy's own
+  frontend build. No build, a failed one, a different Node, a re-compressed
+  ``.br`` or a lender mark the build cannot stage all read as ``unverified``,
+  never as verified.
 * ``copy_to`` stages the downloaded bytes and publishes them create-only into
   the SP-owned ``app-src/adopted-<id12>-<digest12>`` with
   ``app_release_source``'s own ``check_stage`` and ``upload_release`` (exact
@@ -59,9 +62,12 @@ from tools.databricks.app_start_deployment import digest_entries
 
 DIST_PREFIX = f"{closure.DIST_PATH}/"
 APP_YAML = "app.yaml"
-# What the reference build may see of the environment: the tools, the npm
-# registry and proxy settings, and the reviewed tenant appearance the deploy
-# exports for its own build (frontend/vite.config.ts). Never a credential.
+# What the reference build may see of the environment: the tools, npm's
+# registry, cache and proxy settings, and the reviewed tenant appearance the
+# deploy exports for its own build (frontend/vite.config.ts). No Databricks,
+# proof or npm credential: npm settings are an allowlist (never an auth token,
+# password or client key), a URL that carries userinfo is dropped, and npm's
+# user and global config are an empty private file, so ~/.npmrc is never read.
 BUILD_ENV_NAMES = frozenset(
     {
         "PATH",
@@ -81,6 +87,30 @@ BUILD_ENV_NAMES = frozenset(
     }
 )
 BUILD_ENV_PREFIXES = ("npm_config_", "NPM_CONFIG_")
+# The npm settings a build may take from the operator (lower case, ``-`` as ``_``).
+BUILD_NPM_SETTINGS = frozenset(
+    {
+        "registry",
+        "cache",
+        "cafile",
+        "strict_ssl",
+        "proxy",
+        "https_proxy",
+        "noproxy",
+        "prefer_offline",
+        "offline",
+        "fetch_retries",
+        "fetch_retry_mintimeout",
+        "fetch_retry_maxtimeout",
+        "fetch_timeout",
+        "loglevel",
+        "progress",
+    }
+)
+_URL_SETTINGS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "registry", "proxy", "https_proxy"})
+# ``npm ci`` runs no dependency install script: the lockfile's only one is
+# fsevents, an optional dev file watcher the build never loads.
+NPM_CI = ("ci", "--no-audit", "--no-fund", "--ignore-scripts")
 
 
 def _sha256(data: bytes) -> str:
@@ -176,14 +206,23 @@ def frontend_provenance(files: Mapping[str, bytes], reference_dist: Path | None)
     return "unverified", f"frontend/dist differs from the build artifact in {len(differ)} files"
 
 
-def build_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    """The reference build's environment: ``BUILD_ENV_NAMES`` and npm's own settings only."""
+def _npm_setting(name: str) -> str | None:
+    prefix = next((p for p in BUILD_ENV_PREFIXES if name.startswith(p)), None)
+    return None if prefix is None else name.removeprefix(prefix).lower().replace("-", "_")
 
-    return {
-        name: value
-        for name, value in environ.items()
-        if name in BUILD_ENV_NAMES or name.startswith(BUILD_ENV_PREFIXES)
-    }
+
+def build_environment(environ: Mapping[str, str], *, npmrc: Path) -> dict[str, str]:
+    """The reference build's environment: no credential (see ``BUILD_ENV_NAMES``)."""
+
+    env: dict[str, str] = {}
+    for name, value in environ.items():
+        setting = _npm_setting(name)
+        if name not in BUILD_ENV_NAMES and setting not in BUILD_NPM_SETTINGS:
+            continue
+        if (name in _URL_SETTINGS or setting in _URL_SETTINGS) and "@" in value:
+            continue  # userinfo in a registry or proxy URL is a credential
+        env[name] = value
+    return {**env, "npm_config_userconfig": str(npmrc), "npm_config_globalconfig": str(npmrc)}
 
 
 def build_reference_dist(
@@ -205,9 +244,11 @@ def build_reference_dist(
     )
     with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
         tar.extractall(tree, filter="data")
-    env = build_environment(os.environ if environ is None else environ)
+    npmrc = workdir / "npmrc"
+    npmrc.write_bytes(b"")
+    env = build_environment(os.environ if environ is None else environ, npmrc=npmrc)
     frontend = str(tree / "frontend")
-    for step in (["ci", "--no-audit", "--no-fund"], ["run", "build"]):
+    for step in ([*NPM_CI], ["run", "build"]):
         run(
             ["npm", "--prefix", frontend, *step], cwd=tree, env=env, capture_output=True, check=True
         )

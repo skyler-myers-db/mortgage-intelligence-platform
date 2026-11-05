@@ -108,9 +108,11 @@ def test_no_operator_named_directory_can_make_the_frontend_verified(world: World
     assert args.build_reference_dist is True
 
 
-def test_the_reference_build_archives_the_sha_and_sees_no_credential(
+def test_the_reference_build_archives_the_sha_with_no_credential_in_its_environment(
     world: World, tmp_path: Path
 ) -> None:
+    """No Databricks, proof or npm credential reaches npm: not by name, URL or ~/.npmrc."""
+
     calls: list[tuple[list[str], dict[str, str] | None]] = []
 
     def run(argv: list[str], **kwargs: Any) -> Any:
@@ -126,10 +128,18 @@ def test_the_reference_build_archives_the_sha_and_sees_no_credential(
         "PATH": "/usr/bin",
         "HOME": "/home/x",
         "npm_config_registry": "https://registry.example.invalid",
+        "NPM_CONFIG_CACHE": "/home/x/.npm",
         "MIP_LENDER_NAME": "Summit Mortgage",
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "PLACEHOLDER",
         "DATABRICKS_CLIENT_SECRET": "PLACEHOLDER",
         "MIP_BEARER_TOKEN": "PLACEHOLDER",
+        "npm_config__authToken": "PLACEHOLDER-npm-token",
+        "NPM_CONFIG_//registry.example.invalid/:_authToken": "PLACEHOLDER-npm-token",
+        "npm_config__password": "PLACEHOLDER",
+        "npm_config_userconfig": "/home/x/.npmrc",
+        "npm_config_https_proxy": "http://user:PLACEHOLDER@proxy.example.invalid:8080",
+        "HTTPS_PROXY": "http://user:PLACEHOLDER@proxy.example.invalid:8080",
+        "HTTP_PROXY": "http://proxy.example.invalid:8080",
     }
     dist = source.build_reference_dist(
         world.repo, world.main, tmp_path / "w", run=run, environ=environ
@@ -145,8 +155,10 @@ def test_the_reference_build_archives_the_sha_and_sees_no_credential(
         "ci",
         "--no-audit",
         "--no-fund",
+        "--ignore-scripts",
     ]
     assert build[3:] == ["run", "build"]
+    npmrc = str(tmp_path / "w" / "npmrc")
     assert (
         ci_env
         == build_env
@@ -154,8 +166,13 @@ def test_the_reference_build_archives_the_sha_and_sees_no_credential(
             "PATH": "/usr/bin",
             "HOME": "/home/x",
             "npm_config_registry": "https://registry.example.invalid",
+            "NPM_CONFIG_CACHE": "/home/x/.npm",
             "MIP_LENDER_NAME": "Summit Mortgage",
+            "HTTP_PROXY": "http://proxy.example.invalid:8080",
+            "npm_config_userconfig": npmrc,
+            "npm_config_globalconfig": npmrc,
         }
     )
+    assert (tmp_path / "w" / "npmrc").read_bytes() == b"", "~/.npmrc is never read"
     with pytest.raises(release.ReleaseContractError):
         source.build_reference_dist(world.repo, "main", tmp_path / "x", run=run, environ=environ)
