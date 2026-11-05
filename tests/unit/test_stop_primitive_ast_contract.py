@@ -187,6 +187,30 @@ def test_a_stray_run_now_or_repair_in_a_tool_is_an_unmapped_job_run_site(
     assert stops.python_job_run_sites() - set(stops.JOB_RUN_SITES) == {("tools/databricks/stray_run_now.py", *site)}
 
 
+def test_no_tool_or_job_source_starts_or_stops_a_pipeline_update() -> None:
+    # M1-PR6: silver refreshes only as the runner's run-now of mip_refresh_silver.
+    assert not stops.PIPELINE_RUN_SITES
+    assert stops.python_pipeline_run_sites() == set(stops.PIPELINE_RUN_SITES)
+
+
+@pytest.mark.parametrize(
+    ("source", "site"),
+    (
+        ("def fire(w):\n    w.pipelines.start_update(pipeline_id='p', full_refresh=True)\n", ("fire", "start_update")),
+        ("def halt(w):\n    p = w.pipelines\n    p.stop_and_wait(pipeline_id='p')\n", ("halt", "stop_and_wait")),
+        ("def fire(w):\n    w.api_client.do('POST', '/api/2.0/pipelines/p-1/updates', body={})\n", ("fire", "rest:updates")),
+    ),
+    ids=("start_update", "alias_stop", "rest"),
+)
+def test_a_stray_pipeline_update_in_a_tool_is_an_unmapped_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, site: tuple[str, str]
+) -> None:
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_pipeline.py").write_text(source, encoding="utf-8")
+    monkeypatch.setattr(stops, "REPO", root)
+    assert stops.python_pipeline_run_sites() == {("tools/databricks/stray_pipeline.py", *site)}
+
+
 def test_a_new_sdk_primitive_in_a_tool_is_an_unmapped_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _tools_copy(tmp_path)
     (root / "tools" / "databricks" / "stray_restart.py").write_text(

@@ -212,3 +212,19 @@ def test_a_bundle_job_runs_from_shell_only_at_its_reviewed_site() -> None:
     assert stops.shell_violations("scripts/lib/deploy_step_app_promotion_and_refresh.sh", 'databricks bundle run "$JOB"\n')
     assert stops.shell_violations(stops.DATA_PHASE_LIBRARY, "run databricks jobs run-now --job-id 7\n")
     assert stops.shell_violations("scripts/lib/x.sh", "# databricks bundle run mip_refresh_silver\n") == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    (
+        'databricks pipelines start-update "$PIPELINE_ID" --full-refresh\n',
+        'databricks pipelines stop "$PIPELINE_ID"\n',
+        'databricks api post /api/2.0/pipelines/abc-123/updates --json "{}"\n',
+        '"$PYTHON" -c "w.pipelines.start_update(pipeline_id=p)"\n',
+    ),
+    ids=("cli_start", "cli_stop", "rest", "inline"),
+)
+def test_a_pipeline_update_from_shell_is_reviewed_nowhere(line: str) -> None:
+    # A direct pipeline update is a silver refresh by another door (M1-PR6).
+    for path in (*stops.SHELL_JOB_RUN_SITES, stops.DATA_PHASE_LIBRARY, stops.WINDOW_LIBRARY, "scripts/deploy.sh"):
+        assert stops.shell_violations(path, line), (path, line)

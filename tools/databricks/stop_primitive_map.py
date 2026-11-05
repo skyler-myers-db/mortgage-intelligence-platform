@@ -28,7 +28,10 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
   calls; the data phase's run-now (M1-PR6) sits only in
   ``tools/databricks/job_phase_runner.py``'s ``start_run``, reached only
   through its ``run`` mode, which only the data-phase library calls
-  (``JOB_RUN_SITES``).
+  (``JOB_RUN_SITES``). ``python_pipeline_run_sites`` does the same for a
+  pipeline update (``start_update``, ``stop``; the REST
+  ``pipelines/<id>/updates|stop`` paths), a silver refresh by another door:
+  there is none (``PIPELINE_RUN_SITES`` is empty).
 * ``reaching_entry_points`` follows a coarse static call graph (calls and
   function references through imports, nested functions folded into their
   top-level function) from each site back to the CLI modules whose ``main``
@@ -47,7 +50,9 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
   the window library; and every ``databricks bundle run <job>`` outside the
   reviewed shell job runs (``SHELL_JOB_RUN_SITES``, M1-PR6): ``--phase data``
   runs its jobs only through the runner, and a run with no ``--phase`` keeps
-  today's ``bundle run`` sites, each named.
+  today's ``bundle run`` sites, each named; and every pipeline update or stop
+  (``databricks pipelines start-update|stop``, the REST paths, an inline
+  ``.pipelines.start_update``) in any shell file.
 
 The window library and the EXIT-trap library are the only shell callers of a
 stop; every top-level script is scanned too, so the owner-run WR5 entry
@@ -101,7 +106,7 @@ DATA_PHASE_LIBRARY = "scripts/lib/deploy_governed_phases_lifecycle.sh"
 JOB_RUN_LIBRARIES = frozenset({WINDOW_LIBRARY, DATA_PHASE_LIBRARY})
 # Shell file -> the bundle jobs it may ``databricks bundle run``: the release's
 # deploy-time jobs and the gold refresh's reviewed reconcile wrapper, and the
-# no-phase data refresh slice, which ``--phase release`` does not source
+# no-phase data refresh block, which ``--phase release`` sources but skips
 # (M1-PR6). ``--phase data`` runs its jobs only through the runner.
 SHELL_JOB_RUN_SITES: Mapping[str, frozenset[str]] = {
     "scripts/lib/deploy_step_lakebase_and_uc_grants.sh": frozenset(
@@ -139,6 +144,10 @@ JOB_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ("tools/databricks/job_phase_runner.py", "start_run", "run_now"),
     }
 )
+# A pipeline update or stop is a silver refresh by another door (M1-PR6): no
+# tool or job source holds one; silver refreshes only as mip_refresh_silver.
+PIPELINE_RUN_METHODS = frozenset({"start_update", "stop", "stop_and_wait"})
+PIPELINE_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -234,6 +243,14 @@ _JOB_RUN = re.compile(
 
 # A bundle job run from shell (M1-PR6): its key is the command's first operand.
 _BUNDLE_RUN = re.compile(r"\bdatabricks\s+bundle\s+run\b(?P<rest>[^;&|#]*)")
+# A pipeline update or stop (M1-PR6): reviewed in no shell file.
+_REST_PIPELINE_RUN = re.compile(r"/api/2\.\d+/pipelines/[^\s\"'/]+/(updates|stop)\b")
+_PIPELINE_RUN = re.compile(
+    r"\bdatabricks\s+pipelines\s+(start-update|stop)\b|\.pipelines\.("
+    + "|".join(sorted(PIPELINE_RUN_METHODS))
+    + r")\s*\(|"
+    + _REST_PIPELINE_RUN.pattern
+)
 
 
 def _module_name(path: Path) -> str:
@@ -345,6 +362,12 @@ def python_job_run_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
     """Every one-time job submit or cancel on the Jobs client below ``root`` (M0-PR9)."""
 
     return _service_sites(root, "jobs", JOB_RUN_METHODS, _REST_JOB_RUN)
+
+
+def python_pipeline_run_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
+    """Every pipeline update or stop on the Pipelines client below ``root`` (M1-PR6)."""
+
+    return _service_sites(root, "pipelines", PIPELINE_RUN_METHODS, _REST_PIPELINE_RUN)
 
 
 def _site_method(
@@ -566,6 +589,8 @@ def shell_violations(path: str, text: str) -> list[str]:
             key = operands[0] if operands else "<none>"
             if key not in SHELL_JOB_RUN_SITES.get(path, frozenset()):
                 found.append(f"{path}:{number}: databricks bundle run {key}")
+        for match in _PIPELINE_RUN.finditer(line):
+            found.append(f"{path}:{number}: {match.group(0).strip()}")
     # A parenthesized ``from <package> import (...)`` spans lines in a heredoc.
     for match in re.finditer(r"\bfrom\s+(tools(?:\.\w+)*)\s+import\s*\(([^)]*)\)", text):
         names = set(re.findall(r"\w+", match.group(2)))
