@@ -79,14 +79,16 @@ function routeReady(state: SettleState): boolean {
  * routes is aria-busy. So one poll can see the route painted, its h1 and no
  * aria-busy before the page has called fetch(), and a request the page has
  * called fetch() for reaches the mock's route handler only once the engine
- * hands it over (up to ~300 ms on a loaded WebKit host): in both gaps the
- * mock was quiet, often for seconds, since the shell's own boot reads, which
- * is how a route's natural load landed after markNaturalLoad (main CI run
- * 41881146873). Settled therefore needs:
+ * hands it over (from ~100 ms to several seconds on a loaded host): in both
+ * gaps the mock was quiet, often for seconds, since the shell's own boot
+ * reads, which is how a route's natural load landed after markNaturalLoad
+ * (main CI run 41881146873). Settled therefore needs:
  *   - the route ready on THIS poll and the one before it, the same route in
  *     the same document, with no API fetch started by the page in between
- *     (the mount effects have run by the second poll), and none in flight in
- *     the page (counted from the fetch() call, PAGE_API_PROBE);
+ *     (the second poll is at least 100 ms later, and the rule takes it that
+ *     the mount effects have called fetch() by then; settle-natural-load's
+ *     ready-poll hold pins that a read started by then is caught), and none
+ *     in flight in the page (counted from the fetch() call, PAGE_API_PROBE);
  *   - the mock API with nothing in its handler and quiet for QUIET_WINDOW_MS.
  */
 export function settleVerdict(previous: SettleState | null, current: SettleState, mock: MockQuiet): boolean {

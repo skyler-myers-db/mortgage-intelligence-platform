@@ -97,10 +97,10 @@ export const WAREHOUSE_WARMING_UP: DegradeOptions = {
 /**
  * The page's own count of the API fetches it has issued (`window[PAGE_API_PROBE]`,
  * one object per document). The route handler below only sees a request once
- * the engine has handed it over, measured at up to ~300 ms after the page
- * called fetch() on a loaded WebKit host; in that gap `inflight` is 0 although
- * the page is waiting on the API. AppDriver.settle reads this probe so a read
- * the page has started counts as in flight from that moment.
+ * the engine has handed it over, measured from ~100 ms to several seconds
+ * after the page called fetch() on a loaded host; in that gap `inflight` is 0
+ * although the page is waiting on the API. AppDriver.settle reads this probe
+ * so a read the page has started counts as in flight from that moment.
  */
 export const PAGE_API_PROBE = '__mipFixtureApiFetches';
 

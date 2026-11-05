@@ -17,6 +17,13 @@
  * mock has been quiet for longer than settle()'s quiet window plus two polls:
  * the moment the old settle() ended the natural load with the reads still
  * on their way.
+ *
+ * The other gap, between the commit that paints the h1 and the mount effects
+ * that call fetch(), is reproduced by holding the route's reads before the
+ * in-page probe sees them, behind an aria-busy marker, until the page has been
+ * quiet; the marker then goes, and the reads start right after the first
+ * settle() poll that sees the route ready (holdMountReadsPastAReadyPoll). A
+ * settle() that trusts one ready poll ends the load at that poll.
  */
 import type { Page } from '@playwright/test';
 import { settleVerdict, type MockQuiet, type SettleState } from './app';
@@ -30,6 +37,8 @@ import { auditedReadsAfter, expectNoAuditedReadSince, markNaturalLoad } from './
 const HOLD_QUIET_MS = 1_000;
 /** Never hold longer than this; the hold normally ends within a second of the route painting. */
 const HOLD_CAP_MS = 10_000;
+/** A trapped mount read starts this long after the trap poll if no later poll comes; far longer than settle()'s return after a verdict. */
+const LATE_START_MS = 2_000;
 
 const OFFER_DETAIL = `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`;
 const MOUNT_READS = {
@@ -53,6 +62,120 @@ async function slowHandover(page: Page, mockApi: MockApi, url: RegExp): Promise<
 /** Every audited read the mock API has answered, in order. */
 function auditedReads(mockApi: MockApi): string[] {
   return auditedReadsAfter(mockApi.calls, 0);
+}
+
+/** `window[READY_POLL_HOLD]`: what holdMountReadsPastAReadyPoll saw (fixture-only). */
+const READY_POLL_HOLD = '__mipFixtureReadyPollHold';
+
+interface ReadyPollHold {
+  /**
+   * settle() polls that read the route ready (painted h1, no aria-busy in
+   * <main>, no page API fetch in flight, the page quiet for quietMs) while
+   * the mount reads were held unfetched: where a one-poll settle() ends the load.
+   */
+  trapPolls: number;
+  /** Mount reads passed on to the probe's fetch, so to the mock API. */
+  released: number;
+  error: string | null;
+}
+
+/**
+ * Init script: the route's mount reads (`source`) reach the in-page probe only
+ * after a settle() poll has read the route ready with them unfetched. They
+ * start when the NEXT poll reads the probe, just before it reads the counts:
+ * the latest moment settle()'s second poll can still see a mount read start,
+ * which is the premise of its two-poll rule. If no poll comes (a settle()
+ * that trusted the one ready poll has already returned) they start after
+ * `lateMs`, so they land after markNaturalLoad and the guard names them.
+ *
+ * Until the page has been quiet for `quietMs`, a hidden aria-busy marker in
+ * <main> keeps every poll from reading the route ready, so the trap poll is
+ * the first ready poll and comes with the mock API long quiet, as on CI when
+ * the route painted seconds after the shell's own reads.
+ *
+ * Only settle()'s poll reads the probe's `doc`, and it reads `started` and
+ * `settled` right after, in the same evaluate, so a getter on `doc` is the
+ * poll's signal.
+ */
+function holdMountReadsPastAReadyPoll({ probeKey, holdKey, source, quietMs, lateMs }: {
+  probeKey: string;
+  holdKey: string;
+  source: string;
+  quietMs: number;
+  lateMs: number;
+}): void {
+  const hold: ReadyPollHold = { trapPolls: 0, released: 0, error: null };
+  Object.defineProperty(window, holdKey, { value: hold });
+  const probe = (window as unknown as Record<string, PageApiProbe | undefined>)[probeKey];
+  if (!probe) {
+    hold.error = 'the in-page API probe was not installed before this hold';
+    return;
+  }
+  const pattern = new RegExp(source);
+  // The probe's own wrapper: a held read reaches it, so is counted, only once released.
+  const probed = window.fetch;
+  const held: Array<() => void> = [];
+  const marker = document.createElement('span');
+  marker.hidden = true;
+  marker.setAttribute('aria-busy', 'true');
+  marker.setAttribute('data-fixture-hold', '');
+  let awaitingPoll = false;
+  let seen = { started: probe.started, settled: probe.settled };
+  let changedAt = performance.now();
+  const pageQuiet = () => {
+    if (probe.started !== seen.started || probe.settled !== seen.settled) {
+      seen = { started: probe.started, settled: probe.settled };
+      changedAt = performance.now();
+    }
+    return probe.started === probe.settled && performance.now() - changedAt >= quietMs;
+  };
+  const routeLooksReady = () => {
+    const main = document.querySelector('#main-content');
+    return Boolean(main?.querySelector('h1')) && main?.querySelectorAll('[aria-busy="true"]').length === 0;
+  };
+  const markBusy = () => {
+    awaitingPoll = false;
+    if (!marker.isConnected) document.querySelector('#main-content')?.append(marker);
+  };
+  window.setInterval(() => {
+    if (pageQuiet() && held.length > 0 && !awaitingPoll) {
+      marker.remove();
+      awaitingPoll = true;
+    }
+  }, 20);
+  // Reads a trap poll saw unfetched: they start at the next poll, or after lateMs.
+  const trapped: Array<() => void> = [];
+  const startTrapped = () => trapped.splice(0).forEach((start) => start());
+  const doc = probe.doc;
+  Object.defineProperty(probe, 'doc', {
+    enumerable: true,
+    configurable: true,
+    get() {
+      startTrapped();
+      if (awaitingPoll) {
+        if (!pageQuiet()) {
+          markBusy();
+        } else if (routeLooksReady()) {
+          awaitingPoll = false;
+          hold.trapPolls += 1;
+          trapped.push(...held.splice(0));
+          window.setTimeout(startTrapped, lateMs);
+        }
+      }
+      return doc;
+    },
+  });
+  window.fetch = function fetchHeldPastAReadyPoll(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!pattern.test(url)) return probed.call(window, input, init);
+    markBusy();
+    return new Promise<Response>((resolve, reject) => {
+      held.push(() => {
+        hold.released += 1;
+        probed.call(window, input, init).then(resolve, reject);
+      });
+    });
+  };
 }
 
 test.describe('a mount-time read the engine hands over late is part of the natural load', () => {
@@ -94,6 +217,52 @@ test.describe('a mount-time read the engine hands over late is part of the natur
       'POST /api/outreach/draft (DRAFT_OUTREACH)',
     ]);
   });
+});
+
+test.describe('a mount-time read the page has not fetched when the route first reads ready is part of the natural load', () => {
+  const VISITS = [
+    {
+      label: 'offer-orchestrator-index',
+      path: '/offer-orchestrator',
+      reads: MOUNT_READS.offerIndex,
+      expected: ['GET /api/leads?limit=5 (VIEW_LEADS)'],
+    },
+    {
+      label: 'offer-orchestrator-detail',
+      path: OFFER_DETAIL,
+      reads: MOUNT_READS.offerDetail,
+      expected: [
+        `GET /api/borrowers/${PRIMARY_BORROWER.borrower_id} (VIEW_BORROWER)`,
+        'POST /api/offers/recommend (RECOMMEND_OFFER)',
+        'POST /api/outreach/draft (DRAFT_OUTREACH)',
+      ],
+    },
+  ];
+
+  for (const visit of VISITS) {
+    test(`${visit.label}: settle() waits a poll past the first ready one`, async ({ app, mockApi, page }) => {
+      await page.addInitScript(holdMountReadsPastAReadyPoll, {
+        probeKey: PAGE_API_PROBE,
+        holdKey: READY_POLL_HOLD,
+        source: visit.reads.source,
+        quietMs: HOLD_QUIET_MS,
+        lateMs: LATE_START_MS,
+      });
+      await app.gotoRoute(visit.path);
+      const natural = markNaturalLoad(mockApi);
+      const hold = await page.evaluate((key) => (window as unknown as Record<string, ReadyPollHold>)[key], READY_POLL_HOLD);
+      expect(hold.error).toBeNull();
+      // The gap was there: a poll read the route ready with the reads still unfetched.
+      expect(hold.trapPolls).toBeGreaterThanOrEqual(1);
+      await expect
+        .poll(() => [...auditedReads(mockApi)].sort(), { timeout: HOLD_CAP_MS * 2 })
+        .toEqual([...visit.expected].sort());
+      expectNoAuditedReadSince(mockApi, natural, visit.label);
+      // Every one of them went through the hold.
+      expect(await page.evaluate((key) => (window as unknown as Record<string, ReadyPollHold>)[key].released, READY_POLL_HOLD))
+        .toBe(visit.expected.length);
+    });
+  }
 });
 
 test.describe('settleVerdict', () => {
