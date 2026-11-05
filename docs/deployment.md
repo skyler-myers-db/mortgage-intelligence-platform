@@ -1933,7 +1933,9 @@ verifier, the agent runtime or the Supervisor proxy:
   run left, proves health against the record's commit with no Gateway
   binding, and restores blue (tier b) when another deployment is active. It
   never starts a stopped core blue (`blue_stopped`): tier a's start and
-  re-pin for a v7 record waits for spike S7.
+  re-pin for a v7 record waits for spike S7. The pre-stop clause predicts
+  that refusal before the lease (`rollback_record_drift`, naming
+  `blue_stopped`), and step 0a itself refuses it before any binding repair.
 - **The tier gate.** A core release stands on a core blue. An agentic blue (a
   v5, v6 or v7 agentic record) under a core profile refuses
   (`blue_tier_mismatch`) and no ack lifts it: its restore needs the Gateway
@@ -1952,7 +1954,8 @@ verifier, the agent runtime or the Supervisor proxy:
 - **Activation** (`scripts/lib/deploy_step_core_activation.sh`): one
   activation rollover over signed blue, with blue's treatment authority
   quiesced immediately before it, exactly as the agentic cutover activates.
-  The pre-activation proof runs first. For an adopted blue with no restore
+  The pre-activation proof runs first, before that quiesce and before the
+  quiesce window is superseded. For an adopted blue with no restore
   payload yet, the release rebuilds one with the payload builder
   (`app_core_rollback restore-payload`, read-only): Databricks redacts env
   values, so it is rebuilt from the profile the way the emergency recipe
@@ -1960,13 +1963,28 @@ verifier, the agent runtime or the Supervisor proxy:
   `MIP_GIT_SHA`, the treatment runtime off, and, as in every core payload, no
   agentic name), and handed to the proof only
   when its env-name set is exactly blue's; otherwise the proof needs the
-  exact `no_rollback_for` ack. Its values are the profile's current values,
+  exact `no_rollback_for` ack. The profile's optional role names
+  (`tools/clients/profile.py` `OPTIONAL_PAYLOAD_ENV_NAMES`: the auditor
+  identities, the role emails and group names) that blue's set lacks are
+  left out of the rebuild, since blue ran without them; any other difference
+  still refuses. Its values are the profile's current values,
   not necessarily the adopted deployment's own. A blue whose `frontend/dist`
   is unverified is restorable only with its `restore_unverified_frontend`
   ack, so the proof requires that exact ack before activation too (export
   `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND`, the digest the refusal prints, for
   the run; `unverified_frontend_unacked`); adopting with
-  `MIP_ADOPT_BUILD_REFERENCE_DIST=1` avoids it.
+  `MIP_ADOPT_BUILD_REFERENCE_DIST=1` avoids it. That ack covers this blue,
+  this restore payload and the run's own commit: the activation gate and the
+  same run's tier-b restore ask for the one digest, and a later run at
+  another commit needs its own, which its refusal prints.
+- **A refused pre-activation proof** (`unverified_frontend_unacked`,
+  `no_rollback_proof`, a rebuild that fails) exits 2 at step 10b while signed
+  blue still serves in its step-0a state. The EXIT trap then converges
+  blue's runtime access and treatment authority back with the App up
+  (`compensate_serving_blue`); it never restores blue over itself and never
+  stops it. The refusal is not "nothing changed": steps 1 to 10 (grants,
+  migrations, the data refresh) already ran, and the re-run with the printed
+  digest repeats them.
 - **The live smoke** expects no agentic capability; Genie is smoked as in the
   agentic tier (a Genie space is a core resource).
 - **The signed capture** (`tools/databricks/core_blue_capture.py`): a v7 core
@@ -1979,21 +1997,43 @@ verifier, the agent runtime or the Supervisor proxy:
   quiesced while the record is written and read back, then converged to
   runtime, as v6's capture does.
 - **The restore** (tier b, `app_core_rollback restore`, from the EXIT-trap
-  library): blue's restore payload from the immutable copy, re-hashed;
-  the new deployment proven to be blue (active, newest, from the copy, with
-  blue's env-name set, healthy on blue's commit) and the record re-pinned to
-  it (`predecessor_deployment_id`, provenance and ack kept).
+  library): blue's restore payload from the immutable copy, re-hashed before
+  a stopped App is started and again immediately before the deploy; the new
+  deployment proven to be blue (active, newest, from the copy, its `/src/`
+  snapshot hashing to the record's full-tree digest, with blue's env-name
+  set, healthy on blue's commit) and the record re-pinned to it
+  (`predecessor_deployment_id`, provenance and ack kept). When green's deploy
+  never began (a failure between the activation quiesce and the deploy),
+  blue is still the active and newest deployment, nothing is pending, the
+  App runs and its health is proven: the restore then redeploys nothing,
+  never re-pins, and only converges treatment back. Any doubt is tier b's.
 - **Skipped by name in the core tier:** the agentic Lakebase Sync proof,
   verifier capture, historical endpoint retirement, Supervisor, proxy and
   Gateway provisioning and audits, the cutover journal, Agent Evaluation and
   the agentic retirement after capture. `scripts/deploy.sh` sources those
   step files only in the agentic tier, and each refuses the core tier.
 
+- **The agentic env cache** (`.databricks/mip-agentic.env`, an agentic
+  run's provisioner output, not keyed by client) is never carried into a
+  core release: it would turn both core switches on, which the core payload
+  refuses, and name another install's Supervisor and Gateway.
+- **`MIP_LAKEBASE_SYNC`** is not an agentic name, so an operator value rides
+  a core payload, but the core tier neither proves the Lakebase Sync nor
+  converges the App's synced-table grants (both are
+  `deploy_step_agentic_provisioning.sh`'s, agentic-only). A core install
+  leaves it unset: no profile field sets it, and the cache that would is not
+  carried. Set by hand, the App's capability row reports its live
+  synced-table probe.
+
 The agentic tier's plan, bundle variables, payload and the emergency
 recipe's 32 env names are unchanged by this (the PR's artifact-hash proof).
-`tests/unit/test_core_tier_release_sandbox.py` runs a core release end to
-end in the sandbox with no agentic call, and releases the lease on every
-exit path.
+`tests/unit/test_core_tier_release_sandbox.py` runs a first install's core
+release end to end in the sandbox with no agentic call (with and without a
+leftover agentic env cache), and releases the lease after a green run, a
+failed smoke and a failed capture. An upgrade over signed blue is pinned
+below the sandbox: the activation block through the real EXIT trap
+(`tests/unit/test_core_activation_exit_trap.py`) and the core tools over an
+adopted blue (`tests/unit/test_core_blue_restore.py`).
 
 **What the core payload turns off.** `MIP_AGENT_ORCHESTRATOR=0` and
 `MIP_AI_GATEWAY=0` are the settings' own defaults, so for these two switches a
