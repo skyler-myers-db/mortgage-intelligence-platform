@@ -22,6 +22,7 @@ import pytest
 from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
 
 from tests.unit import test_audit_agent_runtime_foreign_uc_access as harness
+from tests.unit.test_bootstrap_account_safety import ESTATE_INVENTORY_READS
 from tools.clients import estate_inventory
 from tools.clients.handover_journal import canonical_json, plan_sha256
 from tools.databricks import prestop_accepted_exposure, quiesce_window_plan
@@ -278,11 +279,65 @@ def test_a_refused_read_is_a_gap_never_an_empty_census() -> None:
     assert "1 gaps" in _refusal(_env(document))
 
 
-def test_the_collector_reads_no_grant_and_never_writes() -> None:
-    workspace = harness._workspace()
-    _collect(workspace)
+class _ReadOnlySpy:
+    """A client whose every SDK call is recorded; anything but a reviewed estate read refuses."""
 
-    assert workspace.grants.calls == []
+    def __init__(self, client: Any, calls: list[tuple[str, str]]) -> None:
+        self._client, self._calls = client, calls
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._client, name)
+        if name == "config":
+            return value
+        if callable(value):  # a client method, such as get_workspace_id
+            return _spied(self._calls, "client", name, value)
+        return _ServiceSpy(name, value, self._calls)
+
+
+class _ServiceSpy:
+    def __init__(self, service: str, target: Any, calls: list[tuple[str, str]]) -> None:
+        self._service, self._target, self._calls = service, target, calls
+
+    def __getattr__(self, method: str) -> Any:
+        return _spied(self._calls, self._service, method, lambda *a, **k: getattr(self._target, method)(*a, **k))
+
+
+def _spied(calls: list[tuple[str, str]], service: str, method: str, target: Any) -> Any:
+    def call(*args: Any, **kwargs: Any) -> Any:
+        calls.append((service, method))
+        if (service, method) not in ESTATE_INVENTORY_READS | {("client", "get_workspace_id")}:
+            raise AssertionError(f"the estate inventory called {service}.{method}")
+        return target(*args, **kwargs)
+
+    return call
+
+
+def test_the_collector_and_the_cli_call_only_the_reviewed_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every SDK call on every path, the CLI's helpers included, is one of the reviewed gets and lists."""
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    calls: list[tuple[str, str]] = []
+    schema = harness.SimpleNamespace(name="private", full_name=f"{HIDDEN}.private", owner=harness.FOREIGN_OWNER)
+    reader = _ReadOnlySpy(harness._bound_reader(schemas={HIDDEN: [schema]}), calls)
+    account = _ReadOnlySpy(_defunct_account(listing=lambda: iter([])), calls)
+    _collect(_ReadOnlySpy(_hidden_workspace(), calls), account=account, bound_readers={harness.OTHER_WORKSPACE_ID: reader})
+    code = estate_inventory.main(
+        ["--out", str(tmp_path / "estate.json")],
+        workspace_factory=lambda: _ReadOnlySpy(harness._workspace(), calls),
+        account_factory=lambda: _ReadOnlySpy(harness._account(), calls),
+        now=NOW,
+    )
+
+    assert code == 0
+    # Non-vacuous: these paths exercise every reviewed read, and nothing else.
+    assert set(calls) == ESTATE_INVENTORY_READS | {("client", "get_workspace_id")}
+    spy = _ReadOnlySpy(harness._workspace(), [])
+    with pytest.raises(AssertionError, match="catalogs.update"):
+        spy.catalogs.update("other", owner="someone")
+    with pytest.raises(AssertionError, match="grants.get_effective"):
+        spy.grants.get_effective("catalog", "other", principal=harness.APPLICATION_ID, max_results=1000, page_token=None)
 
 
 def _defunct_account(*, listing: Any) -> Any:

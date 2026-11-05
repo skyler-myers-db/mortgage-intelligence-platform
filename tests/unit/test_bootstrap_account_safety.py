@@ -14,7 +14,10 @@
   reviewed exception: the ownership handover (M2-PR8) changes owners, only in
   ``handover_uc_ownership.py``, only through ``HANDOVER_OWNER_UPDATES`` with
   ``owner=`` as the one keyword, and never on the metastore; its reads and the
-  handover verify helpers' are ``HANDOVER_READS``. A call
+  handover verify helpers' are ``HANDOVER_READS``. The owner's estate
+  inventory (M4-PR1) is pinned the same way: its CLI makes no SDK call, and
+  its collector (``tools/databricks/estate/collect.py``) exactly the gets and
+  lists of ``ESTATE_INVENTORY_READS``. A call
   the allowlist could not see refuses outright: the raw ``api_client``,
   reflection (``getattr`` and kin) on a session client or naming an SDK
   API, ``attrgetter``/``methodcaller``, and the ``ApiClient`` class. The
@@ -147,6 +150,29 @@ HANDOVER_READS = frozenset(
     }
 )
 HANDOVER_MODULES = frozenset({HANDOVER_OWNER_MODULE, "handover_uc_plan.py", "handover_verify.py"})
+# The owner's estate inventory (M4-PR1) runs as the metastore's direct owner.
+# Its CLI here makes no SDK call of its own; its collector, outside this
+# directory, makes exactly these, every one a get or a list.
+ESTATE_CLI_MODULE = "estate_inventory.py"
+ESTATE_COLLECTOR = ROOT / "tools" / "databricks" / "estate" / "collect.py"
+ESTATE_INVENTORY_READS = frozenset(
+    {
+        ("current_user", "me"),
+        ("metastores", "current"),
+        ("metastores", "get"),
+        ("catalogs", "list"),
+        ("workspace_bindings", "get_bindings"),
+        ("schemas", "list"),
+        ("tables", "list"),
+        ("functions", "list"),
+        ("volumes", "list"),
+        ("registered_models", "list"),
+        ("metastore_assignments", "list"),
+        ("workspaces", "get"),
+        ("workspace_assignment", "list"),
+    }
+)
+ESTATE_READ_METHODS = frozenset({"current", "get", "get_bindings", "list", "me"})
 FORBIDDEN_KEYWORDS = frozenset({"owner", "new_owner", "remove", "roles", "entitlements"})
 DESTRUCTIVE_METHODS = frozenset({"delete", "unassign", "transfer_ownership", "remove", "reset"})
 # Names that reach an API without a visible ``<client>.<api>.<method>(...)``.
@@ -498,6 +524,20 @@ def test_the_bootstrap_calls_only_the_reviewed_sdk_surface() -> None:
         if pair[0] in {"catalogs", "schemas", "tables"} and pair[1] not in {"get", "exists"}
     ]
     assert not [pair for pair in ALLOWED_CALLS if pair[0] == "service_principals" and pair[1] in {"patch", "update"}]
+
+
+def test_the_estate_inventory_reads_only_the_reviewed_surface() -> None:
+    """The collector's calls are exactly the reviewed reads; the CLI makes none of its own."""
+
+    source = ESTATE_COLLECTOR.read_text(encoding="utf-8")
+    assert _aliases_in(source) == [] and _dynamic_in(source) == [] and _forbidden_in(source) == []
+    assert {pair for _node, pair in _calls_in(source)} == ESTATE_INVENTORY_READS
+    assert {method for _api, method in ESTATE_INVENTORY_READS} <= ESTATE_READ_METHODS
+    assert not ESTATE_READ_METHODS & (DESTRUCTIVE_METHODS | {"update", "create", "patch", "get_effective"})
+    assert [pair for _node, pair in _calls_in(_sources()[ESTATE_CLI_MODULE])] == []
+    # A write planted where no test path reaches it is still seen.
+    planted = source + "\n\ndef _planted(workspace):\n    workspace.catalogs.update('x', owner='y')\n"
+    assert {pair for _node, pair in _calls_in(planted)} - ESTATE_INVENTORY_READS == {("catalogs", "update")}
 
 
 def _handover_owner_updates(source: str) -> list[str]:
