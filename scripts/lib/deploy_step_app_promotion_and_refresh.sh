@@ -199,8 +199,13 @@ APP_SOURCE_PATH="${APP_BUNDLE_FILES_PATH%/files}/app-src/${APP_RELEASE_ID}"
 # --out-env is persisted under .databricks/ (gitignored) at the end of each
 # run; source it here so a re-deploy never forgets what is already
 # provisioned. First-ever deploys have no file and keep the two-phase flow.
+# The core tier (M2-PR7b) provisions nothing agentic and its payload refuses a
+# truthy agentic switch: a cache an earlier agentic run left in this checkout
+# (not keyed by client) is never carried into a core release.
 AGENTIC_ENV_CACHE=".databricks/mip-agentic.env"
-if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" && \
+if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" ]] && ! tier_is_agentic; then
+  echo "[deploy] core tier: ignoring the agentic env cache $AGENTIC_ENV_CACHE (an agentic run's; never carried into a core release)"
+elif [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" && \
       "${MIP_REBASE_UNVERIFIED_APP:-0}" != "1" ]]; then
   echo "[deploy] carrying forward agentic env from $AGENTIC_ENV_CACHE (last provisioning)"
   set -a

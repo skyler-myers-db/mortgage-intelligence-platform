@@ -160,6 +160,32 @@ def test_the_core_release_makes_zero_agentic_calls(core_release) -> None:  # typ
     assert not any(call["argv"][:1] in (["serving-endpoints"], ["supervisor-agents"]) for call in run.cli_calls)
 
 
+# What an agentic run's provisioner persists (agentic_resource_contract.py's names).
+AGENTIC_CACHE = (
+    "MIP_LAKEBASE_SYNC=1\n"
+    "MIP_AGENT_ORCHESTRATOR=1\n"
+    "MIP_AGENT_SUPERVISOR_NAME=mip-supervisor-EXAMPLE\n"
+    "MIP_AI_GATEWAY=1\n"
+    "MIP_AI_GATEWAY_ENDPOINT=mip-gateway-EXAMPLE\n"
+)
+
+
+def test_a_leftover_agentic_env_cache_never_reaches_a_core_release(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Review of #319: the cache (not keyed by client) would turn both core switches on and refuse."""
+
+    run = _core(tmp_path_factory, "core-cache", agentic_env_cache=AGENTIC_CACHE)
+    assert run.result.returncode == 0, _detail(run)
+    assert "core tier: ignoring the agentic env cache" in run.result.stdout
+    assert "carrying forward agentic env" not in run.result.stdout
+    (payload,) = run.state["deploys"]
+    env = {item["name"]: item.get("value") for item in payload["env_vars"]}
+    assert (env["MIP_AGENT_ORCHESTRATOR"], env["MIP_AI_GATEWAY"]) == ("0", "0")
+    assert "MIP_LAKEBASE_SYNC" not in env and "MIP_AI_GATEWAY_ENDPOINT" not in env
+    assert "[deploy] complete." in run.result.stdout
+
+
 @pytest.mark.parametrize(
     ("fail", "message"),
     [({"smoke": 1}, "smoke test failed"), ({"capture": 2}, "green capture failed after treatment restoration")],

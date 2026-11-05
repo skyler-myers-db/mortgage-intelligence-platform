@@ -143,12 +143,20 @@ def release(
     excise: str | None = None,
     smoke: bool = False,
     fail: dict[str, int] | None = None,
+    agentic_env_cache: str | None = None,
 ) -> Release:
-    """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``."""
+    """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``.
+
+    ``agentic_env_cache`` is a ``.databricks/mip-agentic.env`` an earlier
+    agentic run left in the checkout (gitignored, so the tree stays clean).
+    """
 
     checkout, base_env, cli_log = sandbox(tmp_path)
     if excise is not None:
         _excise(checkout, excise)
+    if agentic_env_cache is not None:
+        (checkout / ".databricks").mkdir(exist_ok=True)
+        (checkout / ".databricks" / "mip-agentic.env").write_text(agentic_env_cache, encoding="utf-8")
     if smoke:
         _stub_smoke(checkout)
     # As in the refusal matrix: the fake estate's metastore is the deployer's,
