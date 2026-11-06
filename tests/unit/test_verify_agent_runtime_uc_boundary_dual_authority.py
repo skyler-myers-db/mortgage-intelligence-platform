@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.env_isolation import EXACT_M2M_BINDING_ENV, restore_on_teardown
 from tools.databricks import verify_agent_runtime_uc_boundary_dual_authority as dual
 from tools.databricks.agent_runtime_uc_baseline import (
     ControlPlaneForeignCatalogProof,
@@ -11,6 +12,13 @@ from tools.databricks.agent_runtime_uc_baseline import (
 )
 
 APPLICATION_ID = "runtime-client"
+
+
+@pytest.fixture(autouse=True)
+def _restore_exact_m2m_binding_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dual.main binds the exact M2M identity by writing os.environ directly."""
+
+    restore_on_teardown(monkeypatch, EXACT_M2M_BINDING_ENV)
 
 
 def _lifecycle_proof(**changes: object) -> SimpleNamespace:

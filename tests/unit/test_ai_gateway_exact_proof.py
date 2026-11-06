@@ -23,6 +23,7 @@ from backend.services.ai_gateway_proof_ledger import (
     mark_expired_pending_proofs,
     mark_proof_verified,
 )
+from tests.fixtures.env_isolation import LAKEBASE_CONNECTION_ENV, restore_on_teardown
 from tools.databricks import verify_ai_gateway_exact_proof
 
 _TEST_GIT_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
@@ -44,7 +45,12 @@ def _hermetic_lakebase_env(monkeypatch):
     no WorkspaceClient is ever constructed and no credential resolution can
     leak into these tests (CI run 28945210525 failure, 2026-07-08). Fakes
     supplied per-test still exercise the mint path explicitly elsewhere.
+
+    ensure_lakebase_env writes every Lakebase/PG connection name straight
+    into os.environ (LAKEBASE_DATABASE even on its early return), so each one
+    is registered for restore, or it leaks to the next test on the worker.
     """
+    restore_on_teardown(monkeypatch, LAKEBASE_CONNECTION_ENV)
     monkeypatch.setenv("LAKEBASE_HOST", "unit-test-lakebase.database.example")
     monkeypatch.setenv("LAKEBASE_USER", "unit-test@example.com")
     monkeypatch.setenv("LAKEBASE_PASSWORD", "unit-test-token")
