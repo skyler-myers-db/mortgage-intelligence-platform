@@ -498,8 +498,8 @@ require_exact_jobs_reader_role_outside_window() {
   require_exact_role_outside_window jobs-reader "${CLIENT_JOBS_PRINCIPAL:-}" jobs_reader
 }
 
-# Blue keeps serving while a dependency it reads is mutated; a failure from
-# here converges that dependency back with the App up.
+# Blue keeps serving while a dependency it reads is mutated; a failure from here
+# converges it back with the App up; the core tier keeps step 4c's sync quiesce.
 mark_blue_degraded() {
   if [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" ]]; then
     QUIESCE_WINDOW_STATE="blue_degraded"
@@ -602,8 +602,8 @@ compensate_open_quiesce_window() {
   return 1
 }
 
-# blue_serving and blue_degraded: prove blue still serves the signed record,
-# then converge runtime access with the App up. Never a stop.
+# blue_serving and blue_degraded: prove blue still serves the signed record, then
+# converge runtime access with the App up, as the tier's success path does. Never a stop.
 compensate_serving_blue() {
   local failed=0
   if ! "$PYTHON" -m tools.databricks.quiesce_window assert-serving \
@@ -618,7 +618,7 @@ compensate_serving_blue() {
        ! reconcile_reviewed_function_execute_grants; then
       failed=1
     fi
-    if ! "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
+    if [[ "${CLIENT_AGENTIC_TIER:-}" != "off" ]] && ! "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
       --mode runtime \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --app-application-id "$APP_SP_CLIENT_ID" \

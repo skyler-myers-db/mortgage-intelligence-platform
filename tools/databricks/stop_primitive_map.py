@@ -85,6 +85,8 @@ PRIMITIVE_SITES = frozenset(
         ("tools/databricks/stop_app_fail_closed.py", "stop_app_fail_closed", "stop"),
         ("tools/databricks/app_start_deployment.py", "start_app", "start"),
         ("tools/databricks/app_deployment_repin.py", "redeploy_signed_blue", "deploy_and_wait"),
+        # The core tier's tier-b restore (M2-PR7b): blue's restore payload, deploy only.
+        ("tools/databricks/core_blue_restore.py", "redeploy_core_blue", "deploy_and_wait"),
         (
             "tools/databricks/app_rollback_resource_contract.py",
             "restore_signed_app_resource_contract",
@@ -134,6 +136,11 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
     ),
     "tools.databricks.app_deployment_rollback_cli": EntryPoint(
         modes={"ensure": True, "restore": True, "repin": True, "capture": False, "inspect": False}
+    ),
+    # The core tier's step-0a proof and tier-b restore (M2-PR7b); its capture and
+    # restore-payload modes deploy, start and stop nothing.
+    "tools.databricks.app_core_rollback": EntryPoint(
+        modes={"ensure": True, "restore": True, "capture": False, "restore-payload": False}
     ),
     # The dead-man job (M0-PR9): only the window's submit runs it, no shell file.
     "jobs.window_deadman": EntryPoint(

@@ -64,6 +64,7 @@ def _drive(
         + function("run_adopt_live_plan")
         + function("run_adopt_live_apply")
         + function("prove_blue_restorable_before_activation")
+        + function("rebuild_core_blue_restore_payload")
         + body
     )
     values = {
