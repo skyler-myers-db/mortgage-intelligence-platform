@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -479,9 +480,23 @@ def test_the_cli_withholds_error_text_that_can_name_another_teams_catalog(
         workspace.catalogs.list = catalogs
         return workspace
 
+    def os_error(*args: Any) -> Callable[[], Any]:  # strerror is free text on a two-argument OSError
+        def factory() -> Any:
+            workspace = harness._workspace()
+
+            def catalogs(**_kwargs: Any) -> Any:
+                raise OSError(*args)
+
+            workspace.catalogs.list = catalogs
+            return workspace
+
+        return factory
+
     for factory, expected in (
         (sdk_refusal, "REFUSED: PermissionDenied (PERMISSION_DENIED): its text is withheld"),
         (foreign_runtime_error, "REFUSED: RuntimeError: its text is withheld"),
+        (os_error(5, f"I/O {secret}"), "REFUSED: OSError (EIO): its text is withheld"),
+        (os_error("5", secret), "REFUSED: OSError: its text is withheld"),
     ):
         out = tmp_path / "estate.json"
         code = estate_inventory.main(["--out", str(out)], workspace_factory=factory, account_factory=harness._account, now=NOW)

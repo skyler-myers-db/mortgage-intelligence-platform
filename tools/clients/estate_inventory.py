@@ -27,8 +27,9 @@ as the owner. The reads themselves are ``tools/databricks/estate/collect.py``'s
 (its SDK surface is pinned by tests/unit/test_bootstrap_account_safety.py).
 The document is validated before it is written, so a refused one never is.
 The tool prints counts, gap counts and the ``estate`` digest, never a name,
-owner or id: an SDK, HTTP or file error prints its class and error code only,
-because its text can name another team's catalog. Export that digest as
+owner or id: an SDK, HTTP or file error prints its class and its error code
+(or an OS error's errno name) only, because its text, an OS error's strerror
+included, can name another team's catalog. Export that digest as
 ``MIP_ACK_ESTATE_INVENTORY`` for the run that relies on the inventory, and
 store the file's content as the client's ``MIP_ESTATE_INVENTORY_JSON`` GitHub
 Environment secret (at most 48 KB) or point ``MIP_ESTATE_INVENTORY_FILE`` at
@@ -39,6 +40,7 @@ gap; 3: written with gaps; 2: refused (nothing written).
 from __future__ import annotations
 
 import argparse
+import errno
 import re
 import sys
 from collections.abc import Callable
@@ -70,14 +72,18 @@ def _raised_by_the_tooling(exc: BaseException) -> bool:
 
 
 def _refusal_line(exc: BaseException) -> str:
-    """The refusal as printed: another error's text is withheld, its class and code kept."""
+    """The refusal as printed: another error's text is withheld, its class and code kept.
+
+    The code is an SDK error code, or an OS error's errno name; never its
+    ``strerror``, which is free text on any two-argument ``OSError``.
+    """
 
     if _raised_by_the_tooling(exc):
         return f"{exc.__class__.__name__}: {exc}"
     code = getattr(exc, "error_code", None)
+    number = getattr(exc, "errno", None)
     detail = code if isinstance(code, str) and _ERROR_CODE.fullmatch(code) else ""
-    reason = getattr(exc, "strerror", None) if not detail else None
-    detail = detail or (reason if isinstance(reason, str) and reason else "")
+    detail = detail or (errno.errorcode.get(number, "") if type(number) is int else "")
     return (
         f"{exc.__class__.__name__}{f' ({detail})' if detail else ''}: its text is withheld, "
         "because it can name another team's catalog"

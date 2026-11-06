@@ -2361,8 +2361,8 @@ parser before it is written, so a refused one never is; the file is written
 mode 0600, atomically and never through a symlink. The tool prints counts, gap
 counts and the `estate` digest, never a catalog, owner or id: a refusal of its
 own prints its line, and any other error (a Databricks API, HTTP or file
-error) only its class and error code, because its text can name another
-team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
+error) only its class and its error code (an OS error's errno name, never its
+free-text `strerror`), because its text can name another team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
 calls are pinned to a reviewed set of gets and lists, statically
 (`tests/unit/test_bootstrap_account_safety.py`) and by a run-time spy on every
 test path (`tests/unit/test_estate_inventory.py`). The static scan reads the
