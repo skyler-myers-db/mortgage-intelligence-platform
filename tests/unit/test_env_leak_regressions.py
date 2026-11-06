@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -48,6 +49,16 @@ WRITER_MODULES = (
     # DATABRICKS_HOST, DATABRICKS_AUTH_TYPE, DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET.
     "tests/unit/test_verify_agent_proxy_uc_boundary_dual_authority.py",
     "tests/unit/test_verify_agent_runtime_uc_boundary_dual_authority.py",
+    # DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET.
+    "tests/unit/test_verify_agent_runtime_identity_boundary.py",
+    "tests/unit/test_verify_verifier_identity_boundary.py",
+    # The exact M2M binder itself; its tests already restore what it writes.
+    "tests/unit/test_m2m_workspace_auth.py",
+)
+# A tools module that writes the exact OAuth M2M binding into os.environ: it
+# defines or calls bind_exact_workspace_m2m_auth, or sets the client secret.
+_EXACT_M2M_WRITE = re.compile(
+    r"\bbind_exact_workspace_m2m_auth\(|os\.environ\[\s*\"DATABRICKS_CLIENT_SECRET\"\s*\]\s*="
 )
 # Dry runs and in-process profile reads whose env once dropped ambient names
 # by prefix alone, so a leaked unprefixed profile name refused the profile.
@@ -130,6 +141,27 @@ def test_no_writer_module_leaves_os_environ_changed(tmp_path: Path) -> None:
         if record["added"] or record["removed"] or record["changed"]
     }
     assert leaks == {}, "these tests left os.environ changed for the next test on the worker"
+
+
+def test_every_exact_m2m_binding_writer_has_its_tests_probed() -> None:
+    writers = sorted(
+        path.relative_to(REPO).as_posix()
+        for path in (REPO / "tools").rglob("*.py")
+        if _EXACT_M2M_WRITE.search(path.read_text(encoding="utf-8"))
+    )
+    # The scan is real: the binder and a writer the probe covered first both match.
+    assert {
+        "tools/databricks/m2m_workspace_auth.py",
+        "tools/databricks/verify_agent_proxy_identity_boundary.py",
+    } <= set(writers), writers
+
+    test_modules = {writer: f"tests/unit/test_{Path(writer).stem}.py" for writer in writers}
+    missing = {
+        writer: module
+        for writer, module in test_modules.items()
+        if not (REPO / module).is_file() or module not in WRITER_MODULES
+    }
+    assert missing == {}, "add each exact M2M writer's test module to WRITER_MODULES"
 
 
 def test_a_leaked_profile_name_never_refuses_a_dry_run_or_profile_read(tmp_path: Path) -> None:
