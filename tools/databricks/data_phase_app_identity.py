@@ -8,9 +8,11 @@ read-only, and never from an unpinned ``apps get``: the live App the lease
 names must still carry the service principal (client id and SCIM id) of its
 signed last-good rollback record, the release's own pin
 (``app_rollback_record_contract._load_record``, which proves the scope's
-ownership and the record's signature first). An App replaced under the same
-name, or an install no release has captured yet, refuses with exit 2 and
-nothing granted. The release's distinctness refusal (the App identity is never
+ownership and the record's signature first). Every version a release or
+adopt-live signs pins it: v5/v6, and v7 (M2-PR7), whose core record is
+cutover run 1's; a v7 retired tombstone pins nothing. An App replaced under
+the same name, or an install no release has captured yet, refuses with exit 2
+and nothing granted. The release's distinctness refusal (the App identity is never
 the bounded account credential's client) stays in the shell, beside the
 release's own (``same_identity_casefold``).
 
@@ -39,7 +41,9 @@ def pinned_client_id(workspace: Any, *, app_name: str, scope: str, lakebase_inst
     """The App's client id, only while it is the signed record's service principal."""
 
     try:
-        record = _load_record(workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance)
+        record = _load_record(
+            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance, accept_v7=True
+        )
     except RuntimeError as exc:
         # Only the reviewed absence message is echoed; any other failure is named by its class.
         detail = "none exists yet" if str(exc).startswith(NO_RECORD) else type(exc).__name__

@@ -2982,8 +2982,10 @@ the first governed run owes the live timings.
   with the job's own code. A failure of either refuses success: no later job
   runs and the generation stays open. The grantee is the App's service
   principal only while it is the one its signed last-good rollback record pins
-  (`tools/databricks/data_phase_app_identity.py`) and is not the account
-  credential's client; otherwise the phase refuses before its ledger.
+  (`tools/databricks/data_phase_app_identity.py`; v5/v6 or v7, so adopt-live's
+  and the core release's records pin it, and a retired tombstone pins nothing)
+  and is not the account credential's client; otherwise the phase refuses
+  before its ledger.
 - **No overlap.** A data phase that exits 4 releases the lease with its job
   still running. A release, or a run with no `--phase`, reads the ledger right
   after taking its lease (`job_phase_runner quiet`, read-only) and refuses

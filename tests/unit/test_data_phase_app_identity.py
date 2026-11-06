@@ -82,3 +82,45 @@ def test_an_unreadable_app_refuses_by_class(monkeypatch: pytest.MonkeyPatch, cap
     assert identity.main(ARGV, workspace=workspace) == identity.EXIT_REFUSED
     err = capsys.readouterr().err
     assert "PermissionError" in err and "PLACEHOLDER" not in err
+
+
+# --- the real signed reader: every record version a release or adopt-live signs ----------
+
+
+def _signed(monkeypatch: pytest.MonkeyPatch, record: dict[str, Any]) -> Any:
+    from tests.fixtures import rollback_records as rr
+    from tools.databricks import app_rollback_record_contract as contract
+
+    rr.signing_env(monkeypatch)
+    monkeypatch.setattr(contract, "assert_owned_app_rollback_scope", lambda *_a, **_kw: None)
+    workspace = SimpleNamespace(secrets=rr.Secrets())
+    contract.save_versioned_record(workspace, scope=rr.SCOPE, record=record)
+    app = SimpleNamespace(service_principal_client_id="app-client", service_principal_id="app-scim-id")
+    workspace.apps = SimpleNamespace(get=lambda name: app)
+    return workspace
+
+
+@pytest.mark.parametrize("kind", ("v6", "v7_core_adopted", "v7_agentic_captured"))
+def test_every_signed_record_a_release_or_adopt_live_writes_pins_the_app(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    # Cutover run 1 is core tier: its record is adopt-live's v7 core record, then the core release's (M2-PR7b).
+    from tests.fixtures import rollback_records as rr
+
+    record = {
+        "v6": rr.v6_record,
+        "v7_core_adopted": rr.v7_core_record,
+        "v7_agentic_captured": rr.v7_agentic_record,
+    }[kind]()
+    workspace = _signed(monkeypatch, record)
+    assert identity.main(ARGV, workspace=workspace) == 0, capsys.readouterr().err
+    assert capsys.readouterr().out == "app-client\n"
+
+
+def test_a_retired_tombstone_pins_nothing(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from tests.fixtures import rollback_records as rr
+
+    workspace = _signed(monkeypatch, rr.v7_core_record(provenance="retired", ack_purpose="unadopt"))
+    assert identity.main(ARGV, workspace=workspace) == identity.EXIT_REFUSED
+    captured = capsys.readouterr()
+    assert captured.out == "" and "none exists yet" in captured.err
