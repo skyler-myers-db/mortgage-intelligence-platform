@@ -8,8 +8,8 @@ account bootstrap ([bootstrap.md](bootstrap.md)): nothing changes until you
 hand it the exact digest of a plan you have read.
 
 > **Status.** Built and tested against a fake `gh` only. No environment has
-> been created by it yet; the CI workflows that would run in one are parked
-> until M1-PR7.
+> been created by it yet. `deploy-dev.yml` runs in one since M1-PR7 (one
+> client environment per dispatch); `nightly.yml` stays parked until M1-PR8.
 
 ## The two environments
 

@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.fixtures.deploy_block_harness import block
 from tools.databricks import app_release_contract as contract
@@ -36,6 +37,8 @@ REQUIRE_DIST_FLAG = "MIP_REQUIRE_FRONTEND_DIST"
 STAGE_START = "# >>> app release source: stage >>>"
 STAGE_END = "# <<< app release source: stage <<<"
 STAGE_CALL = 'run "$PYTHON" -m tools.databricks.app_runtime_closure stage'
+# deploy-dev.yml's build job stages the closure for --prebuilt-release.
+WORKFLOW_STAGE_CALL = '"$RUNNER_TEMP/stage-venv/bin/python" -m tools.databricks.app_runtime_closure stage'
 # A service-principal deployer under a caller-supplied root leaf; the principal
 # is a placeholder, never a live one.
 PRINCIPAL, TARGET, LEAF = "ci-deployer@example.invalid", "dev", "client-a"
@@ -50,17 +53,34 @@ def _require_built_dist() -> None:
     pytest.skip(reason)
 
 
-def _deploy_stage_argv(*, sha: str, out: Path, manifest: Path) -> list[str]:
-    """The step-1 stage command of deploy.sh, with its three variables bound."""
+def _continued_words(lines: list[str], call: str) -> list[str]:
+    """The shell words of the command starting with ``call``, joined across ``\\`` lines.
 
-    lines = block(STAGE_START, STAGE_END).splitlines()
-    start = next(index for index, line in enumerate(lines) if line.startswith(STAGE_CALL))
+    The call may be indented (deploy.sh stages inside the not-prebuilt branch).
+    """
+
+    start = next(index for index, line in enumerate(lines) if line.strip().startswith(call))
     command = []
     for line in lines[start:]:
+        line = line.rstrip()
         command.append(line.rstrip("\\").strip())
         if not line.endswith("\\"):
             break
-    words = shlex.split(" ".join(command))
+    return shlex.split(" ".join(command))
+
+
+def _options(words: list[str]) -> list[str]:
+    return [word for word in words if word.startswith("--")]
+
+
+def _deploy_stage_words() -> list[str]:
+    return _continued_words(block(STAGE_START, STAGE_END).splitlines(), STAGE_CALL)
+
+
+def _deploy_stage_argv(*, sha: str, out: Path, manifest: Path) -> list[str]:
+    """The step-1 stage command of deploy.sh, with its three variables bound."""
+
+    words = _deploy_stage_words()
     assert words[:4] == ["run", "$PYTHON", "-m", "tools.databricks.app_runtime_closure"]
     bound = {"$SOURCE_GIT_SHA": sha, "$APP_RELEASE_STAGE_ROOT/source": str(out), "$APP_RELEASE_MANIFEST": str(manifest)}
     unbound = [word for word in words[4:] if "$" in word and word not in bound]
@@ -96,6 +116,29 @@ def test_the_built_dist_stages_as_a_publishable_release(tmp_path: Path) -> None:
         expected_commit=sha, principal=PRINCIPAL, target=TARGET, root_leaf=LEAF,
     )
     assert plan.release_path.endswith(f"/{LEAF}/app-src/{release_id}")
+
+
+def test_the_build_job_stages_with_the_same_options_as_deploy_step_1() -> None:
+    """A prebuilt release skips step 1's stage, so the build job must stage it alike.
+
+    deploy-dev.yml's build job stages the closure that ``--prebuilt-release``
+    then re-hashes instead of staging; its options (above all
+    ``--require-brotli-check``) must be deploy.sh's, in the same order. Needs no
+    built dist, so it runs in every job.
+    """
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "deploy-dev.yml").read_text(encoding="utf-8"))
+    runs = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if WORKFLOW_STAGE_CALL in step.get("run", "")
+    ]
+    assert len(runs) == 1, f"exactly one workflow step stages the closure, found {len(runs)}"
+    workflow_words = _continued_words(runs[0].splitlines(), WORKFLOW_STAGE_CALL)
+    assert workflow_words[1:4] == ["-m", "tools.databricks.app_runtime_closure", "stage"]
+    assert _options(workflow_words) == _options(_deploy_stage_words())
+    assert "--require-brotli-check" in _options(workflow_words)
 
 
 @pytest.mark.parametrize(("required", "outcome"), [(None, "skip"), ("1", "fail")])

@@ -1,7 +1,7 @@
 """deploy-dev.yml sets the job deadline at job start and records the window journal, read-only (M0-PR9).
 
-The workflow stays parked (M1-PR7): its ``parked`` job refuses every dispatch
-and the deploy job needs it, so neither step runs today. When it does, the
+Since M1-PR7 the deploy job runs one client's phase under that phase's own
+timeout (plan 30, release 330, data 330 minutes; adopt and unadopt 60). The
 first step turns ``timeout-minutes`` into ``MIP_JOB_DEADLINE_EPOCH`` (the
 quiesce window's admission and its dead-man's deadline), and the last,
 ``if: always()``, reads the window journal and the dead-man's marker and
@@ -13,6 +13,7 @@ test runs it under exactly the step's env against a real signed journal.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -48,36 +49,63 @@ def _steps() -> list[dict[str, Any]]:
     return _workflow()["jobs"]["deploy"]["steps"]
 
 
-def test_the_workflow_stays_parked_before_either_step() -> None:
-    jobs = _workflow()["jobs"]
-    assert jobs["deploy"]["needs"] == "parked"
-    assert jobs["parked"]["steps"][0]["run"].rstrip().endswith("exit 1")
+_PHASE_TIMEOUT = re.compile(r"\$\{\{ fromJSON\('(\{[^']+\})'\)\[inputs\.phase\] \}\}")
 
 
-def test_the_deadline_is_recorded_first_from_the_jobs_own_timeout(tmp_path: Path) -> None:
+def phase_timeouts(expression: str) -> dict[str, int]:
+    """The per-phase minutes of the one reviewed timeout expression."""
+
+    match = _PHASE_TIMEOUT.fullmatch(expression)
+    assert match, expression
+    return json.loads(match.group(1))
+
+
+def test_each_phase_has_its_own_timeout_and_every_dispatchable_phase_one() -> None:
+    workflow = _workflow()
+    minutes = phase_timeouts(workflow["jobs"]["deploy"]["timeout-minutes"])
+    assert minutes == {"plan": 30, "release": 330, "data": 330, "adopt": 60, "unadopt": 60}
+    triggers = workflow[True]  # YAML 1.1 reads the bare key `on` as true
+    assert set(minutes) == set(triggers["workflow_dispatch"]["inputs"]["phase"]["options"])
+
+
+@pytest.mark.parametrize("phase", ("plan", "release", "data"))
+def test_the_deadline_is_recorded_first_from_the_jobs_own_timeout(tmp_path: Path, phase: str) -> None:
     job = _workflow()["jobs"]["deploy"]
     first = _steps()[0]
     assert first["name"] == DEADLINE_STEP and "if" not in first
-    assert int(first["env"]["MIP_JOB_TIMEOUT_MINUTES"]) == job["timeout-minutes"]
+    assert first["env"]["MIP_JOB_TIMEOUT_MINUTES"] == job["timeout-minutes"], "the same expression"
+    minutes = phase_timeouts(job["timeout-minutes"])[phase]
     github_env = tmp_path / "github.env"
     before = int(time.time())
     subprocess.run(
         ["bash", "-c", first["run"]],
-        env={"PATH": os.environ["PATH"], "GITHUB_ENV": str(github_env), **first["env"]},
+        env={"PATH": os.environ["PATH"], "GITHUB_ENV": str(github_env), "MIP_JOB_TIMEOUT_MINUTES": str(minutes)},
         check=True,
         timeout=30,
     )
     name, _, value = github_env.read_text(encoding="utf-8").strip().partition("=")
     assert name == "MIP_JOB_DEADLINE_EPOCH"
-    assert before + job["timeout-minutes"] * 60 <= int(value) <= int(time.time()) + job["timeout-minutes"] * 60
+    assert before + minutes * 60 <= int(value) <= int(time.time()) + minutes * 60
+
+
+def _record_step() -> dict[str, Any]:
+    return next(step for step in _steps() if step.get("name") == RECORD_STEP)
 
 
 def test_the_journal_is_recorded_last_whatever_happened_and_read_only() -> None:
-    last = _steps()[-1]
+    # Last but the profile files' removal (M1-PR7), which needs no profile.
+    assert [step.get("name") for step in _steps()][-2:] == [RECORD_STEP, "Remove the profile files"]
+    assert _steps()[-1] == {
+        "name": "Remove the profile files",
+        "if": "always()",
+        "run": 'rm -f .env.local "$HOME/.databrickscfg" "$RUNNER_TEMP/mip-client-vars.json" "$RUNNER_TEMP/mip-client-secrets.json"',
+    }
+    last = _record_step()
     assert last["name"] == RECORD_STEP and last["if"] == "always()"
     assert last["env"] == {
         "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
-        "MIP_APP_NAME": "${{ vars.MIP_APP_NAME || 'mip-app' }}",
+        # The resolved profile's public App name (M1-PR7), never a default.
+        "MIP_APP_NAME": "${{ steps.profile.outputs.app-name }}",
     }, "no App client pair, no secret"
     run = last["run"]
     assert "-m tools.databricks.quiesce_window status --unverified" in run and "--out-env" not in run
@@ -90,8 +118,8 @@ def test_the_journal_is_recorded_last_whatever_happened_and_read_only() -> None:
 def test_the_deploy_step_sits_between_them_and_keeps_its_own_env() -> None:
     names = [step.get("name") for step in _steps()]
     assert names.index(DEADLINE_STEP) == 0
-    assert names.index("Deploy dev Databricks App") == len(names) - 2
-    deploy = _steps()[names.index("Deploy dev Databricks App")]
+    assert names.index("Run the client phase") == names.index(RECORD_STEP) - 1
+    deploy = _steps()[names.index("Run the client phase")]
     assert "MIP_JOB_DEADLINE_EPOCH" not in deploy["env"], "it arrives through GITHUB_ENV, set at job start"
 
 
@@ -107,7 +135,7 @@ KEY_ENV = (
 def _record(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], estate: Any) -> str:
     """Run the step's own command and grep, under exactly its env, against ``estate``."""
 
-    step = _steps()[-1]
+    step = _record_step()
     for name in KEY_ENV:
         monkeypatch.delenv(name, raising=False)
     for name, value in step["env"].items():

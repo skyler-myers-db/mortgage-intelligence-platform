@@ -26,19 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 ENVIRONMENT = "fictional-demo"
 _NON_PUBLIC = sorted(name for name in KNOWN_NAMES if name_class(name) is not FieldClass.PUBLIC)
 _PUBLIC = sorted(name for name in KNOWN_NAMES if name_class(name) is FieldClass.PUBLIC)
-# Identifying names deploy-dev.yml still reads from ``vars`` at origin/main
-# 6c363903. The per-client deploy workflow (M1-PR7) reads them from the
-# profile's secrets and empties this set; it may only shrink.
-_LEGACY_IDENTIFYING_VARS = frozenset(
-    {
-        "MIP_ADMIN_EMAILS",
-        "MIP_ADMIN_GROUP_NAME",
-        "MIP_APPROVER_GROUP_NAME",
-        "MIP_AUDITOR_EMAILS",
-        "MIP_CI_DEPLOYER_CLIENT_ID",
-        "MIP_UC_APPROVED_OWNER_PRINCIPALS",
-    }
-)
+# Identifying names a workflow still reads from ``vars`` by value. deploy-dev.yml
+# read six at origin/main 6c363903; the per-client workflow (M1-PR7) binds each
+# from its environment's secrets, and reads ``vars`` for one only by presence
+# (``vars.X && 'X' || ''``: the name, never the value; tools/clients/
+# workflow_contexts.py), so the set is empty and may never grow (nightly.yml,
+# parked, names none of them).
+_LEGACY_IDENTIFYING_VARS: frozenset[str] = frozenset()
 
 
 def test_every_known_name_has_a_class() -> None:
@@ -160,7 +154,10 @@ def test_the_cli_refuses_an_identifying_variable_without_printing_it(
 def test_workflows_read_no_new_identifying_name_from_vars() -> None:
     referenced: set[str] = set()
     for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
-        referenced.update(re.findall(r"\bvars\.([A-Z][A-Z0-9_]*)", workflow.read_text(encoding="utf-8")))
+        text = workflow.read_text(encoding="utf-8")
+        # The presence form yields the name or nothing, never the value.
+        text = re.sub(r"\$\{\{ vars\.([A-Z][A-Z0-9_]*) && '\1' \|\| '' \}\}", "", text)
+        referenced.update(re.findall(r"\bvars\.([A-Z][A-Z0-9_]*)", text))
     identifying = {name for name in referenced if name in KNOWN_NAMES and name not in _PUBLIC}
     assert identifying <= _LEGACY_IDENTIFYING_VARS, sorted(identifying - _LEGACY_IDENTIFYING_VARS)
     secret = {name for name in identifying if name_class(name) is FieldClass.SECRET}

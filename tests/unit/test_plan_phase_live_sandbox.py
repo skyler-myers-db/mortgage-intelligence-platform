@@ -12,7 +12,9 @@ It pins every Databricks CLI call (the version check alone) and every tool
 the plan runs (each ``-m`` module or repository script, with the arguments
 that make it read-only), in order, through the preflight, the probes without
 their Genie turn, the pre-lease plan gate and the phase budgets. The plan
-takes no lease and leaves no sandbox state. The local programs (``-c`` and
+takes no lease and leaves no sandbox state. With no ``GITHUB_RUN_ID`` or
+``GITHUB_STEP_SUMMARY`` it publishes no PlanReport (M1-PR7); that write is
+pinned by tests/unit/test_plan_phase_live_shape.py. The local programs (``-c`` and
 heredoc ``-`` bodies: interpreter, dotenv and profile checks) are recorded
 by kind only; their text is the slices' own, reviewed with them, and each
 runs for real against the offline fake estate.
@@ -52,6 +54,7 @@ PLAN_TOOLS = (
     "tools.databricks.phase_budget describe --phase plan",
     "tools.databricks.phase_budget describe --phase release",
     "tools.databricks.phase_budget describe --phase data",
+    "tools.databricks.active_deployment_pin digest --app-name mip-app",  # one apps.get (M1-PR7)
     "tools/render_sql.py --catalog mip",  # the EXIT trap's local restore
 )
 
@@ -88,7 +91,7 @@ def _detail(run: Release) -> str:
 
 def test_the_live_plan_phase_completes_before_the_lease(plan_run: Release) -> None:
     assert plan_run.result.returncode == 0, _detail(plan_run)
-    assert "plan phase complete: read-only, stopped before the lease; nothing was changed." in plan_run.result.stdout
+    assert "plan phase complete: stopped before the lease; no governed resource was changed" in plan_run.result.stdout
     assert "acquire signed workspace lease" not in plan_run.result.stdout
     assert plan_run.state == {}, "no lease, statement, bundle run or App create"
 

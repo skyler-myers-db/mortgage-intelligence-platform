@@ -79,11 +79,16 @@ run_bundle_plan_gate() {
     chmod 600 "$execute_gap_json"
     check_catalog_bootstrap_skip_rule "$execute_gap_json" || true
   fi
+  # The public half for a plan's step summary (M1-PR7, deploy_plan_report_lifecycle.sh).
+  # shellcheck disable=SC2034  # publish_plan_report reads it.
+  BUNDLE_PLAN_REPORT_JSON="$report_json"
+  BUNDLE_PLAN_PUBLIC_JSON="${report_json%.json}.public.json"
   run "$PYTHON" -m tools.databricks.bundle_plan_gate check \
     --plan "$plan_json" \
     --position "$position" \
     --app-key mip_app \
     --report-out "$report_json" \
+    --public-out "$BUNDLE_PLAN_PUBLIC_JSON" \
     --execute-gap "$execute_gap_json" \
     "${journal_args[@]}" || gate_rc=$?
   # The Growth Agent monitor scheduler stays PAUSED, planned and live, until a
@@ -91,6 +96,8 @@ run_bundle_plan_gate() {
   run "$PYTHON" -m tools.databricks.monitor_scheduler_gate check --plan "$plan_json" || monitor_rc=$?
   [[ "$DRY_RUN" -eq 1 ]] || rm -f "$plan_json"
   if [[ "$gate_rc" -ne 0 ]]; then
+    # A refused plan still publishes both halves: the refusals are what it is for.
+    publish_plan_report
     echo "${RED}[deploy] the bundle plan gate refused (${position}); its full report, which names resources and stays private, is ${report_json}.${RST}" >&2
     exit 2
   fi

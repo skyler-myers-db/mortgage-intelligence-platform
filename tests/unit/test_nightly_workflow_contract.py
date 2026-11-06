@@ -133,7 +133,7 @@ def _needs(job: dict) -> set[str]:
 
 
 def test_every_job_waits_on_the_parked_guard() -> None:
-    """M0-PR3: live validation is parked until a client environment is selected (M1-PR7).
+    """M0-PR3: live validation is parked until M1-PR8 rebuilds it per client environment.
 
     The guard job's one step fails, and every other job needs it, directly or
     transitively, so a dispatch skips every job that reads or writes a
@@ -147,7 +147,7 @@ def test_every_job_waits_on_the_parked_guard() -> None:
 
     assert list(jobs)[0] == GUARD_JOB, "the first job"
     (step,) = guard["steps"]
-    assert "::error::live validation is parked until a client environment is selected (M1-PR7)." in step["run"]
+    assert "::error::live validation is parked until M1-PR8 rebuilds it per client environment." in step["run"]
     assert step["run"].rstrip().endswith("exit 1")
     assert not guard.get("needs") and "if" not in guard
     # A refused guard must fail its job: continue-on-error (job or step) or a
@@ -183,7 +183,7 @@ def test_the_header_says_the_workflow_is_parked_and_what_replaces_it() -> None:
     header = " ".join(line.lstrip("# ") for line in text.split("\non:", 1)[0].splitlines())
     workflow = yaml.safe_load(text)
 
-    assert "Parked until a client environment is selected (M1-PR7)." in header
+    assert "Parked until M1-PR8 rebuilds it per client environment." in header
     assert "M1-PR8 rebuilds this workflow per client under a non-admin validator identity." in header
     assert "tools/live_validation_gate.py" in header
     assert _needs(workflow["jobs"]["kill-drill-simulated"]) == {GUARD_JOB}

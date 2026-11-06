@@ -174,7 +174,11 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
         'if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then',
         "  # Each phase's predicted budget (M1-PR6), read-only, kept in a local file.",
         "  predict_phase_budgets",
-        '  echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"',
+        "  # The active deployment's digest a release may pin, and the PlanReport's",
+        "  # two halves: public to the step summary, full to the workspace (M1-PR7).",
+        "  print_active_deployment_digest",
+        "  publish_plan_report",
+        "  echo \"${GRN}[deploy] plan phase complete: stopped before the lease; no governed resource was changed (its one write, under GitHub Actions only, is the create-only plan report in the deployer's plan-reports folder).${RST}\"",
         "  exit 0",
         "fi",
     ]
@@ -229,8 +233,8 @@ def test_only_the_pre_lease_gate_reads_the_first_install_journal() -> None:
         assert argument in pre_lease and body.count(argument) == 1, argument
     assert 'local -a genie_args=() journal_args=()' in body
     assert (
-        '--report-out "$report_json" \\\n    --execute-gap "$execute_gap_json" \\\n'
-        '    "${journal_args[@]}" || gate_rc=$?'
+        '--report-out "$report_json" \\\n    --public-out "$BUNDLE_PLAN_PUBLIC_JSON" \\\n'
+        '    --execute-gap "$execute_gap_json" \\\n    "${journal_args[@]}" || gate_rc=$?'
     ) in body
 
 
@@ -302,6 +306,10 @@ def _harness(
         'plan_quiesce_window() { echo "window-planned $1"; }\n'
         # The plan phase's budget prediction (M1-PR6) has its own tests.
         'predict_phase_budgets() { echo "budgets-predicted"; }\n'
+        # The plan's deployment digest and its report publish (M1-PR7) have their own tests.
+        'print_active_deployment_digest() { echo "deployment-digest-printed"; }\n'
+        'BUNDLE_PLAN_REPORT_JSON=""\nBUNDLE_PLAN_PUBLIC_JSON=""\n'
+        + function("publish_plan_report")
         + function("run_json_to_file")
         + function("run_bundle_plan_gate")
         + block(GATE_START, GATE_END)
@@ -329,7 +337,7 @@ def test_the_plan_phase_exits_read_only_and_never_takes_the_lease(tmp_path: Path
     result, called, lease = _harness(tmp_path, fx.adopted(), phase="plan")
 
     assert result.returncode == 0, result.stderr
-    assert "plan phase complete: read-only, stopped before the lease" in result.stdout
+    assert "plan phase complete: stopped before the lease; no governed resource was changed" in result.stdout
     assert "[mip-plan-gate] pre-lease plan gate passed (read-only)" in result.stdout
     assert result.stdout.index("budgets-predicted") < result.stdout.index("plan phase complete")
     assert called == [
@@ -339,8 +347,9 @@ def test_the_plan_phase_exits_read_only_and_never_takes_the_lease(tmp_path: Path
     assert not lease.exists()
     assert "reached-after-block" not in result.stdout
     assert "unexpected databricks" not in result.stderr
-    reports = list(tmp_path.glob("mip-bundle-plan-report.*"))
-    assert len(reports) == 1 and not list(
+    reports = sorted(path.name.endswith(".public.json") for path in tmp_path.glob("mip-bundle-plan-report.*"))
+    assert reports == [False, True], "the full report and its public half (M1-PR7)"
+    assert not list(
         tmp_path.glob("mip-bundle-plan.*")
     ), "the raw plan is removed"
 

@@ -3,8 +3,11 @@
 Inputs, one way or the other:
 
 * CI: ``--vars-json SRC`` and ``--secrets-json SRC``, where SRC is ``env:NAME``
-  (a step env var holding ``toJSON(vars)`` or ``toJSON(secrets)``) or a file,
-  plus ``--environment NAME``, the GitHub Environment the job runs in.
+  or a file holding a JSON object of names to values: deploy-dev.yml's
+  collect step writes both files, each profile name bound one by one
+  (tools/clients/workflow_contexts.py; a whole context is never passed, since
+  a step's env prints in its log header). Plus ``--environment NAME``, the
+  GitHub Environment the job runs in.
 * Local: the shell, then ``--env-file`` (default ``.env.local``).
   ``--env-file-only`` ignores the shell, to check a template.
 
@@ -49,8 +52,8 @@ VIEWS: dict[str, Callable[[ClientProfile], dict[str, str]]] = {
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m tools.clients", description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("check", "resolve", "mask", "digest"))
-    parser.add_argument("--vars-json", help="env:NAME or a file holding toJSON(vars)")
-    parser.add_argument("--secrets-json", help="env:NAME or a file holding toJSON(secrets)")
+    parser.add_argument("--vars-json", help="env:NAME or a file holding the vars object (workflow_contexts collect)")
+    parser.add_argument("--secrets-json", help="env:NAME or a file holding the secrets object (workflow_contexts collect)")
     parser.add_argument("--environment", help="CI: the GitHub Environment the job runs in; MIP_CLIENT must equal it")
     parser.add_argument("--env-file", help="local env file (default: .env.local)")
     parser.add_argument("--env-file-only", action="store_true", help="ignore the shell environment")
@@ -113,7 +116,8 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command == "digest":
         print(views.digest(profile))
     elif args.command == "mask":
-        values = views.masks(profile)
+        # Every identifying leaf and each spelling the deploy derives from one (M1-PR7).
+        values = (*views.masks(profile), *views.derived_masks(profile))
         if in_github_actions():
             for value in values:
                 emit_mask(value, stream=sys.stdout)
@@ -123,7 +127,7 @@ def _run(args: argparse.Namespace) -> int:
     else:
         if not args.emit or not args.out:
             raise ProfileRefusal(["resolve: --emit and --out are both required"])
-        for value in views.masks(profile):
+        for value in (*views.masks(profile), *views.derived_masks(profile)):
             emit_mask(value)
         selected = VIEWS[args.emit](profile)
         _write_private(Path(args.out), _render(selected, args.format))
