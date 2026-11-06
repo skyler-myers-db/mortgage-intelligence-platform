@@ -1,4 +1,5 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, type Query } from '@tanstack/react-query';
+import { refetchableAfterNetworkLoss } from '../components/connectionState';
 import { actorScopeStatus, subscribeActorScope } from './actorScope';
 import { isWarmingUpError } from './api';
 import { clientFailureReason } from './apiTransport';
@@ -8,6 +9,24 @@ import { queryKeys } from './queryKeys';
 
 export const DEFAULT_QUERY_STALE_MS = 30_000;
 export const DEFAULT_QUERY_GC_MS = 5 * 60_000;
+
+/**
+ * The app's reconnect refetch. Coming back online never re-reads data on
+ * screen, nor an audited read the server answered: many reads write a VIEW_*
+ * audit row, so a reconnect would add one with no act behind it, the reason
+ * focus refetch is off too. That includes a 200 whose body was lost
+ * mid-transfer, which fails offline or unreachable but carries its status,
+ * unless its path is a reviewed audit-free read (lib/auditFreeReads), which
+ * writes no row: that one is completed. So is a read whose last attempt got
+ * no status at all (fetch() rejected, offline or unreachable), as TanStack's
+ * default would. A query that waited offline ('paused') resumes on its own
+ * whatever this says, and a query whose every page writes a row
+ * (`meta.auditedPages`) is never refetched here. The rule is connectionState's
+ * refetchableAfterNetworkLoss, the same one refetchUnreachableQueries uses.
+ */
+export function refetchOnReconnectAfterNetworkLoss(query: Query): boolean {
+  return refetchableAfterNetworkLoss(query);
+}
 
 export function createMipQueryClient(): QueryClient {
   // Offline pauses queries and their retries (networkMode 'online', the
@@ -24,6 +43,9 @@ export function createMipQueryClient(): QueryClient {
         // re-read actor-scoped data after an identity swap, so queries must
         // opt into focus refetch explicitly when it is safe.
         refetchOnWindowFocus: false,
+        // The same for reconnect: only a read the network lost before it
+        // wrote a row (refetchOnReconnectAfterNetworkLoss).
+        refetchOnReconnect: refetchOnReconnectAfterNetworkLoss,
         retry: (failureCount, error) => {
           // An ended session, no network, an unreachable app or an
           // unreadable body is never retried here (audit states-02): the

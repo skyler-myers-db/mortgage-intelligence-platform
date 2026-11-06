@@ -109,6 +109,13 @@ export interface ApiValidationIssue {
 /** Structured error thrown by every api.* method on non-2xx or network failure. */
 export class ApiError extends Error {
   readonly path: string;
+  /**
+   * The request's HTTP method ('GET', 'POST', ...), or null when the error was
+   * not built by the transport. A recovery that completes a read whose body
+   * the network lost needs it (lib/auditFreeReads: the reviewed list is per
+   * method), and a null method never counts as an audit-free read.
+   */
+  readonly method: string | null;
   readonly status: number | null;
   readonly retryable: boolean;
   readonly dependency: string | null;
@@ -132,6 +139,7 @@ export class ApiError extends Error {
     message: string,
     opts: {
       path: string;
+      method?: string | null;
       status?: number | null;
       retryable?: boolean;
       dependency?: string | null;
@@ -145,6 +153,7 @@ export class ApiError extends Error {
     super(message);
     this.name = opts.aborted ? 'AbortError' : 'ApiError';
     this.path = opts.path;
+    this.method = opts.method ?? null;
     this.status = opts.status ?? null;
     this.retryable = Boolean(opts.retryable);
     this.dependency = opts.dependency ?? null;
@@ -666,14 +675,19 @@ async function _fetchWithRetry(
 export const SERVER_FAILURE_MESSAGE = 'The server could not complete this request.';
 export const REQUEST_FAILURE_MESSAGE = 'The request failed before the server answered.';
 
-function _clientFailure(path: string, reason: ClientFailureReason, status: number | null = null): ApiError {
-  return new ApiError(CLIENT_FAILURE_MESSAGES[reason], { path, status, retryable: false, reason });
+function _clientFailure(
+  path: string,
+  method: string,
+  reason: ClientFailureReason,
+  status: number | null = null,
+): ApiError {
+  return new ApiError(CLIENT_FAILURE_MESSAGES[reason], { path, method, status, retryable: false, reason });
 }
 
 /** Record the ended session (the dialog reads it) and build the error. */
 function _sessionExpiredError(path: string, method: string, status: number | null = null): ApiError {
   markSessionExpired({ method, path });
-  return _clientFailure(path, 'session_expired', status);
+  return _clientFailure(path, method, 'session_expired', status);
 }
 
 async function _throwFromResponse(res: Response, path: string, method: string): Promise<never> {
@@ -688,6 +702,7 @@ async function _throwFromResponse(res: Response, path: string, method: string): 
   const msg = parsed.detail ?? parsedBody.message ?? SERVER_FAILURE_MESSAGE;
   throw new ApiError(msg, {
     path,
+    method,
     status: res.status,
     retryable: parsed.retryable,
     dependency: parsed.dependency,
@@ -700,7 +715,7 @@ async function _throwFromResponse(res: Response, path: string, method: string): 
   });
 }
 
-function _wrapFetchError(err: unknown, path: string): ApiError {
+function _wrapFetchError(err: unknown, path: string, method: string): ApiError {
   // Already classified (session expiry confirmed by the redirect probe).
   if (err instanceof ApiError) return err;
   // A caller-triggered abort surfaces as a DOMException with name ===
@@ -709,6 +724,7 @@ function _wrapFetchError(err: unknown, path: string): ApiError {
   if (err instanceof Error && err.name === 'AbortError') {
     return new ApiError('request aborted', {
       path,
+      method,
       status: null,
       retryable: false,
       aborted: true,
@@ -718,9 +734,9 @@ function _wrapFetchError(err: unknown, path: string): ApiError {
   if (isNetworkFailure(err)) {
     const reason = networkFailureReason();
     if (reason === 'unreachable') reportNetworkFailure();
-    return _clientFailure(path, reason);
+    return _clientFailure(path, method, reason);
   }
-  return new ApiError(REQUEST_FAILURE_MESSAGE, { path, status: null, retryable: false });
+  return new ApiError(REQUEST_FAILURE_MESSAGE, { path, method, status: null, retryable: false });
 }
 
 /**
@@ -733,16 +749,16 @@ async function _readJson<T>(res: Response, path: string, method: string, signal?
   try {
     return (await res.json()) as T;
   } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') throw _wrapFetchError(err, path);
-    if (isNetworkFailure(err)) throw _clientFailure(path, networkFailureReason(), res.status);
+    if (err instanceof Error && err.name === 'AbortError') throw _wrapFetchError(err, path, method);
+    if (isNetworkFailure(err)) throw _clientFailure(path, method, networkFailureReason(), res.status);
     let verdict: SessionProbeVerdict;
     try {
       verdict = await probeSession(signal);
     } catch (probeErr) {
-      throw _wrapFetchError(probeErr, path);
+      throw _wrapFetchError(probeErr, path, method);
     }
     if (verdict === 'expired') throw _sessionExpiredError(path, method, res.status);
-    throw _clientFailure(path, 'unreadable_response', res.status);
+    throw _clientFailure(path, method, 'unreadable_response', res.status);
   }
 }
 
@@ -764,7 +780,7 @@ async function _requestJson<T>(
   try {
     res = await _fetchWithRetry(requestPath, bound, 3, signal, retry);
   } catch (err) {
-    throw _wrapFetchError(err, requestPath);
+    throw _wrapFetchError(err, requestPath, method);
   }
   if (!res.ok) await _throwFromResponse(res, requestPath, method);
   const data = await _readJson<T>(res, requestPath, method, signal);

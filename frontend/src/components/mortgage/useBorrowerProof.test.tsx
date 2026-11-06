@@ -6,17 +6,21 @@
  * passive may reach the network again: not a remount 31 s later, not the
  * invalidation every approve applies, not a reconnect, not an enable flip,
  * not a borrower A -> B -> A round trip. Runs on the app's own query client
- * (createMipQueryClient), whose refetchOnReconnect is still the default.
+ * (createMipQueryClient). Its reconnect default (refetchOnReconnectAfterNetworkLoss)
+ * already skips a served read but completes one whose last attempt was never
+ * answered; the proof's staleTime 'static' keeps it out of every reconnect
+ * refetch, served or failed, which the unreachable case below pins against
+ * that default.
  *
  * Mutation checks (lane report): staleTime Infinity turns the enable-flip and
  * A -> B -> A cases red (an invalidated query is stale at any finite or
  * infinite staleTime); staleTime 30_000 turns the remount case red.
  */
-import { onlineManager, type QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, type QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import { createMipQueryClient } from '../../lib/queryClient';
 import { invalidateOperationalQueries, queryKeys } from '../../lib/queryKeys';
 import type { BorrowerProof } from '../../types';
@@ -135,6 +139,45 @@ describe('useBorrowerProof', () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(proofSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a proof read that was never answered is not completed by a reconnect', async () => {
+    const unreachable = () => new ApiError('unreachable', { path: '/api/v1/borrowers/B-A/proof', reason: 'unreachable' });
+    proofSpy.mockImplementationOnce(async () => {
+      throw unreachable();
+    });
+    // The control: an ordinary read failing the same way, which this client's
+    // reconnect default completes, so the toggle below is not vacuous.
+    let controlReached = false;
+    const controlRead = vi.fn(async () => {
+      if (!controlReached) {
+        controlReached = true;
+        throw unreachable();
+      }
+      return 'rows';
+    });
+    const control = new QueryObserver(client, { queryKey: ['mip', 'borrower', 'control'], queryFn: controlRead, staleTime: 0 });
+    const stopControl = control.subscribe(() => undefined);
+    try {
+      await render('B-A', true);
+      expect(proofSpy).toHaveBeenCalledTimes(1);
+      expect(client.getQueryState(queryKeys.borrowerProof('B-A'))?.status).toBe('error');
+      expect(control.getCurrentResult().status).toBe('error');
+
+      await act(async () => {
+        onlineManager.setOnline(false);
+        await vi.advanceTimersByTimeAsync(1_000);
+        onlineManager.setOnline(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(controlRead).toHaveBeenCalledTimes(2);
+      expect(control.getCurrentResult().status).toBe('success');
+      expect(proofSpy).toHaveBeenCalledTimes(1);
+      expect(shown()).toBe('none');
+    } finally {
+      stopControl();
+    }
   });
 
   it('a disabled observer on a cold cache never fetches', async () => {

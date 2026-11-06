@@ -1,13 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { onlineManager, QueryClient, QueryObserver, type Query } from '@tanstack/react-query';
 import {
   createMipQueryClient,
   DEFAULT_QUERY_GC_MS,
   DEFAULT_QUERY_STALE_MS,
+  refetchOnReconnectAfterNetworkLoss,
 } from './queryClient';
 import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
+import { getJson, postJson } from './apiTransport';
 import { LEADS_PAGED_SCOPE, leadsPagedQueryKey } from './leadsQuery';
+import { refetchUnreachableQueries } from '../components/connectionState';
 
 describe('createMipQueryClient', () => {
   it('uses bounded freshness defaults and disables automatic focus refetch', () => {
@@ -17,6 +20,7 @@ describe('createMipQueryClient', () => {
     expect(queries?.staleTime).toBe(DEFAULT_QUERY_STALE_MS);
     expect(queries?.gcTime).toBe(DEFAULT_QUERY_GC_MS);
     expect(queries?.refetchOnWindowFocus).toBe(false);
+    expect(queries?.refetchOnReconnect).toBe(refetchOnReconnectAfterNetworkLoss);
     expect(client.getDefaultOptions().mutations?.retry).toBe(false);
   });
 
@@ -84,6 +88,417 @@ describe('createMipQueryClient', () => {
     });
 
     expect(retry(0, refused)).toBe(false);
+  });
+});
+
+function failure(
+  reason: string | undefined,
+  extra: { status?: number | null; aborted?: boolean; path?: string; method?: string | null } = {},
+): ApiError {
+  return new ApiError('failed', {
+    path: extra.path ?? '/api/v1/leads',
+    // The transport records the method of every request it makes.
+    method: extra.method === undefined ? 'GET' : extra.method,
+    status: extra.status ?? null,
+    retryable: false,
+    reason,
+    aborted: extra.aborted,
+  });
+}
+
+/** A reviewed audit-free read (lib/auditFreeReads), as the transport records its path. */
+const AUDIT_FREE = '/api/v1/analytics/executive?states=CA';
+
+function queryIn(error: unknown, meta?: Record<string, unknown>, observerOptions: Record<string, unknown> = {}): Query {
+  return { state: { error }, meta, observers: [{ options: observerOptions }] } as unknown as Query;
+}
+
+describe('refetchOnReconnectAfterNetworkLoss', () => {
+  it('refetches on reconnect only a read whose last attempt never reached the server', () => {
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(null))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline')))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable')))).toBe(true);
+    // The server answered: a warming 503, an ended session, an unreadable body.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('warming_up', { status: 503 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('session_expired', { status: 401 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreadable_response', { status: 200 })))).toBe(false);
+    // An audited read answered 200 and the body was lost on the way: offline
+    // or unreachable, with a status. Its row is written; a re-read adds one.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200 })))).toBe(false);
+    const proof = '/api/v1/borrowers/B-P5YP9ESW32R7Z/proof';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: proof })))).toBe(false);
+    // The caller aborted it, or every served page writes a row.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { aborted: true })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable'), { auditedPages: true }))).toBe(false);
+  });
+
+  it('completes an audit-free read whose answer the network lost, and nothing else on that path', () => {
+    // It writes no row, so the lost 200 is completed like a read that never got a status.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE })))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE })))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { path: AUDIT_FREE })))).toBe(true);
+    // A path nobody reviewed counts as audited (fail-closed).
+    const unreviewed = '/api/v1/analytics/never-reviewed';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: unreviewed })))).toBe(false);
+    // The server answered with no network loss: still never re-read on reconnect.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreadable_response', { status: 200, path: AUDIT_FREE })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('warming_up', { status: 503, path: AUDIT_FREE })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE, aborted: true })))).toBe(false);
+    expect(
+      refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE }), { auditedPages: true })),
+    ).toBe(false);
+  });
+
+  it('judges a lost answer by the method too: a reviewed POST read, never a POST to a listed GET path', () => {
+    const genieStart = '/api/v1/genie/start';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: genieStart, method: 'POST' })))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: genieStart, method: 'GET' })))).toBe(false);
+    const savedViews = '/api/v1/workspace/saved-views';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: savedViews, method: 'POST' })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE, method: null })))).toBe(false);
+  });
+
+  it('never refetches a query that opted out of the reconnect refetch', () => {
+    // TanStack never calls the default for such a query; the "Connection lost"
+    // recovery shares this predicate, so the opt-out holds there too.
+    const optedOut = { refetchOnReconnect: false };
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable'), undefined, optedOut))).toBe(false);
+    expect(
+      refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE }), undefined, optedOut)),
+    ).toBe(false);
+    // Unless it is one reviewed audit-free read (meta.oneAuditFreeRead, connectionState.test.ts):
+    // then only "Connection lost" calls this for it, and its failed request must be on the list.
+    const declared = { oneAuditFreeRead: true };
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { path: AUDIT_FREE }), declared, optedOut))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable'), declared, optedOut))).toBe(false);
+  });
+});
+
+describe('createMipQueryClient on reconnect', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true);
+  });
+
+  it('never re-reads a served stale query, and completes one that never reached the server', async () => {
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const served = vi.fn(async () => 'rows');
+    let reachable = false;
+    const neverReached = vi.fn(async () => {
+      if (!reachable) {
+        reachable = true;
+        throw failure('unreachable');
+      }
+      return 'rows';
+    });
+    // staleTime 0: both are stale at once, as every read is once its window has passed.
+    const servedObserver = new QueryObserver(client, { queryKey: ['mip', 'leads', 'served'], queryFn: served, staleTime: 0 });
+    const failedObserver = new QueryObserver(client, { queryKey: ['mip', 'borrower', 'failed'], queryFn: neverReached, staleTime: 0 });
+    const unsubscribe = [servedObserver.subscribe(() => undefined), failedObserver.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(servedObserver.getCurrentResult().status).toBe('success'));
+      await vi.waitFor(() => expect(failedObserver.getCurrentResult().status).toBe('error'));
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+
+      await vi.waitFor(() => expect(failedObserver.getCurrentResult().status).toBe('success'));
+      expect(neverReached).toHaveBeenCalledTimes(2);
+      expect(served).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+    }
+  });
+
+  it('never re-reads a read the server answered 200 whose body was lost mid-transfer', async () => {
+    // Through the real transport: the second response's body stream breaks
+    // after its 200, as when the network drops mid-transfer. The server
+    // served that read, so an audited one has written its row already.
+    const encoder = new TextEncoder();
+    const responses = [
+      () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('{"rows": ['));
+              controller.error(new TypeError('network connection was lost'));
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    ];
+    const fetchMock = vi.fn(async () => {
+      const next = responses.shift();
+      if (!next) throw new Error('unexpected extra request');
+      return next();
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const observer = new QueryObserver(client, {
+      queryKey: ['mip', 'leads', 'body-lost'],
+      queryFn: ({ signal }) => getJson<{ rows: unknown[] }>('/leads', signal),
+      staleTime: 0,
+    });
+    // The control: a read that got no status, which the same reconnect completes.
+    let reachable = false;
+    const neverReached = vi.fn(async () => {
+      if (!reachable) {
+        reachable = true;
+        throw failure('unreachable');
+      }
+      return 'rows';
+    });
+    const control = new QueryObserver(client, { queryKey: ['mip', 'borrower', 'no-status'], queryFn: neverReached, staleTime: 0 });
+    const unsubscribe = [observer.subscribe(() => undefined), control.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(observer.getCurrentResult().status).toBe('success'));
+      await vi.waitFor(() => expect(control.getCurrentResult().status).toBe('error'));
+      // An explicit refetch (a Refresh): the server answers 200, the body is lost.
+      await observer.refetch();
+      const error = observer.getCurrentResult().error;
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).reason).toBe('unreachable');
+      expect((error as ApiError).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      // One reconnect pass decides every query: once the control has re-read,
+      // a re-read of the answered one would already have called fetch.
+      await vi.waitFor(() => expect(control.getCurrentResult().status).toBe('success'));
+      expect(neverReached).toHaveBeenCalledTimes(2);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(observer.getCurrentResult().status).toBe('error');
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('completes an audit-free read whose 200 body was lost, beside an audited one it never re-reads', async () => {
+    // Through the real transport, both answered 200 and lost their body. The
+    // analytics read writes no row (lib/auditFreeReads), so the reconnect
+    // completes it and the panel loads by itself; /leads wrote VIEW_LEADS.
+    const encoder = new TextEncoder();
+    const ok = () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const bodyLost = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"rows": ['));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const scripted: Record<string, Array<() => Response>> = {
+      '/api/v1/leads': [ok, bodyLost],
+      '/api/v1/analytics/executive': [ok, bodyLost, ok],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, 'http://app.test');
+      const next = scripted[url.pathname]?.shift();
+      if (!next) throw new Error(`unexpected request ${url.pathname}`);
+      return next();
+    });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(([input]) => new URL(String(input), 'http://app.test').pathname === pathname).length;
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const audited = new QueryObserver(client, {
+      queryKey: ['mip', 'leads', 'body-lost-audited'],
+      queryFn: ({ signal }) => getJson<{ rows: unknown[] }>('/leads', signal),
+      staleTime: 0,
+    });
+    const auditFree = new QueryObserver(client, {
+      queryKey: ['mip', 'analytics', 'body-lost-audit-free'],
+      queryFn: ({ signal }) => getJson<{ rows: unknown[] }>('/analytics/executive', signal),
+      staleTime: 0,
+    });
+    const unsubscribe = [audited.subscribe(() => undefined), auditFree.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(audited.getCurrentResult().status).toBe('success'));
+      await vi.waitFor(() => expect(auditFree.getCurrentResult().status).toBe('success'));
+      // A Refresh of each: the server answers 200 and the body is lost.
+      await Promise.all([audited.refetch(), auditFree.refetch()]);
+      for (const observer of [audited, auditFree]) {
+        const error = observer.getCurrentResult().error;
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).reason).toBe('unreachable');
+        expect((error as ApiError).status).toBe(200);
+        expect((error as ApiError).method).toBe('GET');
+      }
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      // One reconnect pass decides both: once the audit-free read has
+      // re-read, a re-read of the audited one would already have called fetch.
+      await vi.waitFor(() => expect(auditFree.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/analytics/executive')).toBe(3);
+
+      expect(calls('/api/v1/leads')).toBe(2);
+      expect(audited.getCurrentResult().status).toBe('error');
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('completes a reviewed POST read whose 200 body was lost, never a POST the list names only as a GET', async () => {
+    // Ask Genie's starters read with a POST and write no row; a query that
+    // POSTs to /workspace/saved-views (a write: SAVE_QUEUE_VIEW) is not that
+    // read, though its GET is on the list.
+    const encoder = new TextEncoder();
+    const ok = () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const bodyLost = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"rows": ['));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const scripted: Record<string, Array<() => Response>> = {
+      '/api/v1/genie/start': [bodyLost, ok],
+      '/api/v1/workspace/saved-views': [bodyLost],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, 'http://app.test');
+      const next = scripted[url.pathname]?.shift();
+      if (!next) throw new Error(`unexpected request ${url.pathname}`);
+      return next();
+    });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(([input]) => new URL(String(input), 'http://app.test').pathname === pathname).length;
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const starters = new QueryObserver(client, {
+      queryKey: ['mip', 'genie', 'start', 'body-lost'],
+      queryFn: ({ signal }) => postJson<{ rows: unknown[] }, { context: object }>('/api/genie/start', { context: {} }, signal),
+      staleTime: 0,
+    });
+    const savedViewWrite = new QueryObserver(client, {
+      queryKey: ['mip', 'workspace', 'saved-view-post', 'body-lost'],
+      queryFn: ({ signal }) =>
+        postJson<{ rows: unknown[] }, { name: string }>('/api/workspace/saved-views', { name: 'x' }, signal),
+      staleTime: 0,
+    });
+    const unsubscribe = [starters.subscribe(() => undefined), savedViewWrite.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(starters.getCurrentResult().status).toBe('error'));
+      await vi.waitFor(() => expect(savedViewWrite.getCurrentResult().status).toBe('error'));
+      for (const observer of [starters, savedViewWrite]) {
+        const error = observer.getCurrentResult().error as ApiError;
+        expect(error.status).toBe(200);
+        expect(error.method).toBe('POST');
+      }
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      await vi.waitFor(() => expect(starters.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/genie/start')).toBe(2);
+
+      expect(calls('/api/v1/workspace/saved-views')).toBe(1);
+      expect(savedViewWrite.getCurrentResult().status).toBe('error');
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('createMipQueryClient: the cohort POST reads of Home and the Portfolio builder', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('completes a preview or a recommendation whose 200 body was lost, on a reconnect and on "Connection lost"', async () => {
+    // Home's KPI row and the builder preview read POST /portfolio/preview, and
+    // the builder reads POST /portfolio/campaign-recommendation: neither writes
+    // a row (backend/api/portfolio.py), so a lost answer is completed like a
+    // read that never reached the server.
+    const encoder = new TextEncoder();
+    const ok = () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const bodyLost = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"rows": ['));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const scripted: Record<string, Array<() => Response>> = {
+      '/api/v1/portfolio/preview': [bodyLost, ok],
+      '/api/v1/portfolio/campaign-recommendation': [bodyLost, ok],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, 'http://app.test');
+      const next = scripted[url.pathname]?.shift();
+      if (!next) throw new Error(`unexpected request ${url.pathname}`);
+      return next();
+    });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(([input]) => new URL(String(input), 'http://app.test').pathname === pathname).length;
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const read = (key: string, path: string) =>
+      new QueryObserver(client, {
+        queryKey: ['mip', 'portfolio', key, 'body-lost'],
+        queryFn: ({ signal }) => postJson<{ rows: unknown[] }, { criteria: object }>(path, { criteria: {} }, signal),
+        staleTime: 0,
+        retry: false,
+      });
+    const unsubscribe: Array<() => void> = [];
+    try {
+      const preview = read('preview', '/api/portfolio/preview');
+      unsubscribe.push(preview.subscribe(() => undefined));
+      await vi.waitFor(() => expect(preview.getCurrentResult().status).toBe('error'));
+      const lost = preview.getCurrentResult().error as ApiError;
+      expect([lost.status, lost.method]).toEqual([200, 'POST']);
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      await vi.waitFor(() => expect(preview.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/portfolio/preview')).toBe(2);
+
+      const recommendation = read('campaign-recommendation', '/api/portfolio/campaign-recommendation');
+      unsubscribe.push(recommendation.subscribe(() => undefined));
+      await vi.waitFor(() => expect(recommendation.getCurrentResult().status).toBe('error'));
+      // A reachable probe after failed ones (the "Connection lost" banner clearing).
+      refetchUnreachableQueries(client);
+      await vi.waitFor(() => expect(recommendation.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/portfolio/campaign-recommendation')).toBe(2);
+      expect(calls('/api/v1/portfolio/preview')).toBe(2);
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+    }
   });
 });
 

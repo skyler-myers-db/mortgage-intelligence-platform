@@ -100,6 +100,8 @@ export default function RevokeApprovalPanel({
     retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    // One audit-free GET: "Connection lost" clearing may complete it (connectionState).
+    meta: { oneAuditFreeRead: true },
   });
   const life = approvalId === null ? lifecycle.data : null;
   const target = approvalId ?? (life?.approval_status === 'approved' ? life.approval_id ?? null : null);

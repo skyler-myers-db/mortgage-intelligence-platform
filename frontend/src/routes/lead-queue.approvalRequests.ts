@@ -78,6 +78,8 @@ export function useLeadQueueApprovalRequests({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: false,
+    // One audit-free GET: "Connection lost" clearing may complete it (connectionState).
+    meta: { oneAuditFreeRead: true },
   });
   const { data, isError, refetch } = query;
   const derived = useMemo(
