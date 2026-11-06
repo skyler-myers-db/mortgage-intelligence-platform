@@ -37,7 +37,10 @@ still refuse (``test_prestop_refusal_matrix.py``).
 from __future__ import annotations
 
 import importlib.util
+import itertools
+import os
 import re
+import shutil
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -212,15 +215,42 @@ def test_only_the_refusal_and_its_records_name_the_refused_flag() -> None:
     assert counts["scripts/deploy.sh"] > 0, "the positive control: the refusal names it"
 
 
+def _without_comment(line: str) -> str:
+    """``line`` up to its shell comment: a ``#`` that starts a word outside quotes."""
+
+    quote, escaped = "", False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1] in " \t|&;()<>"):
+            return line[:index].rstrip()
+    return line
+
+
+def test_the_comment_cut_keeps_code_and_drops_whole_line_and_trailing_comments() -> None:
+    assert _without_comment('  # X="$(dotenv_value F)"') == ""
+    assert _without_comment('X="" # X="$(dotenv_value F)"') == 'X=""'
+    assert _without_comment('X="";# X="$(dotenv_value F)"') == 'X="";'
+    for code in ('echo "a # b"', "echo 'a # b'", 'echo "${#X}" $#', r"echo a\ \#b", 'X="$(f "#")"'):
+        assert _without_comment(code) == code
+
+
 def test_the_refusal_still_reads_every_source_and_refuses_anything_but_zero() -> None:
-    """The guard's shape and position; test_prestop_refusal_matrix.py runs it from each source."""
+    """The guard's shape and position; the matrix below and test_prestop_refusal_matrix.py run it."""
 
     script = deploy_contract_text()
     assert script.count(_GUARD_START) == 1 and script.count(_GUARD_END) == 1
     before, rest = script.split(_GUARD_START, 1)
     commented, after = rest.split(_GUARD_END, 1)
-    # Only code counts: a comment that kept an old read would satisfy a substring.
-    guard = "\n".join(line for line in commented.splitlines() if not line.lstrip().startswith("#"))
+    # Only code counts: a whole-line or trailing comment that kept an old read
+    # would satisfy a substring.
+    guard = "\n".join(_without_comment(line) for line in commented.splitlines())
 
     # Each source on its own, so an export of 0 cannot mask a .env.local request.
     assert f'_REMEDIATE_FOREIGN_CATALOG_BINDINGS="${{{REFUSED_FLAG}:-0}}"' in guard
@@ -239,6 +269,53 @@ def test_the_refusal_still_reads_every_source_and_refuses_anything_but_zero() ->
     entrypoint = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
     first_step = re.search(r'(?m)^\. "\$REPO_ROOT/scripts/lib/deploy_step_\w+\.sh"$', entrypoint)
     assert first_step and entrypoint.index(_GUARD_END) < first_step.start()
+
+
+def _bashes() -> list[str]:
+    found: list[str] = []
+    for candidate in ("/opt/homebrew/bin/bash", "/usr/local/bin/bash", shutil.which("bash"), "/bin/bash"):
+        if candidate and Path(candidate).exists() and candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def _run_guard(bash: str, export: str | None, dotenv: str | None) -> subprocess.CompletedProcess[str]:
+    """Execute the guard as the deploy sources it, with ``dotenv_value`` reading a stub .env.local."""
+
+    script = deploy_contract_text()
+    block = script[script.index(_GUARD_START) : script.index(_GUARD_END) + len(_GUARD_END)]
+    harness = (
+        "set -euo pipefail\n"
+        "RED=''; RST=''\n"
+        f'dotenv_value() {{ [[ "$1" != {REFUSED_FLAG} ]] || printf \'%s\\n\' "${{STUB_DOTENV:-}}"; }}\n'
+        f"{block}"
+        # The guard unsets its own variables, so nothing it read outlives it.
+        'echo "reached${_REMEDIATE_FOREIGN_CATALOG_BINDINGS+ leaked}"'
+        '"${_REMEDIATE_FOREIGN_CATALOG_BINDINGS_DOTENV+ leaked}"\n'
+    )
+    env = {key: value for key, value in os.environ.items() if not key.startswith("MIP_")}
+    env.pop("STUB_DOTENV", None)
+    if export is not None:
+        env[REFUSED_FLAG] = export
+    if dotenv is not None:
+        env["STUB_DOTENV"] = dotenv
+    return subprocess.run([bash, "-c", harness], env=env, capture_output=True, text=True, timeout=60, check=False)
+
+
+@pytest.mark.parametrize("bash", _bashes())
+def test_the_executed_refusal_refuses_anything_but_zero_from_either_source(bash: str) -> None:
+    """Executed, not grepped: each source on its own, and an export of 0 never masks .env.local."""
+
+    values = (None, "", "0", "1", "true", "false")
+    wrong: list[str] = []
+    for export, dotenv in itertools.product(values, values):
+        refused = export not in (None, "", "0") or dotenv not in (None, "", "0")
+        proc = _run_guard(bash, export, dotenv)
+        outcome = (proc.returncode, proc.stdout, f"[deploy] {REFUSED_FLAG} is refused" in proc.stderr)
+        if outcome != ((2, "", True) if refused else (0, "reached\n", False)):
+            wrong.append(f"export={export!r} .env.local={dotenv!r}: {outcome}")
+
+    assert wrong == []
 
 
 def test_the_read_only_binding_check_keeps_its_reviewed_binding_types() -> None:
