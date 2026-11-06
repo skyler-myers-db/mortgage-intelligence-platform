@@ -282,6 +282,52 @@ summary's `resources.apps.mip_app.source_code_path` equals
 resource payload (which may not carry it). The first governed
 `deploy-dev.yml` run on the CI install is the proof.
 
+### A prebuilt release (M1-PR7)
+
+`./scripts/deploy.sh --prebuilt-release <dir>` takes step 1's two outputs
+from a folder built elsewhere instead of building them: `frontend/dist` and
+the staged closure with its manifest. `deploy-dev.yml` uses it so that its
+`deploy` job, the one that holds an ID token, runs no Node and no npm; its
+`build` job, which holds none, makes the folder. The layout and the checks are
+`tools/databricks/prebuilt_release.py`'s:
+
+- `SHA256SUMS.json` lists every file of `dist/`, `app-release/` (the stage's
+  `source/` and `manifest.json`) and `wheelhouse/` with its sha256 and size,
+  plus the commit and the sha256 of the `requirements-deploy.hashes.txt` the
+  wheelhouse came from. The build job prints the manifest's own sha256.
+- `MIP_PREBUILT_RELEASE_SHA256` must be that sha256 (a one-run export, never
+  `.env.local`). Before any Databricks call, in a dry run too, deploy.sh
+  re-hashes every file and refuses a missing, extra, resized or changed one,
+  a symlink or other non-regular file, a listed path that is not a plain
+  relative path, an empty part, another commit or another requirements file.
+- The manifest proves transport only: the build job runs npm, and both
+  manifests are its own word. So every check also re-derives the release's
+  tracked half from the deploying checkout's own commit, with the stage's
+  git-side plan and refusals (`app_runtime_closure.tracked_blobs`): the files
+  `app-release/source` holds outside `frontend/dist` must be exactly the
+  closure files git tracks at the commit, each with its blob's size and
+  sha256; `app-release/source/frontend/dist` must be `dist/`;
+  `app-release/manifest.json` must be this commit's release manifest and list
+  exactly the staged files; and the staged dist must pass the stdlib dist
+  review again, against the commit's `frontend/public`. A `.br`'s decode check
+  needs node, which the deploy job does not run, so those are the build job's
+  check alone, as every byte of the built JavaScript is the build job's. Only
+  the dist's bytes come from the build job.
+- Step 1 re-hashes it again, replaces `frontend/dist` and
+  `.databricks/app-release` whole with copies, re-hashes the copies and reads
+  the release id from the staged manifest as usual (`app_release_contract
+  release-id --expected-commit`). No npm runs, and the frontend dependency
+  check is skipped.
+- Every tenant build input vite bakes into the dist refuses a prebuilt
+  release: a configured lender mark (`MIP_LENDER_MARK_FILE`, a local file the
+  build job cannot see) and a `MIP_DEFAULT_THEME` or `MIP_DEFAULT_ACCENT`
+  other than the product default (`dark`, `bright`), which the build job
+  never sets. The first re-hash reads all three as the preflight does (shell,
+  then `.env.local`) and refuses before any Databricks call, so a live run
+  never reaches the lease, the rollback scope or the runtime secrets; step 1
+  checks the preflight's resolved values again. Such a release builds
+  locally.
+
 ## Emergency recovery: a slim per-release App source folder
 
 **Emergency recovery only. The command of record is `./scripts/deploy.sh -t
@@ -733,6 +779,21 @@ uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 \
 python tools/requirements_digest.py --write   # only uv.lock and requirements.in are digested
 ```
 
+**The deploy job's hashed install (M1-PR7).** `requirements-deploy.hashes.txt`
+is `uv.lock` again, with every distribution's sha256: the App runtime closure
+only, never the dev tools. `deploy-dev.yml`'s `build` job (no ID token)
+downloads its wheelhouse from it, and the `deploy` job installs from that
+wheelhouse alone (`pip install --no-index --find-links <wheelhouse>
+--require-hashes`), so no package index is reached by a job that can request
+an ID token. Every `uv.lock` refresh regenerates it in the same change
+(`tests/unit/test_requirements_deploy_hashes.py` fails until it does):
+
+```bash
+uv pip compile requirements.in -c uv.lock --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_28 --generate-hashes --format requirements.txt \
+  --output-file requirements-deploy.hashes.txt
+```
+
 Both locks are compiled for the App's platform (next section). The dev
 closure has no machine-keyed dependency today: compiled for
 `aarch64-apple-darwin` and for `x86_64-manylinux_2_28`, it pins the same 20
@@ -912,9 +973,9 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    the apply), and refuses when it names another warehouse than the state
    binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
    resource uses the bundle's own warehouse.
-   `deploy-dev.yml` and `nightly.yml` are Entrada CI only, and both are parked
-   until a client environment is selected (M1-PR7): their first job refuses
-   every dispatch. The command of record is `./scripts/deploy.sh -t client`.
+   `deploy-dev.yml` runs one client environment's phase per manual dispatch
+   (M1-PR7), and `nightly.yml` stays parked until M1-PR8. The command of
+   record is `./scripts/deploy.sh -t client`, which `deploy-dev.yml` runs.
    Before the first deployment into an isolated workspace, run:
 
 ```bash
@@ -997,9 +1058,10 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
   `cotality_source_*` bundle variables. `databricks.yml` hands those to the
   feature pipeline's configuration. The pipeline has no default source: a run
   whose configuration does not name one fails before it reads a table.
-- These are local deploy controls for now. `deploy-dev.yml` and `nightly.yml`
-  are parked and do not forward them; per-client CI reads them from the
-  client profile once M1-PR7 lands.
+- Locally they are local deploy controls in `.env.local`. They are client
+  profile fields: public, so in CI they are variables of the client's GitHub
+  Environment, which `deploy-dev.yml` reads whole through the
+  resolve-client-profile action (M1-PR7); `nightly.yml` stays parked.
 - The App reads the same three names as settings
   (`backend/config/cotality_source_settings.py`), canonical when unset, with
   the same refusals. `app_deploy_payload.py` sends a name to the App only when
@@ -1223,8 +1285,8 @@ configure the two distinct Ed25519 private keys
 secrets documented below. Store its derived public key separately as the
 `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` GitHub Actions variable; nightly
 read-only jobs never receive the private key. Only then run
-`./scripts/deploy.sh -t client` for a client install (`deploy-dev.yml` is
-parked; see "CI deploy (deploy-dev.yml): parked" below). Bundle apply first
+`./scripts/deploy.sh -t client` for a client install (`deploy-dev.yml` in
+CI; see "CI deploy (deploy-dev.yml): one client environment per dispatch" below). Bundle apply first
 creates only non-App dependencies. Deploy then resolves their concrete IDs and
 applies the App resource bindings without a source deployment: a new App is
 created stopped with `--no-compute`, while an existing App update must preserve
@@ -1271,8 +1333,9 @@ unreferenced immutable checkpoint, but cannot publish a lease successor or
 alter another holder's map entry; checkpoint history is never deleted. Active
 leases have a six-hour absolute lifetime. Keep every retired
 public key, oldest first, in the public GitHub Actions variable
-`MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`; private keys are still destroyed
-at retirement. Each successor records the public-key epoch and rejects epoch
+`MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (`deploy-dev.yml` does not carry
+it yet: owner step 6 under "CI deploy (deploy-dev.yml)"); private keys are
+still destroyed at retirement. Each successor records the public-key epoch and rejects epoch
 regression. The signed chain retains its original recovery root through every
 release by the same holder. A new holder with no signed history begins a
 separate root, while a returning holder discovers its newest historical root
@@ -3023,8 +3086,9 @@ it could not prove, or a dead-man that has not reached its deadline. That is
 the owner break-glass case: a raw `apps start` with the owner's U2M profile,
 then the next governed run re-pins (M2-PR9 documents it).
 
-**The workflow.** `deploy-dev.yml` stays parked (M1-PR7). Its deploy job's
-first step records `MIP_JOB_DEADLINE_EPOCH`, and its last step, `if: always()`,
+**The workflow.** `deploy-dev.yml`'s deploy job (M1-PR7) first records
+`MIP_JOB_DEADLINE_EPOCH` from its phase's own timeout, and a step after the
+run, `if: always()`,
 runs the read-only `quiesce_window status --unverified` and records the
 journal's and the dead-man's states as codes only. That step has no key
 registry (deploy.sh derives the verify key inside its own process), so it
@@ -3053,7 +3117,7 @@ runs). A live phase is CI-only; locally every phase runs with `--dry-run`.
 
 | Phase | Lease | What it does |
 |---|---|---|
-| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. Nothing is written to the workspace: its pre-stop probes run with `--genie-turn off`, so the one Genie turn they otherwise ask (the probes' only call that is not a GET or a list; it opens a conversation) is the release's alone. The PlanReport upload to the plan-reports folder is M1-PR7's. `tests/unit/test_plan_phase_live_sandbox.py` runs the real `--phase plan` live (`DRY_RUN=0`) from its first line, preflight included, in the offline release sandbox (core tier) and pins every Databricks CLI call (the version check alone) and every tool it runs, with the arguments that make each read-only; its local `-c` and heredoc programs are recorded by kind. `tests/unit/test_plan_phase_live_shape.py` pins the automation step's commands after the preflight in the agentic tier. |
+| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. No governed resource is changed: its pre-stop probes run with `--genie-turn off`, so the one Genie turn they otherwise ask (the probes' only call that is not a GET or a list; it opens a conversation) is the release's alone. It prints the sha256 of the App's active deployment id (`tools/databricks/active_deployment_pin.py digest`), and under GitHub Actions publishes the PlanReport in its two halves (M1-PR7): `PlanReport.public_summary()` to the step summary and `PlanReport.full()` create-only to `<deployer root>/plan-reports/<run id>-<attempt>.json` in the client workspace, whether the gate passed or refused. That create-only file is the plan phase's one workspace write. `tests/unit/test_plan_phase_live_sandbox.py` runs the real `--phase plan` live (`DRY_RUN=0`) from its first line, preflight included, in the offline release sandbox (core tier) and pins every Databricks CLI call (the version check alone) and every tool it runs, with the arguments that make each read-only; its local `-c` and heredoc programs are recorded by kind. `tests/unit/test_plan_phase_live_shape.py` pins the automation step's commands after the preflight in the agentic tier. |
 | `release` | yes | The run with no `--phase` minus exactly the data jobs of steps 6-9b (silver, gold and its grant reconcile, the stale-rate guard, the lifecycle sync and the KPI snapshot), which it never runs, submits or triggers. It prints `data jobs deferred to --phase data`. In the core tier it is the core release path (M2-PR7b) with the same data jobs deferred. |
 | `data` | yes, its own | Silver (unless `--skip-silver`), then `mip_scheduled_refresh` (FRED, gold, lifecycle mirror, KPI snapshot and its outcome gate), each followed by the reviewed-function grant reconcile and verify when its graph touches gold, then the data smoke. No pre-stop probe, no bundle plan or apply, and no Apps write: its Apps calls are reads only, the preflight's (`apps list`, `apps get`) and the App identity pinned to its signed rollback record. |
 
@@ -3712,9 +3776,11 @@ refused everywhere, the deploy, the App and the Lakebase migration can never
 serve two different records, and every verified App boot writes a
 `LENDER_IDENTITY_VERIFIED` audit row naming the digest. The pin is not an
 independent approval: it travels in the same configuration as the record, so
-whoever can set a deploy's configuration can acknowledge a record, and no
-workflow carries it through a GitHub Environment approval yet
-(`deploy-dev.yml` is parked until a client environment is selected, M1-PR7).
+whoever can set a deploy's configuration can acknowledge a record. Since
+M1-PR7 `deploy-dev.yml` carries it as a secret of the client's GitHub
+Environment, behind that environment's approval, which in
+`single_maintainer_audited` mode is an audited self-approval, not an
+independent review.
 A trust anchor outside that configuration is the owner attestation, deferred
 with the rest of plan M1-PR5.
 
@@ -4315,7 +4381,7 @@ that is not PAUSED) in three places:
 **Live effect.** None until a governed release deploys this bundle. The live
 jobs keep their deployed run_as and sources until then.
 
-## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
+## CI deploy (deploy-dev.yml): one client environment per dispatch, and the release-gate bootstrap
 
 Decision D-platform-process-b step 7 (audit quality-03, report 12.4 #8). The
 release gate above needs one green `live validation (on demand)` run on
@@ -4323,19 +4389,184 @@ release gate above needs one green `live validation (on demand)` run on
 2026-10-14, so the gate reads `no_green_run` until a CI install is green
 again.
 
-**Status: parked until a client environment is selected (M1-PR7).** The CI
+**Status: one client environment per manual dispatch (M1-PR7).** The CI
 staging install this section bootstrapped lived in its own workspace, which
-was deleted on 2026-10-29. Both CI workflows now refuse up front: the first
-job of `deploy-dev.yml` and of `nightly.yml`, `parked`, fails every dispatch,
-and every other job needs it, so no job requests the environment approval or
-an ID token, or reaches a workspace. `scripts/deploy.sh` repeats the refusal
-for the `deploy-dev.yml` workflow ref under GitHub Actions, before any
-Databricks call and in a dry run too; an operator run and CI's own pytest are
-unchanged. M1-PR7 rebuilds `deploy-dev.yml` per client environment, and
-M1-PR8 rebuilds `nightly.yml` per client under a non-admin validator
+was deleted on 2026-10-29. `deploy-dev.yml` now deploys one client per
+dispatch: `client` names the client's GitHub Environment, which holds the
+whole client profile (public fields as variables, identifying and secret
+fields as secrets; tools/clients/schema.py), and `phase` is the
+`scripts/deploy.sh --phase` the run executes. Nothing client-specific lives in
+the workflow, and only a manual `workflow_dispatch` reaches it. `nightly.yml`
+stays parked until M1-PR8 rebuilds it per client under a non-admin validator
 identity. M1-PR2 replaced the bundle's `dev` and `prod` targets with the one
 host-less `client` target, rooted at the client profile's deployer and client
 key.
+
+**The jobs.**
+
+- `refuse-unacknowledged` and `check-dispatch` run first. Without
+  `acknowledge_single_maintainer_break_glass=true` the run ends in the first.
+  The second refuses step debug logging (it traces every expression with its
+  operands, a variable's value included), a client key that is not
+  `MIP_CLIENT`-shaped or names an environment that is not a client's (`dev`,
+  `copilot`, `github-pages`), and a phase outside the five, before any job
+  names an environment: GitHub creates an environment, unprotected, the first
+  time a job references a name it does not know. It also refuses while any
+  profile field or alias name is set as a repository- or organization-level
+  variable or secret, and prints those names (never a value): it runs in no
+  environment, so it sees only those scopes, and GitHub merges them into
+  every client environment's contexts, silently filling a field the
+  environment omits (tools/clients/workflow_contexts.py).
+- `build` has no ID token, no environment and no secret. It runs `npm ci` and
+  the vite build, stages the App runtime closure
+  (`app_runtime_closure stage --require-brotli-check`), downloads a wheelhouse
+  from `requirements-deploy.hashes.txt` with `pip download --require-hashes
+  --only-binary=:all:`, seals all three under `SHA256SUMS.json`
+  (tools/databricks/prebuilt_release.py) and uploads them as the
+  `prebuilt-release` artifact, one day's retention. The manifest's sha256 is
+  the job's output.
+- `deploy` runs in the client's environment (`environment: ${{ inputs.client
+  }}`), in a non-cancelling lane per client (`mip-client-<client>`), with
+  `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
+  Its timeout is the phase's: plan 30, release 330, data 330, adopt and
+  unadopt 60 minutes, and its first step turns that into
+  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. It re-hashes
+  the artifact against the build job's
+  manifest digest, and checks its staged App source against its own checkout
+  of the commit, before it installs anything, installs with
+  `pip install --no-index --find-links <wheelhouse> --require-hashes`, runs the
+  collect step, the resolve-client-profile action, the OIDC proof and the
+  dispatch preflight,
+  then `./scripts/deploy.sh -t client --phase <phase> --no-confirm
+  --prebuilt-release <dir>` with `MIP_REDACT_FOREIGN_NAMES=1`, records the
+  quiesce window journal and deletes the profile files. Under this workflow's
+  ref `scripts/deploy.sh` refuses any run that names no `--phase` or no
+  `--prebuilt-release`, before it prints anything.
+
+**The collect step** is the one step that reads `vars` or `secrets`. The
+runner prints a step's `with:` and `env:` values in its log header before the
+step runs, and only secrets are masked there: a variable prints in clear, and
+the run logs are public. So no step holds `toJSON(vars)` or
+`toJSON(secrets)` (that would print every repository-, organization- and
+environment-level variable and carry every repository secret into the job).
+The collect step binds each public profile name from `vars` by value, each
+profile name from `secrets` by value (the runner masks each), and each
+identifying or secret name only by whether `vars` holds it, so a misfiled one
+prints its name and refuses; no other variable or secret reaches the job. It
+writes the two objects to `$RUNNER_TEMP`, mode 0600 and create-only, and
+prints counts only. Its env is generated from tools/clients/schema.py (`python
+-m tools.clients.workflow_contexts print`), and a test holds the workflow
+equal to it and parses every other expression in it.
+
+**The resolve-client-profile action** (`.github/actions/resolve-client-profile`)
+takes the collect step's two files. Its first step registers
+every identifying leaf, and each spelling the deploy derives from one (lower
+case, the host origin), as a runner mask (`python -m tools.clients mask`),
+before anything else prints. Then `tools/clients/ci_profile.py` writes
+`.env.local` (the whole profile, as an operator's: `scripts/deploy.sh`
+un-exports every credential, so each child that resolves the profile reads the
+secret fields there) and the github-oidc `DEFAULT` profile, both create-only
+and mode 0600, and outputs public values only. Identifying fields come from
+secrets only: the resolver refuses an identifying or secret field found in a
+variable, and a public one found in a secret.
+
+**The dispatch preflight** (`tools/clients/dispatch_preflight.py`) prints codes,
+counts, digests, field names and tracked paths only, and appends them to the
+step summary. The owner hardware-key attestation layer (plan M1-PR5) is
+deferred, so every attestation is an exact digest ack over a purpose-named
+body (`tools/clients/dispatch_acks.py`); an ack for one purpose never
+satisfies another:
+
+- the workflow is `deploy-dev.yml` on `main`, dispatched by hand;
+- `single_maintainer_audited` needs the break-glass acknowledgement; approval
+  provenance is "not applicable (single_maintainer_audited)", and the
+  `independent` mode is refused by the profile schema until M1-PR5. The
+  preflight also refuses `approval_provenance` for every mode but
+  `single_maintainer_audited` on its own, and the workflow's
+  `refuse-unacknowledged` job needs the break-glass for every dispatch, so an
+  independent mode needs that gate changed as well;
+- the trust-root chain is reported "deferred (M1-PR5)": nothing verifies a
+  hardware-key signature or a chain;
+- `owner_attestation` must be the exact `profile` ack (purpose, client and
+  profile digest) for every mutating phase; a plan prints it;
+- `operation_acks` carries `purpose=<sha256>` pairs from a closed map
+  (`adopt_plan`, `quiesce_window`, `database_instance_update`, `genie_pin`,
+  `accepted_exposure_plan`, `data_ledger_supersede`, `data_ledger_rerun`),
+  each admitted only in the phases whose run reads it and exported for this
+  job under the name its own tool recomputes it from;
+- the environment's protection rules are read with the job's token and must
+  be the review mode's (the maintainer as the one required reviewer,
+  `can_admins_bypass=false`, a branch policy of exactly `{main}`). Spike S8 is
+  owed: if the token cannot read them, a plan records
+  `environment_protections_unreadable`, and every mutating phase refuses
+  unless `protections_unverified_ack` is the exact ack over the client, the
+  environment and the run's head commit, which the refusal prints;
+- no tracked file holds a resolved identifying value (the tree scan names the
+  field and the file, never the value). A cloud's default account-console
+  host is no needle. Only the closed set of group names the repository itself
+  defines is reported and never refused, each in its own field:
+  `<prefix>-admin` as `MIP_ADMIN_GROUP_NAME`, `<prefix>-approver` as
+  `MIP_APPROVER_GROUP_NAME` and `<prefix>-data-owners` in
+  `MIP_UC_APPROVED_OWNER_PRINCIPALS`, with `<prefix>` the public
+  `MIP_IDENTITY_PREFIX`. Any other value, `<prefix>-` spellings and every
+  email, host, id or share included, is refused by a mutating phase;
+- `expected_active_deployment_sha256`, when given, reaches `--phase release`
+  as the one-run export `MIP_EXPECTED_ACTIVE_DEPLOYMENT_SHA256` (never a
+  `.env.local` line; a local release may export it the same way),
+  which refuses before the lease unless the App's active deployment still has
+  that digest (a plan prints it).
+
+A plan records drift, an unreadable rule set or a tree-scan hit; a mutating
+phase refuses them. **The PlanReport** goes out in two halves: the plan
+phase's step summary carries `PlanReport.public_summary()` only, and the full
+report goes create-only to the deployer's own
+`<root>/plan-reports/<run id>-<attempt>.json` in the client workspace. No
+artifact carries either.
+
+**What a client environment holds** (names only; every value lives in the
+environment). Variables, the public fields: `MIP_CLIENT`,
+`MIP_PROFILE_VERSION`, `MIP_CLOUD`, `MIP_INSTALL_CLASS`, `MIP_APP_ENV`,
+`MIP_AGENTIC_TIER`, `MIP_SCHEDULED_REFRESH`, `MIP_REVIEW_MODE`,
+`MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_LAKEBASE_SYNC_SCHEMA`,
+`MIP_APP_NAME`, `MIP_LAKEBASE_INSTANCE`, `LAKEBASE_DATABASE`,
+`MIP_RUNTIME_SECRET_SCOPE`, `MIP_APP_ROLLBACK_SECRET_SCOPE`,
+`MIP_AGENT_PROXY_SECRET_SCOPE`, `MIP_PII_SALT_SCOPE`, `MIP_GENIE_SPACE_NAME`,
+`MIP_AGENT_SUPERVISOR_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX` and
+`MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`, plus, when they apply,
+`MIP_IDENTITY_PREFIX`, `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS`,
+`MIP_PRESENTER_MODE`, `MIP_LAKEBASE_READABLE_SECONDARIES`,
+`MIP_COTALITY_SOURCE_CATALOG`, `MIP_COTALITY_SOURCE_SCHEMA`,
+`MIP_COTALITY_SOURCE_TABLE_PREFIX` and `MIP_LENDER_IDENTITY_SHA256`. Secrets,
+the identifying fields: `DATABRICKS_HOST`, `MIP_EXPECT_WORKSPACE_ID`,
+`MIP_EXPECT_METASTORE_ID`, `DATABRICKS_ACCOUNT_ID`, `MIP_IDENTITY_IDS_JSON`,
+`MIP_UC_METASTORE_OWNER` and `MIP_UC_APPROVED_OWNER_PRINCIPALS`, plus, when
+they apply, `DATABRICKS_ACCOUNT_HOST`, `MIP_GENIE_MANAGER_PRINCIPALS`,
+`MIP_SCHEDULED_REFRESH_RECIPIENTS`, `MIP_ADMIN_EMAILS`, `MIP_APPROVER_EMAILS`,
+`MIP_AUDITOR_EMAILS`, `MIP_ADMIN_IDENTITIES`, `MIP_APPROVER_IDENTITIES`,
+`MIP_AUDITOR_IDENTITIES`, `MIP_ADMIN_GROUP_NAME`, `MIP_APPROVER_GROUP_NAME`,
+`MIP_COTALITY_SHARE_PROVIDER`, `MIP_COTALITY_SHARE_NAME`,
+`MIP_UC_CATALOG_STORAGE_ROOT`, `MIP_DASHBOARD_PARENT_PATH`,
+`MIP_LEGACY_BUNDLE_ROOT`, `MIP_LENDER_IDENTITY_JSON`,
+`MIP_ACCEPTED_EXPOSURE_JSON`, `MIP_UC_INTERIM_OWNER_PAIRS_JSON` and
+`MIP_SEED_OPERATOR_EMAIL`. Secrets, the secret fields:
+`DATABRICKS_CLIENT_SECRET`, `DATABRICKS_OPERATOR2_CLIENT_SECRET`,
+`DATABRICKS_ADMIN_CLIENT_SECRET`, `DATABRICKS_RELEASE_PROBE_CLIENT_SECRET`,
+`DATABRICKS_ACCOUNT_CLIENT_SECRET` and `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
+plus, in the agentic tier, `DATABRICKS_VERIFIER_CLIENT_SECRET`,
+`DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET`,
+`DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE` and
+`MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`. No repository- or
+organization-level secret or variable may carry any of these names (owner
+step 3). The per-client workflow carries no name outside the profile: the
+Genie action key ids, the refusal-capture switch, the proof-key rotation
+inputs, the foreign-catalog binding policy, the Salesforce connector settings
+and a first install's bootstrap warehouse are no profile field, so a client
+that needs one needs it in the schema first.
+
+**The live install.** Until it is adopted, a dispatch of a mutating phase for
+the live install's environment ends in the client live checks, before the
+lease, with `adoption: existing install not adopted`, and `phase: plan` there
+reports the same refusal; nothing runs without a manual dispatch.
 
 Retired with that workspace (M0-PR3):
 
@@ -4391,43 +4622,46 @@ Never start `./scripts/deploy.sh -t client` against the live workspace during
 an incident; escalate to the owner (docs/runbook.md, section 1.2).
 
 **The CI deployer: GitHub OIDC, no stored credential.** `deploy-dev.yml`
-deploys as a dedicated account service principal, never a person and never
-one of the seven reserved identities. It has no OAuth secret and no personal
-access token: it authenticates only through GitHub Actions OIDC workload
-identity federation. Its federation policy trusts issuer
+deploys as the client's dedicated account service principal (its profile's
+`MIP_IDENTITY_IDS_JSON.deployer`), never a person and never one of the
+reserved app-facing identities. It has no OAuth secret and no personal access
+token: it authenticates only through GitHub Actions OIDC workload identity
+federation. Its federation policy trusts issuer
 `https://token.actions.githubusercontent.com` and subject
-`repo:<owner>/<repo>:environment:dev`, the default GitHub OIDC subject of a
-job bound to this repository's `dev` environment, whose required reviewer and
-branch policy gate every run; never widen it to a branch, a ref or
+`repo:<owner>/<repo>:environment:<client>`, the default GitHub OIDC subject of
+a job bound to the client's environment, whose required reviewer and branch
+policy gate every run; never widen it to a branch, a ref or
 `repo:<owner>/<repo>:*`. The owner creates and federates that service
 principal outside this repository until M2-PR1's client bootstrap does it.
 
 - The `deploy` job alone holds `id-token: write` (the workflow default stays
-  `contents: read`). The Configure step writes the `DEFAULT` profile as
-  `host`, `auth_type = github-oidc` and `client_id` from the `dev`
-  environment variable `MIP_CI_DEPLOYER_CLIENT_ID`. It refuses a deployer id
-  equal to any app-facing client id or to the account-SCIM client. The SDK
-  and the CLI exchange the job's GitHub ID token for a short-lived Databricks
-  token as that service principal; nothing is stored.
-- "Prove the GitHub OIDC deployer identity" runs next, read-only, before
-  `scripts/deploy.sh`. Its profile and host checks run first and stop the run
-  before any network call. The profile must hold only those three keys, with
-  no ambient `DATABRICKS_HOST`, `_TOKEN`, `_AUTH_TYPE`, `_CLIENT_ID`,
-  `_CLIENT_SECRET` or `_CONFIG_FILE` override, and its host must equal both
-  `DATABRICKS_HOST` and the bundle target's `workspace.host` (the `dev`
-  target's until M1-PR7). The step then proves, through the Python SDK and
-  the Go CLI, that the profile authenticates as `MIP_CI_DEPLOYER_CLIENT_ID`,
-  that this principal is in `admins` and owns the current metastore, and that
-  `DATABRICKS_WAREHOUSE_ID` resolves (the Genie space is no input since
-  M1-PR3; the deploy resolves it by its pin). The metastore-owner
-  check presumed the cancelled metastore transfer; M1-PR7 replaces it. The
-  step prints booleans only (a failed call adds its exception class or the
-  CLI's exit code, never a message or a value) and exits 2 on any mismatch.
+  `contents: read`, and the `build` job holds nothing more). The
+  resolve-client-profile action writes the `DEFAULT` profile as `host`,
+  `auth_type = github-oidc` and `client_id` from the profile; the profile's
+  `MIP_IDENTITY_IDS_JSON` refuses a deployer id equal to any other role, the
+  account-SCIM client included. The SDK and the CLI exchange the job's GitHub
+  ID token for a short-lived Databricks token as that service principal;
+  nothing is stored.
+- "Prove the GitHub OIDC deployer identity" runs next, read-only, before the
+  dispatch preflight and `scripts/deploy.sh` (tools/clients/oidc_proof.py).
+  Its profile and host checks run first and stop the run before any network
+  call. The profile must hold only those three keys, with no ambient
+  `DATABRICKS_HOST`, `_TOKEN`, `_AUTH_TYPE`, `_CLIENT_ID`, `_CLIENT_SECRET` or
+  `_CONFIG_FILE` override, its host must equal the profile's
+  `DATABRICKS_HOST`, and the bundle's `client` target must commit no host.
+  The step then proves, through the Python SDK and the Go CLI, that the
+  profile authenticates as the deployer, that this principal is in `admins`,
+  and that the workspace is `MIP_EXPECT_WORKSPACE_ID` and its current
+  metastore `MIP_EXPECT_METASTORE_ID`. The metastore-owner check, which
+  presumed the cancelled metastore transfer, and the warehouse check (the
+  bundle state binds the warehouse since M1-PR3) are gone. The step prints
+  booleans only (a failed call adds its exception class or the CLI's exit
+  code, never a message or a value) and exits 2 on any mismatch.
 - Under `github-oidc` an environment `DATABRICKS_CLIENT_ID` overrides the
-  profile's `client_id`, so no deployer step lets one reach a Databricks
-  client. The deploy step carries the App's client pairs, which
-  `scripts/deploy.sh` un-exports before its first child process.
-- The deploy step sets `MIP_TEMP_CREDENTIAL_PLANE=workspace`. The deploy's
+  profile's `client_id`, so no deployer step carries one: every client id is
+  in `.env.local`, and `scripts/deploy.sh` un-exports every App client pair
+  before its first child process.
+- The run step sets `MIP_TEMP_CREDENTIAL_PLANE=workspace`. The deploy's
   300-second identity-probe secrets are then minted, listed and deleted
   through the deployer's workspace `service_principal_secrets_proxy`. The
   2026-08-04 `invalid_client` for `mip-agent-runtime-ci-sp` came from an
@@ -4440,7 +4674,8 @@ principal outside this repository until M2-PR1's client bootstrap does it.
   is the bundle's current user and `run_as`, the deployment-lease holder,
   the release folder's principal and the reviewed functions' owner. The
   account-SCIM authority is unchanged: it is still its own
-  `DATABRICKS_ACCOUNT_CLIENT_ID`/`_SECRET` pair.
+  `DATABRICKS_ACCOUNT_CLIENT_ID`/`_SECRET` pair, the profile's
+  `account_principal` role and its secret.
 
 **Workspace-global steps.** Bundle roots, names and variables do not isolate
 identities. These steps act on a whole workspace or the whole metastore, so a
@@ -4468,10 +4703,10 @@ inventory").
 
 **The App release folder on a CI install.** The release lives at
 `/Workspace/Users/<deployer-application-id>/.bundle/mortgage-intelligence-platform/<target>/app-src/<release id>`
-("Governed per-release App source"). `deploy-dev.yml` needs no change for it:
-it already sets up Node 22, which the build and the `.br` check use, and
-installs `requirements.txt`, which brings the SDK; a shallow checkout is
-enough for `git archive`. Publish, converge and prune each validate the
+("Governed per-release App source"). `deploy-dev.yml`'s `build` job stages it
+with Node 22, which the build and the `.br` check use, and the `deploy` job
+takes it as a prebuilt release ("A prebuilt release (M1-PR7)"); a shallow
+checkout is enough for `git archive`. Publish, converge and prune each validate the
 principal, the target and the root leaf. The stage root goes away with the
 runner, and the first run is a first install, so prune has nothing to delete.
 First-run checklist for the owner-triggered run:
@@ -4584,8 +4819,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `origin`, or of the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
    names are fixed per role (`IDENTITY_DEFAULTS`). Before M2-PR2 they were
    repository-level, and in this repository they belong to the CI install:
-   `nightly.yml` reads them, and `deploy-dev.yml` reads them wherever its
-   `dev` environment does not shadow them (owner step 3). A live identity bootstrap therefore needs its own reviewed sink: another
+   the parked `nightly.yml` reads them; `deploy-dev.yml` reads none, and its
+   `check-dispatch` refuses every dispatch while one is set (owner step 3). A
+   live identity bootstrap therefore needs its own reviewed sink: another
    repository named by `MIP_M2M_GITHUB_REPOSITORY`, plus a reviewed way to
    hand the values to the operator, who cannot read GitHub secrets back. It
    stays out of scope until that design is reviewed. Never run the bootstrap
@@ -4611,59 +4847,77 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    catalog name may name a live catalog (`mip`, `mip_app_state`). Nothing
    enforces that since the CI rule table was retired; M1-PR7's client
    environment carries the names.
-3. Remove or re-set the environment-level `DATABRICKS_CLIENT_ID`
-   (2026-07-20), which shadows the rotated repository-level pair
-   (2026-07-26), and check that every environment-level `*_CLIENT_ID` pairs
-   with its own secret. Re-mint the account-SCIM credential yourself. Create
+3. Delete every repository- and organization-level secret or variable that
+   carries a client profile field or alias name, the identity aliases
+   (`DATABRICKS_CLIENT_ID` and the other `*_CLIENT_ID` names) included:
+   GitHub merges those scopes into the job's contexts with no sign of where
+   an entry came from, so a field the client's environment omits would be
+   filled from them
+   (tools/clients/environment.py, "Scope precondition"). `check-dispatch`
+   refuses every dispatch until they are gone and names each one it finds;
+   the parked `nightly.yml` that still reads some of them waits for M1-PR8
+   anyway. Delete the retired `dev` environment's variables too: no dispatch
+   may name it, and its identifying values must not stay variables. The old
+   environment-level `DATABRICKS_CLIENT_ID` (2026-07-20) and the
+   repository-level pairs (2026-07-26) are such entries: the client ids now
+   live in the environment secret `MIP_IDENTITY_IDS_JSON`, and the collect
+   step binds no identity alias, so an alias in a client environment is
+   ignored (delete it too). Re-mint the account-SCIM credential yourself. Create
    a new OAuth secret for the service principal `DATABRICKS_ACCOUNT_CLIENT_ID`
-   names and pipe it straight into `gh secret set
-   DATABRICKS_ACCOUNT_CLIENT_SECRET`; agents never handle the value. Then
+   names and pipe it straight into `gh secret set --env <client>
+   DATABRICKS_ACCOUNT_CLIENT_SECRET` (the client's environment, never the
+   repository); agents never handle the value. Then
    retire its older secrets unless something local still uses them. The
    deployer never takes this role: the account plane stays on
    `DATABRICKS_ACCOUNT_*`.
-4. Set the CI install's `DATABRICKS_WAREHOUSE_ID` secret for its own
-   workspace, never the live one. The proof step refuses it unless it
-   resolves for the deployer. (`GENIE_SPACE_ID` is no deploy input since
-   M1-PR3; `nightly.yml` still names it for its live checks.)
-5. Point the REPOSITORY-level names `nightly.yml` reads (it has no
-   `environment:`) at the same CI install as the CI environment: the
-   variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
+4. The SQL warehouse is the one the install's bundle state binds (M1-PR3).
+   A first install's bootstrap warehouse (`DATABRICKS_WAREHOUSE_ID`) is no
+   client profile field, so `deploy-dev.yml` carries none and a first install
+   through CI refuses at the preflight until that field exists (a follow-up).
+   (`GENIE_SPACE_ID` is no deploy input since M1-PR3; `nightly.yml` still
+   names it for its live checks.)
+5. Set no repository-level profile name for `nightly.yml` while
+   `deploy-dev.yml` is in use. Every profile name lives in the client's
+   environment only (`gh variable set --env <client>` for a public field,
+   `gh secret set --env <client>` for an identifying or secret one, as in
+   step 3). `nightly.yml` has no `environment:` and reads repository-level
+   names, but the ones it reads that are profile fields or aliases
+   (`MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
    `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
    `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_AGENT_PROXY_SECRET_SCOPE`,
-   `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX` and
-   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE` (and
-   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or in that install's catalog),
-   and the secrets `DATABRICKS_HOST`, `DATABRICKS_WAREHOUSE_ID` and
-   `GENIE_SPACE_ID`. Only `deploy-dev.yml` (whose dev environment shadows the
-   repository level) and `nightly.yml` read these names. Compare names and
-   `updated_at` in the repository-level listings above against the dev
-   environment's. If the repository-level values must keep naming the live
-   install, nightly cannot certify the CI install: stop and decide before
-   integrator step 5. The repository-level `DATABRICKS_TOKEN` is dead with
-   the deleted CI workspace; do not mint another one. M1-PR8 gives nightly
-   its own validator identity and federation subject. After the first green
-   `deploy-dev.yml` run, set the repository variable
-   `MIP_REVIEWED_FUNCTION_OWNER` to `<deployer-application-id>`, the reviewed
-   functions' new owner, or nightly reports owner drift.
-6. Keep `main` in the dev environment's deployment branch policy. A
-   read-only check on 2026-10-28 found it next to
-   `codex/intelligence-trust-ux`. Then make the AI Gateway proof-key registry
-   verify every signed record on the CI install (the proof-key rotation in
-   "Per-run M2M identities"). The registry
-   (`app_deployment_lease_support.key_registry`) is
-   `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (comma-separated, oldest
+   `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX`,
+   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`, `LAKEBASE_DATABASE`, the secrets
+   `DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_HOST`, `DATABRICKS_ACCOUNT_ID`,
+   `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
+   `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, every `*_CLIENT_SECRET`, and
+   every `*_CLIENT_ID` identity alias) make `check-dispatch` refuse every
+   dispatch (step 3). `nightly.yml` is parked until M1-PR8, which rebuilds
+   it per client environment with its own validator identity and federation
+   subject; its repository-level names wait for that PR. Its other names
+   (such as `DATABRICKS_WAREHOUSE_ID`, `GENIE_SPACE_ID` and
+   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`) are no profile names and are not
+   refused, but nothing reads them while it is parked. The repository-level
+   `DATABRICKS_TOKEN` is dead with the deleted CI workspace; do not mint
+   another one. After the first green `deploy-dev.yml` run, set the
+   repository variable `MIP_REVIEWED_FUNCTION_OWNER` (no profile name) to
+   `<deployer-application-id>`, the reviewed functions' new owner, or the
+   rebuilt nightly reports owner drift.
+6. The AI Gateway proof-key registry (the proof-key rotation in "Per-run M2M
+   identities"). The registry (`app_deployment_lease_support.key_registry`)
+   is `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (comma-separated, oldest
    first), then `MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY`, then the current
    key derived from `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`. It must end at the
    current key, and each signed lease record's `key_epoch` must be its
-   signing key's index, so a retired key can never become current again. If
-   the install's records carry more than one epoch, generate a new Ed25519
-   signing key yourself and store it with `gh secret set
-   MIP_AI_GATEWAY_PROOF_SIGNING_KEY`; never reuse a retired private key.
-   Set the repository variable `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`
-   to every retired public key that signed one of those records, oldest
-   first, and the repository variable `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` to
-   the new public key for nightly. `deploy-dev.yml` passes the historical
-   keys to `scripts/deploy.sh`.
+   signing key's index, so a retired key can never become current again.
+   `deploy-dev.yml` carries only the signing key, a secret of the client's
+   environment (`gh secret set --env <client>
+   MIP_AI_GATEWAY_PROOF_SIGNING_KEY`, never repository level). Neither the
+   historical keys nor the previous key is a client profile field, so it
+   carries neither: its registry is the current key alone, and a lease record
+   signed by a retired key, or under a longer registry (`key_epoch` above 0),
+   fails closed until a reviewed profile field carries the retired public
+   keys (a follow-up). Never reuse a retired private key; a rotation
+   generates a new Ed25519 signing key, and you do it yourself.
 7. Clear the step-4 and step-10b blockers. First confirm the metastore:
    `databricks metastores current` on a credential for the CI install's
    workspace returns that workspace's `workspace_id` and the `metastore_id`
@@ -4706,13 +4960,16 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    and re-bind calls (or after a killed run) every other workspace loses
    those catalogs, the live install's share catalogs included.
    `deploy-dev.yml` has no input that requests it.
-8. Once M1-PR7 lifts the parked refusal, dispatch `deploy-dev.yml` on `main`
-   with `acknowledge_single_maintainer_break_glass=true` (or approve that
-   exact dispatch in chat), then approve the pending deployment. If an App
-   with `MIP_APP_NAME` already exists in that workspace with no signed
-   rollback record, set `rebase_unverified_app=true` on this first dispatch
-   only; without it the run fails closed after the treatment quiesce and
-   leaves that App stopped.
+8. Dispatch `deploy-dev.yml` on `main` with `client=<client>`, `phase=plan`
+   and `acknowledge_single_maintainer_break_glass=true` (or approve that exact
+   dispatch in chat), then approve the pending deployment and read the step
+   summary: the refusals it collected, the profile ack and the active
+   deployment digest. Then dispatch `phase=release` with
+   `owner_attestation=<that profile ack>` (and any operation ack a tool
+   printed), and `phase=data` after it. If an App with `MIP_APP_NAME` already
+   exists in that workspace with no signed rollback record, set
+   `rebase_unverified_app=true` on that release only; without it the run fails
+   closed after the treatment quiesce and leaves that App stopped.
 
 **Integrator steps.**
 
@@ -4724,15 +4981,14 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
 3. Dispatch `deploy-prod.yml` on `main` and record the expected FAIL
    (`no_green_run`).
 
-Steps 4-6 run only after M1-PR7 selects a client environment and owner steps
-1-8 hold for it, never against the live install.
+Steps 4-6 run only once a client environment exists and owner steps 1-8
+hold for it, never against the live install.
 
 4. After the owner's dispatch and approval (owner step 8), watch
    `deploy-dev.yml` to green.
-5. Confirm owner step 5 (names and `updated_at` only: the repository-level
-   variables and secrets `nightly.yml` reads name the CI install), then
-   dispatch `nightly.yml` on the same sha and watch it. It needs M1-PR8
-   first: until then its `parked` job refuses.
+5. Dispatch `nightly.yml` on the same sha and watch it. It needs M1-PR8
+   first: until then its `parked` job refuses, and its repository-level
+   names stay unset (owner step 5).
 6. Repair stale `frontend/tests/e2e/real_data.spec.ts` assertions in a PR if
    it is red, then repeat 4-5; record the green run URL in the audit
    report; re-dispatch `deploy-prod.yml` and expect PASS.

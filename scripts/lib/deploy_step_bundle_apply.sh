@@ -52,14 +52,18 @@ step "build frontend (frontend/dist/** is uploaded by the bundle sync.include)"
 # arguments, and neither the mark's path nor the lender's name and NMLS id
 # (identifying for a pinned record) is ever logged; the tool reads the
 # MIP_LENDER_NAME / MIP_LENDER_NMLS_ID the preflight resolved and exported.
-if [[ -f tools/branding/lender_mark.py ]]; then
+# A --prebuilt-release (M1-PR7) replaces this build and the stage below with
+# the build job's re-hashed copy (scripts/lib/deploy_prebuilt_release_lifecycle.sh).
+if [[ -n "${PREBUILT_RELEASE_DIR:-}" ]]; then
+  install_prebuilt_release
+elif [[ -f tools/branding/lender_mark.py ]]; then
   run "$PYTHON" -m tools.branding.lender_mark stage --identity-env \
     --file-env MIP_LENDER_MARK_FILE \
     --expect-sha256 "$MIP_LENDER_MARK_SHA256" --out frontend/.branding-stage
 else
   rm -rf frontend/.branding-stage
 fi
-run npm --prefix frontend run build
+[[ -n "${PREBUILT_RELEASE_DIR:-}" ]] || run npm --prefix frontend run build
 
 # >>> app release source: stage >>>
 # The App never runs from the bundle files root: it only grows, and the App
@@ -73,15 +77,19 @@ run npm --prefix frontend run build
 # The release id is read back from the manifest, so a refusal there stops the
 # deploy like the build above; a dry run uses a visibly inert id.
 step "stage the App runtime closure at ${SOURCE_GIT_SHA:0:12} as a per-release source folder"
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  rm -rf -- "${APP_RELEASE_STAGE_ROOT:?}"
+if [[ -n "${PREBUILT_RELEASE_DIR:-}" ]]; then
+  echo "  staged by the build job: the prebuilt release placed it above, re-hashed"
+else
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    rm -rf -- "${APP_RELEASE_STAGE_ROOT:?}"
+  fi
+  run "$PYTHON" -m tools.databricks.app_runtime_closure stage \
+    --ref "$SOURCE_GIT_SHA" \
+    --dist frontend/dist \
+    --out "$APP_RELEASE_STAGE_ROOT/source" \
+    --manifest-out "$APP_RELEASE_MANIFEST" \
+    --require-brotli-check
 fi
-run "$PYTHON" -m tools.databricks.app_runtime_closure stage \
-  --ref "$SOURCE_GIT_SHA" \
-  --dist frontend/dist \
-  --out "$APP_RELEASE_STAGE_ROOT/source" \
-  --manifest-out "$APP_RELEASE_MANIFEST" \
-  --require-brotli-check
 if [[ "$DRY_RUN" -eq 0 ]]; then
   APP_RELEASE_ID="$("$PYTHON" -m tools.databricks.app_release_contract release-id \
     --manifest "$APP_RELEASE_MANIFEST" --expected-commit "$SOURCE_GIT_SHA")"

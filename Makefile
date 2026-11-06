@@ -118,7 +118,7 @@ bundle-deploy-dev: render-sql
 #
 # A workstation no longer deploys. The command of record is
 # `./scripts/deploy.sh -t client`, run in CI per client environment (the
-# deploy-dev workflow, parked until M1-PR7 selects one). Locally, use
+# deploy-dev workflow, one client environment per dispatch since M1-PR7). Locally, use
 # `./scripts/deploy.sh -t client --dry-run` to print the plan and
 # `make bundle-validate` to validate the bundle. The live install that
 # predates the client target ships only through the emergency recipe in
@@ -127,6 +127,6 @@ bundle-deploy-dev: render-sql
 # ---------------------------------------------------------------------------
 deploy-dev:
 	@echo "deploy-dev does not deploy from a workstation. Dispatch the governed deploy in CI:" >&2
-	@echo "  gh workflow run deploy-dev.yml --ref main -f acknowledge_single_maintainer_break_glass=true" >&2
-	@echo "(parked until M1-PR7 selects a client environment; dry run locally with ./scripts/deploy.sh -t client --dry-run)" >&2
+	@echo "  gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true" >&2
+	@echo "(one client environment per dispatch, plan first; dry run locally with ./scripts/deploy.sh -t client --dry-run)" >&2
 	@exit 2

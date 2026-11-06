@@ -141,7 +141,8 @@ def test_the_check_block_never_installs_and_the_repair_block_is_dry_run_guarded(
     repair = _block(REPAIR_START, REPAIR_END)
 
     assert not re.search(r"^\s*(?:run\s+)?npm\b", check, re.M), "the check block never installs"
-    assert '[[ -f tools/frontend_deps_check.py ]]' in check
+    # A --prebuilt-release (M1-PR7) skips the check: its deploy job has no Node.
+    assert '[[ -f tools/frontend_deps_check.py && -z "${PREBUILT_RELEASE_DIR:-}" ]]' in check
     assert 'if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "stale" ]]; then' in repair
     assert repair.count("npm --prefix frontend ci") == 2  # the run line and the fix hint
     assert "shared" not in repair

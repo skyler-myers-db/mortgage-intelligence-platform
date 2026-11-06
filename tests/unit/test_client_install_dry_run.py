@@ -17,9 +17,9 @@ The client profile is client #1's shape with synthetic identifiers
   SQL the retired dev target rendered for the same install (catalog ``mip``,
   Summit demo feeds on), and exports today's resource names: the variable
   defaults the live install runs on.
-* Under GitHub Actions on the deploy-dev workflow's ref the dry run is refused
-  before any Databricks call: that workflow is parked until a client
-  environment is selected (M1-PR7).
+* Under GitHub Actions on the deploy-dev workflow's ref a run that names no
+  ``--phase`` or no ``--prebuilt-release`` is refused before any Databricks
+  call: that workflow's deploy job holds an ID token and has no Node (M1-PR7).
 """
 
 from __future__ import annotations
@@ -174,14 +174,16 @@ def test_a_host_that_is_not_the_profiles_stops_the_dry_run_before_the_live_check
     assert planned_commands(result.stdout) == []
 
 
-def test_the_parked_deploy_dev_workflow_is_refused_before_any_databricks_call(tmp_path: Path) -> None:
+def test_a_deploy_dev_run_without_a_phase_and_a_prebuilt_release_is_refused_before_any_databricks_call(
+    tmp_path: Path,
+) -> None:
     checkout, env, log = sandbox(tmp_path)
     ci = {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/deploy-dev.yml@refs/heads/main"}
 
     result = dry_run(checkout, {**env, **ci})
 
     assert result.returncode == 2, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "deploy-dev.yml is parked until a client environment is selected (M1-PR7)" in result.stderr
+    assert "deploy-dev.yml runs one named --phase from a --prebuilt-release; refusing" in result.stderr
     assert not log.exists() or log.read_text(encoding="utf-8") == "", "refused before any Databricks call"
     assert "step 1" not in result.stdout
 

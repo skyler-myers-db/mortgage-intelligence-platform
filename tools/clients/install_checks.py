@@ -136,9 +136,9 @@ class InstallChecks:
             self.unadopted = True
         elif not journaled:
             self.lines.append(
-                "adoption: the App MIP_APP_NAME names exists, but this deployer's bundle state does not "
-                "bind apps.mip_app to it: an existing install this deployer never adopted (adopt it into "
-                "this deployer's state first, plan M2-PR6)"
+                "adoption: existing install not adopted: the App MIP_APP_NAME names exists, but this "
+                "deployer's bundle state does not bind apps.mip_app to it (adopt it into this deployer's "
+                "state first, plan M2-PR6)"
             )
 
     def _first_install_journal_exists(self, app_name: str) -> bool:

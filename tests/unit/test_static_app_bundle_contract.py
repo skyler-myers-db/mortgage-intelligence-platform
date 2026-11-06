@@ -83,4 +83,6 @@ def test_lakebase_recovery_watches_the_exact_created_dev_workflow() -> None:
     assert 'gh run watch "$RUN_ID" --exit-status' in recovery
     assert "gh run list" not in recovery
     assert "REBASE_UNVERIFIED_APP=false" in recovery
-    assert "The GitHub workflow above is dev-only." in recovery
+    assert "The workflow above deploys the one client environment `client` names" in recovery
+    assert "--ref main" in recovery and "git branch --show-current" not in recovery, "the preflight refuses another ref"
+    assert "dev-only" not in recovery and "Do not transpose it" not in recovery

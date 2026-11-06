@@ -547,6 +547,20 @@ def check(*, repo: Path, ref: str) -> tuple[str, int]:
     return tracked.commit, len(tracked.files)
 
 
+def tracked_blobs(*, repo: Path, ref: str) -> tuple[str, dict[str, bytes], dict[str, bytes]]:
+    """The git side of ``stage`` at ``ref``, every refusal included, as bytes.
+
+    (commit, each tracked closure file's blob, each tracked frontend/public
+    file's blob by its path in the dist): what tools/databricks/
+    prebuilt_release.py re-derives a prebuilt release's tracked half from.
+    """
+
+    tracked = _plan(repo, ref)
+    blobs = _blobs(repo, tracked.commit, [*tracked.files, *tracked.public])
+    public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in tracked.public}
+    return tracked.commit, {name: blobs[name] for name in tracked.files}, public
+
+
 def _list(args: argparse.Namespace) -> int:
     if not args.files:
         for entry in CLOSURE:

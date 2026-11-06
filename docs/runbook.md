@@ -99,23 +99,29 @@ belongs to:
   any live-App recovery, including a manual restart or payload redeploy, is
   an owner-only decision.
 - **A CI install.** None exists today: the CI staging install's workspace
-  was deleted on 2026-10-29, and `deploy-dev.yml` is parked until a client
-  environment is selected (M1-PR7; docs/deployment.md, "CI deploy
-  (deploy-dev.yml): parked"), so the dispatch below ends in its `parked`
-  job. Once M1-PR7 lands, recover a CI install only through that governed
-  workflow. It keeps the App stopped while it reconciles the exact Lakebase
-  roles, runs the migration and grant postflight, and activates source only
-  after those checks pass:
+  was deleted on 2026-10-29. `deploy-dev.yml` deploys one client environment
+  per dispatch (M1-PR7; docs/deployment.md, "CI deploy (deploy-dev.yml): one
+  client environment per dispatch"). Recover a CI install only through that
+  governed workflow, with a `phase=plan` dispatch first whose step summary
+  prints the profile ack the release needs. The release keeps the App
+  stopped while it reconciles the exact Lakebase roles, runs the migration
+  and grant postflight, and activates source only after those checks pass:
 
 ```bash
-BRANCH="$(git branch --show-current)"
 # Routine recovery of a signed last-good App leaves this false. Set it to true
 # only for an approved legacy or failed pre-capture App expected to have no
 # signed record; the workflow re-proves that absence before any rebase mutation.
 REBASE_UNVERIFIED_APP=false
 # The break-glass acknowledgement is required: without it the run ends in the
 # refuse-unacknowledged job and deploys nothing.
-RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
+# The client's GitHub Environment, and the exact profile ack its plan run's
+# step summary printed (owner_attestation; M1-PR7).
+CLIENT="<client>"
+PROFILE_ACK="<profile-ack-from-the-plan-run>"
+RUN_URL="$(gh workflow run deploy-dev.yml --ref main \
+  -f client="$CLIENT" \
+  -f phase=release \
+  -f owner_attestation="$PROFILE_ACK" \
   -f acknowledge_single_maintainer_break_glass=true \
   -f skip_silver=true \
   -f skip_smoke=false \
@@ -130,11 +136,9 @@ fi
 gh run watch "$RUN_ID" --exit-status
 ```
 
-The GitHub workflow above is dev-only. It is never a recovery path for the
-live dev App.
-Do not transpose it to a customer or production workspace: production requires its separately reviewed
-environment contract and a change-controlled `scripts/deploy.sh -t client`
-invocation with that client's profile. A failed pre-capture rebase remains unsigned and therefore requires
+The workflow above deploys the one client environment `client` names, and
+only from `main`: its preflight refuses any other ref. It is never a recovery
+path for the live dev App. A failed pre-capture rebase remains unsigned and therefore requires
 `REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;
 once a signed last-good record exists, the exceptional path refuses to run.
 

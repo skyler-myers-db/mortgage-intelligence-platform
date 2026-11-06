@@ -225,16 +225,21 @@ def test_the_stage_block_follows_the_build_and_precedes_the_pre_apply_plan_gate(
     # Validation moved ahead of the lease (M0-PR4); the stage still precedes the
     # plan gate that runs immediately before the bundle apply.
     assert text.index(STAGE_END) < text.index("\nrun_bundle_plan_gate pre-apply\n")
+    # A --prebuilt-release (M1-PR7) was staged by the build job and placed,
+    # re-hashed, in step 1: only the else branch stages here.
+    prebuilt, staged = code.split("\nelse\n", 1)
+    assert prebuilt.endswith('if [[ -n "${PREBUILT_RELEASE_DIR:-}" ]]; then\n  echo "  staged by the build job: the prebuilt release placed it above, re-hashed"')
+    assert "app_runtime_closure" not in prebuilt
     assert (
-        'run "$PYTHON" -m tools.databricks.app_runtime_closure stage \\\n'
-        '  --ref "$SOURCE_GIT_SHA" \\\n'
-        "  --dist frontend/dist \\\n"
-        '  --out "$APP_RELEASE_STAGE_ROOT/source" \\\n'
-        '  --manifest-out "$APP_RELEASE_MANIFEST" \\\n'
-        "  --require-brotli-check\n"
-    ) in code
+        '  run "$PYTHON" -m tools.databricks.app_runtime_closure stage \\\n'
+        '    --ref "$SOURCE_GIT_SHA" \\\n'
+        "    --dist frontend/dist \\\n"
+        '    --out "$APP_RELEASE_STAGE_ROOT/source" \\\n'
+        '    --manifest-out "$APP_RELEASE_MANIFEST" \\\n'
+        "    --require-brotli-check\n"
+    ) in staged
     assert code.count("rm -rf") == 1
-    assert 'if [[ "$DRY_RUN" -eq 0 ]]; then\n  rm -rf -- "${APP_RELEASE_STAGE_ROOT:?}"\nfi\n' in code
+    assert '  if [[ "$DRY_RUN" -eq 0 ]]; then\n    rm -rf -- "${APP_RELEASE_STAGE_ROOT:?}"\n  fi\n' in staged
     assert "databricks " not in code.replace("tools.databricks.", "")
     assert text.count('APP_RELEASE_STAGE_ROOT=".databricks/app-release"\n') == 1
 

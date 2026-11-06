@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text
-from tests.fixtures.deploy_sandbox import INHERITED_PREFIXES, sandbox
+from tests.fixtures.deploy_sandbox import inherited, sandbox
 from tests.fixtures.prestop_estate import DEPLOYER, clean_estate, write_estate
 
 # The deploy's identity is the client profile's deployer, as in a real install:
@@ -180,9 +180,7 @@ def release(
     estate["deployer"] = DEPLOYER
     estate_path = write_estate(tmp_path / "estate.json", _as_profile_deployer(estate))
     state_path, py_log = tmp_path / "sandbox-state.json", tmp_path / "python.log"
-    # Also the profile names a shell value would set over .env.local.
-    stripped = (*INHERITED_PREFIXES, "LAKEBASE_", "APP_ENV")
-    run_env = {name: value for name, value in base_env.items() if not name.startswith(stripped)}
+    run_env = {name: value for name, value in base_env.items() if not inherited(name)}
     run_env.update(
         {
             "PATH": base_env["PATH"],
