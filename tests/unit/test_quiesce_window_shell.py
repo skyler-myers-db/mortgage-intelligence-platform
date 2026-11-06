@@ -173,10 +173,14 @@ def test_blue_serving_that_is_not_serving_the_record_keeps_treatment_quiesced(tm
     assert "treatment runtime" not in calls and not any(_has(calls, stop) for stop in STOPS)
 
 
-def test_blue_degraded_converges_the_mutated_dependencies_with_the_app_up(tmp_path: Path) -> None:
+# deploy.sh's agentic value (resolve_client_profile) and a tier not yet resolved (M2-PR7b review).
+@pytest.mark.parametrize("tier", ("CLIENT_AGENTIC_TIER=on; ", ""), ids=("on", "unset"))
+def test_blue_degraded_converges_the_mutated_dependencies_with_the_app_up(
+    tmp_path: Path, tier: str
+) -> None:
     result, calls = _run(
         tmp_path,
-        "QUIESCE_WINDOW_STATE=blue_degraded; REVIEWED_FUNCTION_GRANTS_PROVEN=0\n"
+        f"{tier}QUIESCE_WINDOW_STATE=blue_degraded; REVIEWED_FUNCTION_GRANTS_PROVEN=0\n"
         "stop_app_after_failed_deploy\n",
     )
     assert result.returncode == 0, result.stderr
