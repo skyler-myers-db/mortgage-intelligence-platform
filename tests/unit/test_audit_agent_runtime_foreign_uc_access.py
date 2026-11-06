@@ -621,33 +621,6 @@ def _runtime_groups(additional: dict[str, str] | None = None) -> dict[str, str]:
     }
 
 
-def test_foreign_catalog_binding_policy_rejects_ambiguous_json() -> None:
-    with pytest.raises(ValueError, match="duplicate key"):
-        auditor.parse_foreign_catalog_binding_policy('{"version":1,"version":1,"catalogs":{}}')
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "[]",
-        '{"version":true,"catalogs":{}}',
-        '{"version":1.0,"catalogs":{}}',
-        '{"version":2,"catalogs":{}}',
-        '{"version":1,"catalogs":{"hidden":{"owner":"owner","catalog_type":'
-        '"MANAGED_CATALOG","bindings":[]}}}',
-        '{"version":1,"catalogs":{"hidden":{"owner":"owner","catalog_type":'
-        '"MANAGED_CATALOG","bindings":[{"workspace_id":"01","binding_type":'
-        '"BINDING_TYPE_READ_WRITE"}]}}}',
-        '{"version":1,"catalogs":{"hidden":{"owner":"owner","catalog_type":'
-        '"MANAGED_CATALOG","bindings":[{"workspace_id":"2478181912221244",'
-        '"binding_type":"UNKNOWN"}]}}}',
-    ],
-)
-def test_foreign_catalog_binding_policy_rejects_invalid_contract(value: str) -> None:
-    with pytest.raises(ValueError, match="foreign catalog binding policy"):
-        auditor.parse_foreign_catalog_binding_policy(value)
-
-
 def test_foreign_uc_control_plane_rejects_runtime_foreign_workspace_assignment() -> None:
     account = _account()
     original = account.workspace_assignment.list

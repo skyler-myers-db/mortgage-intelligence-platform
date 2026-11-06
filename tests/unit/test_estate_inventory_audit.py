@@ -284,6 +284,48 @@ def test_a_defunct_workspace_whose_assignments_no_longer_list_passes_with_that_e
     )
 
 
+@pytest.mark.parametrize(
+    ("bound", "refused"),
+    [
+        ({harness.OTHER_WORKSPACE_ID}, False),
+        ({harness.WORKSPACE_ID}, True),
+        ({harness.OTHER_WORKSPACE_ID, "unassigned-workspace"}, True),
+    ],
+    ids=["another-assigned-workspace", "the-install-workspace", "off-the-metastore"],
+)
+def test_a_binding_denied_catalog_must_be_bound_to_another_assigned_workspace(
+    bound: set[str], refused: bool
+) -> None:
+    # The bound workspaces come from the inventory now (M4-PR1); the retired
+    # binding policy is not named in the refusal (M4-PR2).
+    def check() -> object:
+        return harness.auditor._assert_runtime_workspace_assignment_boundary(
+            harness._account(),
+            application_id=harness.APPLICATION_ID,
+            target_scim_ids={harness.ACCOUNT_SCIM_ID},
+            account_target_scim_id=harness.ACCOUNT_SCIM_ID,
+            account_effective_groups={},
+            account_group_inventory={},
+            effective_target_groups={},
+            implicit_system_groups={"account-users-id": "account users"},
+            workspace_system_groups={},
+            allowed_workspace_groups={},
+            metastore_id="metastore-under-test",
+            workspace_id=harness.WORKSPACE_ID,
+            approved_foreign_workspace_ids=bound,
+        )
+
+    if not refused:
+        assert check() == {harness.WORKSPACE_ID, harness.OTHER_WORKSPACE_ID}
+        return
+    with pytest.raises(RuntimeError) as raised:
+        check()
+    assert str(raised.value) == (
+        "the estate inventory binds a foreign catalog to the install workspace or to a workspace "
+        "not assigned to the metastore"
+    )
+
+
 # --- Parity: the pre-stop checks refuse exactly when the post-stop audit raises ---------------------
 
 

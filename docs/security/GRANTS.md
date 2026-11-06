@@ -508,8 +508,11 @@ as privilege-free.
 
 The pass enumerates every workspace assigned to the current metastore and
 requires exactly one direct, immutable-ID-matched `USER` assignment in the MIP
-workspace, with no direct or group-derived assignment to a workspace retained
-by the foreign-catalog policy. It separately checks the owner on every
+workspace, with no direct or group-derived assignment to any other assigned
+workspace. Every workspace that a binding-denied catalog in the estate
+inventory is bound to must be one of those other assigned workspaces, never
+the MIP workspace, and a workspace that no longer exists passes only with its
+exact defunct entry in the inventory. It separately checks the owner on every
 inventoried catalog, schema, table, function, volume, and registered model.
 Objects visible to MIP retain the full approved-owner workspace/account
 resolution. Every accessible object's owner must resolve exactly once as a
@@ -520,16 +523,20 @@ cross-plane and cross-type ambiguity without assigning unrelated owners to
 MIP. The account-plane target service-principal ID is resolved in the same
 snapshot and remains forbidden; group owners still require the frozen
 target-credential membership proof. Ambiguous, noncanonical, inactive, or
-unresolved account owners fail closed. For an exactly policy-matched catalog whose
-bindings deny MIP, the
-pass does not require an unrelated owner to exist in MIP workspace SCIM;
+unresolved account owners fail closed. For a catalog the estate inventory
+records as binding-denied (`ISOLATED`, with no binding to the MIP workspace),
+the pass does not require an unrelated owner to exist in MIP workspace SCIM;
 instead, it excludes the runtime application ID, both immutable SCIM IDs,
 observed runtime display aliases, every frozen group ID and name, and implicit
-`account users` from the catalog and registered-model owner fields. Direct or
-group-derived runtime ownership therefore fails without weakening the workspace
-binding proof. Unknown isolation modes, incomplete or duplicate identity
-evidence, unsupported binding types, policy drift, account-group drift,
-workspace-assignment drift, and binding-read errors fail closed. Ownership
+`account users` from every owner the inventory records in that catalog: the
+catalog's own and those of its schemas, tables, functions, volumes, registered
+models and `information_schema`. Direct or group-derived runtime ownership
+therefore fails without weakening the workspace binding proof. Unknown
+isolation modes, incomplete or duplicate identity evidence, unsupported binding
+types, inventory drift (a catalog the deployer lists, other than MIP's own,
+that is missing from the inventory or has changed owner, type or isolation
+since it was taken), account-group drift, workspace-assignment drift, and
+binding-read errors fail closed. Ownership
 cannot masquerade as an empty grants response. The exact `__databricks_internal`
 catalog is excluded only when its SDK identity remains `INTERNAL_CATALOG`,
 `System user`-owned, and `OPEN`; lookalike names or source drift fail.
@@ -563,168 +570,25 @@ Bounded parallel catalog walks keep both exact checks practical.
 Registered models are listed globally because the Databricks SDK rejects
 catalog-only model listings without a schema.
 
-Shared-metastore remediation is a separately reviewed, fail-closed operation.
-`tools/databricks/converge_foreign_catalog_workspace_bindings.py` accepts only a
-clean committed source SHA, an active signed App deployment lease, the stopped
-App's immutable identity, the exact account authority, the distinct runtime
-account/workspace SCIM IDs and display aliases, and a versioned binding policy.
-Its signed manifest preserves every
-non-MIP metastore workspace as `READ_WRITE` for a formerly `OPEN` catalog and
-preserves the exact existing bindings of every already-`ISOLATED` catalog.
-Catalog metadata is read from the authoritative `include_unbound` inventory,
-not a workspace-scoped `get`. The manifest records the exact direct grants of
-each visible `OPEN` catalog. For an already-`ISOLATED` catalog that excludes the
-MIP workspace, `direct_grants: null` is explicit evidence that the grants API is
-binding-denied; an authorization error is accepted only for that exact
-metadata-and-binding state.
-Before each catalog write it persists a signed immutable intent under the
-lease-protected workspace root, then revalidates the lease, stopped App,
-account assignments, metastore inventory, policy, source SHA, catalog owner,
-catalog type, bindings, and whichever direct-grant evidence is observable in
-that state. After isolation excludes MIP, an exact authorization denial replaces
-the pre-state grant list rather than copying or inventing post-state evidence.
-A killed runner resumes only from the signed pre-state, exact desired state, or
-a narrower `ISOLATED` transitional state. It never automatically reopens a
-catalog after failure. Automated `ISOLATED`-to-`OPEN` rollback is forbidden:
-while MIP is binding-denied, retained workspaces can change child grants that
-the MIP control plane cannot observe, so matching only the former catalog-level
-grant list would not prove that reopening restores the former access boundary.
-Recovery therefore resumes the signed fail-closed desired state. The final
-postflight re-reads the entire policy rather than trusting per-catalog success.
-The current signed-manifest schema is v4. Correctly signed v3 fences remain
-readable so completed/stale operations can still be classified and interrupted
-operations can be reauthorized into a fresh v4 boundary. A v3 manifest can
-never be persisted anew, applied, resumed, or verified as mutation authority;
-it must first be reauthorized under a descendant lease, which seals the
-distinct live account and workspace runtime identities. Only that explicit
-v3-parent migration may cross a historical source SHA: `recover-local` requires
-the parent lease ID, and the signed v4 child records the current clean SHA.
-Ordinary v4 recovery remains exact-source-pinned.
-Every signed account, App, and runtime identity field must already be a
-canonical trimmed string; validation never compares a normalized copy while
-retaining a different raw identity.
-Because the excluded MIP workspace cannot enumerate foreign direct grants after
-convergence, the live postflight must separately use each retained bound
-workspace to prove its expected access and grant behavior.
-
-**Foreign-catalog remediation has no CI command of record (post-W5,
-2026-10-27).** It used to be the manual `deploy-dev` workflow's one-time
-`remediate_foreign_catalog_bindings` input. That input is gone (M0-PR3): the
-workflow passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a literal, so no
-dispatch can request the remediation, in any client environment (M1-PR7). The
-refusal is deliberate. A catalog's
-isolation mode and workspace bindings are metastore-level state, and the
-metastore is shared with other teams: this remediation flips each `OPEN`
-catalog the policy names to `ISOLATED` and then binds every other metastore
-workspace `READ_WRITE`. The signed manifest refuses a policy that omits one of
-them, that changes an already-`ISOLATED` catalog's bindings, or that binds the
-deploying workspace. At completion only the deploying workspace loses the
-catalog. Between each catalog's flip and its re-binding, every other workspace
-(the live one and every other team's) loses it. A run killed there stays in
-that narrower state until a resumed recovery, which never reopens. A workspace
-assigned to the metastore later never sees the catalog. These are other teams'
-catalogs and metastore-level state. Any metastore-wide remediation is
-therefore an owner-only, separately reviewed decision, and the bootstrap never
-runs it (docs/deployment.md, owner step 7).
-
-**`scripts/deploy.sh` refuses it (M0-PR5, 2026-10-30).** The operator path,
-`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh`, used to stop
-the live App to run it. That path is gone: any value other than `0`, from the
-environment or from `.env.local`, exits 2 before any Databricks call, in a dry
-run too, with the App untouched, and the stop branches that ran the remediation
-are deleted. The remediation tooling itself
-(`tools/databricks/converge_foreign_catalog_workspace_bindings.py` and its
-`foreign_catalog_binding_*` modules) is deleted with M4-PR2, once M4-PR1's
-estate inventory replaces the binding policy. What the next paragraph describes
-is how that tooling behaved while `scripts/deploy.sh` still ran it.
-
-When an owner-approved run did reach it, `scripts/deploy.sh` acquired the
-signed App lease and started its parent-PID-fenced heartbeat. It required an existing stable App,
-stopped the exact immutable App identity before any recovery or fresh catalog
-write, and then ran `snapshot`, `apply`, and `verify`. A signed immutable
-completion record is written only after the whole-policy verification passes.
-The ordinary UC preflight also ran while the App remained stopped. Only after
-that postflight could signed-blue reconciliation start the App; signed blue was
-re-proven before the first Lakebase recovery mutation. An absent or unstable
-first-install App was rejected.
-
-The lease is released from normal deployment cleanup without discarding
-same-deployer recovery authority. Protocol-v5 lease generations bind a bounded
-holder map to immutable, signed, digest-addressed recovery checkpoints under
-the protected lease root. Acquire/takeover advances exactly the acquiring
-holder's checkpoint from its previous candidate list; renew/release preserve
-the complete map and recovery digest exactly. The first v4-to-v5 acquire scans
-the authenticated legacy chain and materializes its acquisition history as a
-linked immutable checkpoint chain. Thereafter recovery authenticates the
-canonical head, the selected-holder checkpoint, and its immediately preceding
-checkpoint when present. The predecessor must be the exact signed candidate
-tail with the same root and holder, an exact decremented count, an earlier
-acquisition generation, and a non-regressing signing-key epoch. Recovery then
-exports every lease ID in that
-same-holder recovery-root lineage newest-first, including across a
-runtime-writer or signing-key rotation. The checkpoint path and signed body are
-both bound to the exact app and lease chain. Missing, corrupt, oversized,
-cross-boundary, or metadata-divergent checkpoint evidence fails closed; the
-mutable `.head` accelerator is never recovery authority by itself.
-
-Automatic v5 fallback remains bounded to 64 successors even when `.head` is
-missing or corrupt. The signed holder's exceptional `repair-head` command may
-scan the full immutable generation chain up to `MAX_CANONICAL_GENERATIONS`,
-after which it re-proves the exact protected-root ACL, replaces a missing or
-corrupt unsigned locator with one bound to the authenticated canonical head,
-overwrites the non-authoritative head hint, and requires exact postflight. A committed v5
-acquisition whose immutable locator publication fails cannot be compensated to
-a terminal release until that locator is durably authenticated; persistent
-failure therefore leaves an active signed fence for governed repair, never a
-markerless terminal record.
-
-A different deployer identity receives no authority from that lineage, but an
-intervening released-lease handoff cannot erase the original holder's signed
-recovery route; a returning holder resumes its most recent root. Runtime
-identity is rebound by manifest classification and reauthorization rather than
-by hiding signed ancestors. The deployment probes
-each lineage fence until it finds the newest incomplete operation, a signed
-completion, or proves all candidates absent. Discovery is read-only: only the
-winner of the immutable lease successor race changes the shared root ACL, so a
-losing historical holder cannot overwrite the active winner's holder/writer
-permissions. Invalid or ambiguous evidence is never treated as absence. An
-incomplete operation is reauthorized under the fresh descendant lease and then
-resumed and verified. A completed operation with identical release inputs is
-independently reauthorized and reverified; a completed operation from older
-inputs terminates the historical search and causes a fresh signed snapshot
-under the current reviewed policy. This also recovers an
-interruption during reauthorization before its child fence exists, because the
-older parent lease remains discoverable. Fence recovery verifies historical
-signers through the configured key registry; it does not re-sign old evidence
-with the current key.
-
-An operator investigating a still-active lease may materialize the authoritative
-workspace copy without creating a new snapshot:
-
-```bash
-python -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-  recover-local \
-  --app-name "$MIP_APP_NAME" \
-  --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-  --expected-account-id "$DATABRICKS_ACCOUNT_ID" \
-  --expected-account-client-id "$DATABRICKS_ACCOUNT_CLIENT_ID" \
-  --mip-catalog "$MIP_DEFAULT_CATALOG" \
-  --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-  --manifest /tmp/mip-foreign-catalog-manifest.json
-```
-
-There is intentionally no rollback CLI that reopens these catalogs. A request
-to restore `OPEN` access requires a separately reviewed change plan that
-inventories current child and effective privileges from every affected
-workspace; the deployment automation cannot infer that state from its signed
-pre-isolation catalog grants.
-
-The same bounded account and proof-signing environment used by deploy is
-required for these diagnostic commands. Never copy credentials into arguments,
-never run without the lease heartbeat, and release the lease with
-`tools.databricks.app_deployment_lease release` when the governed operation
-ends.
+**Foreign-catalog binding remediation is deleted (M4-PR2, 2026-11-04).** It
+flipped each `OPEN` catalog a binding policy named to `ISOLATED` and then bound
+every other metastore workspace `READ_WRITE`. A catalog's isolation mode and
+workspace bindings are metastore-level state, and the metastore is shared with
+other teams: between each catalog's flip and its re-binding, every other
+workspace (the live one and every other team's) lost that catalog, a run killed
+there kept that narrower state, and a workspace assigned to the metastore later
+never saw it. Any metastore-wide remediation is therefore an owner-only,
+separately reviewed decision that this repository does not automate. Its CI
+input went first (M0-PR3), then the `scripts/deploy.sh` stop branches that ran
+it (M0-PR5); M4-PR2 deleted the tool itself with its signed manifest, its
+journal and the binding policy it read (the owner's estate inventory, M4-PR1,
+now carries the binding-denied catalogs). `deploy-dev.yml` never names
+`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS`, and `scripts/deploy.sh` refuses any
+value of it other than `0`, from the environment or from a stale `.env.local`,
+each read on its own so that an export of `0` does not mask the file: exit 2
+before any Databricks call, in a dry run too, with the App untouched.
+No other code ever read the remediation's records, so the deletion changes no
+reader.
 
 The data-plane allowlist is `USE CATALOG` on MIP, `USE SCHEMA` on `gold` and
 `audit`, `EXECUTE` on the three reviewed functions, runtime ownership of the

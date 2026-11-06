@@ -5299,11 +5299,12 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     workflow = _unbound_workflow_text()
 
     assert "rebase_unverified_app:" in workflow
-    assert "remediate_foreign_catalog_bindings" not in workflow
     assert (
         "MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}" in workflow
     )
-    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: '0'" in workflow
+    # The remediation tooling is deleted (M4-PR2): the workflow never names its
+    # flag, and scripts/deploy.sh refuses any value but 0 from anywhere.
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS" not in workflow
     assert "MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'" in workflow
     # M1-PR7: the catalog, the Gateway names, the approved owners and the
     # account principal are client profile fields, which the
@@ -7340,7 +7341,7 @@ def test_dev_workflow_has_no_credential_repair_or_remediation_input() -> None:
         assert retired not in text, retired
     deploy = steps[names.index(RUN_STEP)]
     assert "if" not in deploy, "the run step runs whenever the job does"
-    assert deploy["env"]["MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"] == "0"
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS" not in deploy["env"]
 
 
 # ------------------------------------------- the per-client CI topology (M1-PR7)

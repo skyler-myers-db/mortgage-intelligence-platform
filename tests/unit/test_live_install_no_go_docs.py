@@ -11,8 +11,8 @@ harm, so every sentence there and in the CI section goes through the ban below.
 
 The same section states the reserved-identity contract, names no application,
 account or workspace id, and finds other teams' catalogs at run time rather
-than naming them; GRANTS.md gives the metastore-wide remediation no CI command
-of record.
+than naming them; GRANTS.md records the metastore-wide remediation as deleted,
+with no path left that runs it.
 """
 
 from __future__ import annotations
@@ -345,53 +345,58 @@ def test_the_uc_blockers_are_found_at_run_time_never_named() -> None:
     assert tokens <= allowed, sorted(tokens - allowed)
 
 
-# ------------------------------------------- GRANTS.md: no CI command of record
+# ---------------------------------- GRANTS.md: the remediation is deleted
 
 
-def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> None:
-    """The workflow passes the remediation flag as a literal 0; the operator path targets the NO-GO live install."""
+def test_grants_records_the_foreign_catalog_remediation_as_deleted() -> None:
+    """Its tool is deleted (M4-PR2); GRANTS.md keeps why it was owner-only and what still refuses it."""
 
     raw = GRANTS_DOC.read_text(encoding="utf-8")
     grants = _flat(raw)
 
-    assert "The command of record is the manual `deploy-dev` workflow" not in grants
-    heading = "**Foreign-catalog remediation has no CI command of record (post-W5, 2026-10-27).**"
+    heading = "**Foreign-catalog binding remediation is deleted (M4-PR2, 2026-11-04).**"
     assert heading in grants
-    # No sentence after the negated heading may name a command of record for it, however paraphrased.
-    paragraph = grants.split(heading, 1)[1].split("When an owner-approved run did reach it", 1)[0]
+    paragraph = grants.split(heading, 1)[1].split("The data-plane allowlist is", 1)[0]
+    # No sentence may name a command of record for it, however paraphrased.
     assert "command of record" not in paragraph.lower()
-    assert "the workflow passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a literal, so no dispatch can request the remediation" in paragraph
-    env = {
-        key: value
-        for step in yaml.load(DEPLOY_DEV.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)["jobs"]["deploy"]["steps"]
-        for key, value in (step.get("env") or {}).items()
-    }
-    assert env["MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"] == "0", "the doc's literal"
-    # M0-PR5: the operator path is refused before any Databricks call, and the
-    # stop branches that ran the remediation are gone.
     assert (
-        "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh`, used to stop the live "
-        "App to run it. That path is gone: any value other than `0`, from the environment or from `.env.local`, "
-        "exits 2 before any Databricks call"
-    ) in grants
-    for retired in ("targets the live workspace", "would run in the live workspace"):
-        assert retired not in grants, retired
-    assert "Any metastore-wide remediation is therefore an owner-only, separately reviewed decision" in grants
-    # The owner decision rests on the blast radius the code has:
-    # foreign_catalog_binding_manifest refuses a policy that leaves any other
-    # metastore workspace unbound, so the hazard is the window between
-    # _apply_catalog's isolate and re-bind calls, which a killed run keeps open
-    # until a resumed recovery.
+        "Any metastore-wide remediation is therefore an owner-only, separately reviewed decision that this "
+        "repository does not automate."
+    ) in paragraph
+    # The blast radius that made it owner-only stays on record.
     assert (
-        "this remediation flips each `OPEN` catalog the policy names to `ISOLATED` and then binds every other "
-        "metastore workspace `READ_WRITE`. The signed manifest refuses a policy that omits one of them, that "
-        "changes an already-`ISOLATED` catalog's bindings, or that binds the deploying workspace. At completion "
-        "only the deploying workspace loses the catalog. Between each catalog's flip and its re-binding, every "
-        "other workspace (the live one and every other team's) loses it. A run killed there stays in that narrower "
-        "state until a resumed recovery, which never reopens. A workspace assigned to the metastore later never "
-        "sees the catalog."
+        "between each catalog's flip and its re-binding, every other workspace (the live one and every other "
+        "team's) lost that catalog"
+    ) in paragraph
+    assert (
+        "`deploy-dev.yml` never names `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS`, and `scripts/deploy.sh` refuses "
+        "any value of it other than `0`, from the environment or from a stale `.env.local`, each read on its own "
+        "so that an export of `0` does not mask the file: exit 2 before any Databricks call, in a dry run too, "
+        "with the App untouched."
+    ) in paragraph
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS" not in DEPLOY_DEV.read_text(encoding="utf-8"), "the doc's claim"
+    # The assignment audit names what it checks now, not the policy M4-PR1 retired.
+    assert (
+        "with no direct or group-derived assignment to any other assigned workspace. Every workspace that a "
+        "binding-denied catalog in the estate inventory is bound to must be one of those other assigned "
+        "workspaces, never the MIP workspace, and a workspace that no longer exists passes only with its exact "
+        "defunct entry in the inventory."
     ) in grants
-    assert "every workspace the policy does not bind loses that catalog" not in grants
-    assert "must keep the live workspace bound" not in grants, "the manifest already refuses an unbound workspace"
-    assert "Its signed manifest preserves every non-MIP metastore workspace as `READ_WRITE`" in grants, "consistency"
-    assert "remediate_foreign_catalog_bindings=true" not in raw, "the dispatch input is gone"
+    assert (
+        "For a catalog the estate inventory records as binding-denied (`ISOLATED`, with no binding to the MIP "
+        "workspace), the pass does not require an unrelated owner to exist in MIP workspace SCIM"
+    ) in grants
+    assert (
+        "inventory drift (a catalog the deployer lists, other than MIP's own, that is missing from the inventory "
+        "or has changed owner, type or isolation since it was taken)"
+    ) in grants
+    for retired_policy in ("foreign-catalog policy", "policy-matched", "policy drift"):
+        assert retired_policy not in grants, retired_policy
+    for retired in (
+        "The command of record is the manual `deploy-dev` workflow",
+        "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh",
+        "recover-local",
+        "targets the live workspace",
+        "would run in the live workspace",
+    ):
+        assert retired not in raw, retired

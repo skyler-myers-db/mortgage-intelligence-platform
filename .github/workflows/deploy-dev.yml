@@ -642,10 +642,6 @@ jobs:
           MIP_DISPATCH_SKIP_SILVER: ${{ inputs.skip_silver }}
           MIP_DISPATCH_SKIP_SMOKE: ${{ inputs.skip_smoke }}
           MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
-          # No remediation input: the foreign-catalog binding remediation
-          # rewrites bindings for the whole shared metastore, so this workflow
-          # can never request it (docs/security/GRANTS.md).
-          MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: '0'
           MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'
         run: |
           set -euo pipefail

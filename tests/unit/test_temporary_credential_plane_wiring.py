@@ -20,11 +20,6 @@ from tests.unit import test_ensure_pipeline_namespace as ensure_tests
 from tools.databricks import audit_agent_runtime_foreign_uc_access as auditor
 from tools.databricks import converge_campaign_treatment_access as converger
 from tools.databricks import ensure_pipeline_namespace as namespace
-from tools.databricks import foreign_catalog_binding_manifest as manifest
-
-
-class _Stop(Exception):
-    """Ends a caller right after the probe so only the wiring is asserted."""
 
 
 def _recorder(calls: list[dict[str, Any]], result: Any) -> Any:
@@ -123,44 +118,3 @@ def test_foreign_uc_audit_custom_probe_gets_no_deployer_argument() -> None:
 
     assert len(calls) == 1
     assert "deployer_workspace" not in calls[0]
-
-
-def test_foreign_catalog_manifest_passes_its_deployer_client_to_the_default_probe(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace = SimpleNamespace(config=SimpleNamespace(host="https://workspace.example.invalid"))
-    calls: list[dict[str, Any]] = []
-    probe = _recorder(calls, _Stop())
-    monkeypatch.setattr(manifest, "_DEFAULT_TARGET_GROUPS_PROBE", probe)
-    monkeypatch.setattr(manifest, "stopped_app_identity", lambda *_args: object())
-    monkeypatch.setattr(
-        manifest,
-        "_assert_metastore_owner_inventory_identity",
-        lambda *_args, **_kwargs: ("metastore-id", "workspace-id"),
-    )
-    monkeypatch.setattr(manifest, "account_actor_identity", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(
-        manifest, "account_target_identity", lambda *_args, **_kwargs: ("runtime-scim", "rt")
-    )
-    monkeypatch.setattr(
-        manifest,
-        "workspace_target_identity",
-        lambda *_args, **_kwargs: SimpleNamespace(scim_id="runtime-scim"),
-    )
-
-    with pytest.raises(_Stop):
-        manifest.boundary_evidence(
-            workspace,
-            object(),
-            app_name="mip-app",
-            application_id="runtime-app-client",
-            expected_inventory_principal="deployer@example.com",
-            expected_account_id="account-id",
-            expected_account_client_id="account-client",
-            approved_workspace_ids={"workspace-id"},
-            target_groups_probe=probe,
-            assert_single_writer=lambda: None,
-        )
-
-    assert len(calls) == 1
-    assert calls[0]["deployer_workspace"] is workspace

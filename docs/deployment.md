@@ -2446,8 +2446,12 @@ MIP_GENIE_MANAGER_PRINCIPALS=
 
 `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS` is refused before any of this, before
 any Databricks call and in a dry run too: any value other than `0`, from the
-environment or `.env.local`, exits 2. The stop branches that ran the
-foreign-catalog remediation are gone; its tooling is deleted with M4-PR2.
+environment or a stale `.env.local`, exits 2. Each source is read on its own,
+so an export of `0` does not mask a stale `.env.local` line. The stop branches
+that ran the foreign-catalog remediation are gone (M0-PR5) and its tooling is
+deleted (M4-PR2); `deploy-dev.yml` never names the flag. M4-PR2 adds no
+`.env.example` line and removes none: if a run reports the refusal, delete the
+flag's line from that `.env.local`.
 
 The probe is an early refusal, not a replacement for the post-stop audits.
 Those still read each target's own `/Me` groups, which can include
@@ -2717,8 +2721,7 @@ exact `estate` digest on each run. Set to anything non-blank, it refuses in the
 agentic tier (it could only have made the audit stricter than the inventory)
 and is one notice in the core tier, which never audited with it. It is never
 exported to a tool again, and the loader refuses it too. The binding
-remediation tooling that also read it stays until M4-PR2 removes it; nothing
-new depends on it.
+remediation tooling that also read it is deleted (M4-PR2).
 
 **Owner patch: `.env.example`.** Agents cannot edit the template. Remove this
 line (the inventory, its file path and its ack are environment-only and add no
@@ -4579,8 +4582,8 @@ Retired with that workspace (M0-PR3):
 - the install-scope probes, which ran only behind a non-empty suffix;
 - `deploy-dev.yml`'s normal-credential repair step, its input and its
   secrets-write token, and its foreign-catalog remediation input: the
-  workflow now passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a
-  literal, and the remediation has no CI command of record;
+  remediation has no CI command of record, and since M4-PR2 deleted its
+  tooling the workflow no longer names its flag;
 - `nightly.yml`'s personal-access-token profile, its bundle validate and its
   three refresh-job runs. They were removed rather than re-aimed: the
   remaining `dev` target is the live install, whose deployed jobs CI must
@@ -4955,11 +4958,12 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
      `users` (the runtime, verifier and App Genie audits fail on any group
      grant).
 
-   The foreign-catalog binding remediation sets catalogs ISOLATED and
-   rewrites their workspace bindings metastore-wide, and between its isolate
-   and re-bind calls (or after a killed run) every other workspace loses
-   those catalogs, the live install's share catalogs included.
-   `deploy-dev.yml` has no input that requests it.
+   None of this is remediated by the deploy. The foreign-catalog binding
+   remediation, which set catalogs ISOLATED and rewrote their workspace
+   bindings metastore-wide (between its isolate and re-bind calls, or after a
+   killed run, every other workspace lost those catalogs, the live install's
+   share catalogs included), is deleted (M4-PR2), and `scripts/deploy.sh`
+   refuses its flag.
 8. Dispatch `deploy-dev.yml` on `main` with `client=<client>`, `phase=plan`
    and `acknowledge_single_maintainer_break_glass=true` (or approve that exact
    dispatch in chat), then approve the pending deployment and read the step

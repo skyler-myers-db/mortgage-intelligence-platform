@@ -162,7 +162,7 @@ def _stub_cli(bin_dir: Path) -> None:
 
 
 def _deploy(
-    tmp_path: Path, estate: dict[str, Any], **env: str
+    tmp_path: Path, estate: dict[str, Any], *, env_local_extra: str = "", **env: str
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any], list[str], list[str]]:
     checkout, base_env, cli_log = sandbox(tmp_path)
     # The sandbox's synthetic client profile, with the demo install's weekly
@@ -176,7 +176,8 @@ def _deploy(
         MIP_ACCEPTED_EXPOSURE_JSON="[]",
     )
     (checkout / ".env.local").write_text(
-        env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8"
+        env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}) + env_local_extra,
+        encoding="utf-8",
     )
     _stub_cli(tmp_path / "bin")
     markers = tmp_path / "markers.log"
@@ -540,3 +541,42 @@ def test_a_remediation_request_refuses_before_any_databricks_call(
     assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS is refused" in result.stderr
     assert reached == [] and cli_calls == [], "refused before any Databricks call"
     assert after["calls"] == [] and after["app"]["state"] == "RUNNING"
+
+
+@pytest.mark.parametrize("export", (None, "0"), ids=("unexported", "exported-0"))
+@pytest.mark.parametrize("value", ("1", "true"))
+def test_a_stale_env_local_remediation_request_refuses_too(
+    tmp_path: Path, value: str, export: str | None
+) -> None:
+    # The tool is deleted (M4-PR2); an operator .env.local written while it
+    # existed can still carry the flag, and it must refuse, never be ignored,
+    # even when the shell exports 0 (an export wins every other deployment
+    # control, so the refusal reads .env.local on its own).
+    exported = {} if export is None else {"MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS": export}
+    result, after, reached, cli_calls = _deploy(
+        tmp_path,
+        clean_estate(),
+        env_local_extra=f"MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS={value}\n",
+        **exported,
+    )
+
+    assert result.returncode == 2, result.stderr[-3000:]
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS is refused" in result.stderr
+    assert reached == [] and cli_calls == [], "refused before any Databricks call"
+    assert after["calls"] == [] and after["app"]["state"] == "RUNNING"
+
+
+def test_the_flag_at_0_in_both_sources_still_reaches_the_lease(tmp_path: Path) -> None:
+    # The control for the two refusals above: 0 is the one accepted value, from
+    # the export and from .env.local alike, so the guard is not a blanket refusal.
+    result, _after, reached, _cli_calls = _deploy(
+        tmp_path,
+        clean_estate(),
+        env_local_extra="MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0\n",
+        MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS="0",
+    )
+
+    detail = result.stdout[-3000:] + result.stderr[-6000:]
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS is refused" not in result.stderr, detail
+    assert "[mip-prestop] pre-stop probes passed (read-only)" in result.stdout, detail
+    assert reached == ["lease"], detail
