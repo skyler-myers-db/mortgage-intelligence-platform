@@ -284,6 +284,19 @@ def test_no_run_now_while_another_entry_of_the_generation_still_runs() -> None:
     assert len(estate.jobs.run_now_calls) == calls and SILVER not in _ledger(estate)["jobs"]
 
 
+
+def test_a_resume_re_attaches_a_planned_entry_still_running() -> None:
+    # The docs' "no resume while an entry outside this phase's plan still runs": a planned one is re-attached.
+    estate = DataPhaseEstate()
+    plan = _plan(estate)
+    record = runner.begin(_ctx(estate), plan, ack="")
+    silver = _still_running_at_the_deadline(estate, plan, SILVER)
+    resumed = runner.begin(_ctx(estate), plan, ack="")
+    assert resumed["generation"] == record["generation"] and resumed["jobs"][SILVER]["status"] == "running"
+    estate.jobs.scripts[silver] = [("RUNNING", ""), ("TERMINATED", "SUCCESS")]
+    assert _run(estate, plan, SILVER) == (0, "succeeded (re-attached)")
+    assert len(estate.jobs.run_now_calls) == 1, "re-attached, never resent"
+
 def test_a_supersede_never_discards_a_run_that_is_not_stale_but_still_active() -> None:
     estate = DataPhaseEstate()
     plan = _plan(estate)

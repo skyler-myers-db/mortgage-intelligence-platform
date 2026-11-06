@@ -2755,8 +2755,10 @@ the first governed run owes the live timings.
   (TERMINATED other than SUCCESS, SKIPPED, INTERNAL_ERROR) as the next attempt,
   with a new token. Every run it re-attaches to, or that a token resend
   answers, must be a run of the bound job id. One job runs at a time: no
-  resume, run-now, close or retirement while another entry of the generation
-  still runs, planned in this phase or not. A run still going at the deadline
+  run-now, close or retirement while another entry of the generation still
+  runs, planned in this phase or not, and no resume while an entry outside
+  this phase's plan still runs (a planned entry still running is re-attached
+  by its `run`). A run still going at the deadline
   exits 4: re-run `--phase data` and it re-attaches. Nothing is ever
   cancelled.
 - **Stale definition.** An open generation whose entry ran under another
