@@ -76,6 +76,7 @@ from tools.databricks.quiesce_window_budget import (
     require_admitted,
 )
 from tools.databricks.quiesce_window_facts import (
+    V7WindowOwed,
     app_or_none,
     collect_facts,
     takes_unsigned_rebase,
@@ -431,8 +432,13 @@ def assert_serving(workspace: Any, *, app_name: str, scope: str, lakebase_instan
 
     from tools.databricks.app_deployment_state import active_deployment_id
 
+    # Any current record, a v7 core blue included (M2-PR7b): only its deployment is read.
     record = _load_record(
-        workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=lakebase_instance,
+        accept_v7=True,
     )
     if active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:
         raise RuntimeError("the App's active deployment is not the signed record's")
@@ -655,19 +661,23 @@ def main(
         print(f"{_PREFIX} applicable: App {'present' if app is not None else 'absent'}")
         return 0
     if args.command == "plan":
-        facts = collect_facts(
-            workspace,
-            app_name=app_name,
-            scope=args.scope,
-            lakebase_instance=args.lakebase_instance,
-            gate_report=_load_json(args.plan_gate_report),
-            binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
-            role_state=args.role_check,
-            verifier_role_state=args.verifier_role_check,
-            jobs_reader_role_state=args.jobs_reader_role_check,
-            migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
-            rebase_unverified_app=args.rebase_unverified_app == "1",
-        )
+        try:
+            facts = collect_facts(
+                workspace,
+                app_name=app_name,
+                scope=args.scope,
+                lakebase_instance=args.lakebase_instance,
+                gate_report=_load_json(args.plan_gate_report),
+                binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
+                role_state=args.role_check,
+                verifier_role_state=args.verifier_role_check,
+                jobs_reader_role_state=args.jobs_reader_role_check,
+                migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
+                rebase_unverified_app=args.rebase_unverified_app == "1",
+            )
+        except V7WindowOwed as exc:
+            print(f"{_PREFIX} REFUSED {exc.code}: {exc}", file=sys.stderr)
+            return 2
         result = window_plan(
             facts, position=args.position, acknowledgement=os.environ.get(ACK_ENV, "").strip()
         )

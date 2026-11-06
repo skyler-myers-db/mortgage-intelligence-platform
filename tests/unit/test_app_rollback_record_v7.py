@@ -264,6 +264,9 @@ def test_the_agentic_names_are_every_agentic_name_the_payload_builder_emits() ->
         name for name in block if name not in {*v7.CORE_OFF_SWITCHES, "MIP_LAKEBASE_SYNC"}
     ], "and no name outside it is"
     assert not any(v7.is_agentic_env_name(name) for name in D0_NAMES), "D0 still adopts"
+    refused = {name for name in names if v7.is_agentic_env_name(name)}
+    dropped = builder.CORE_TIER_DROPPED_NAMES
+    assert refused == dropped, "the core payload leaves out exactly the names a core record refuses (M2-PR7b)"
 
 
 @pytest.mark.parametrize(

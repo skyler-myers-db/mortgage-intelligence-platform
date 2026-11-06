@@ -346,20 +346,6 @@ if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
   exit 0
 fi
 # <<< bundle plan gate: pre-lease <<<
-# >>> core tier: release refusal >>>
-# The core tier (MIP_AGENTIC_TIER=off, M2-PR3) has no activation path yet:
-# publish, activation, signed capture and the signed-blue restore still run
-# through the agentic identities, so a core release could only mutate the
-# install through the grants and then stop at the step-5 activation boundary,
-# on every attempt. It refuses here instead, after every read-only check and
-# before the lease and any workspace mutation, in a dry run too. --phase plan
-# ended above, and the adopt phases (an acknowledged bundle state edit, no
-# release step) still run.
-if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" ]]; then
-  echo "${RED}[deploy] the core tier (MIP_AGENTIC_TIER=off) cannot release yet: publish, activation and signed capture still need the agentic identities. Refusing before the lease; nothing was changed. --phase plan and the adopt phases run in this tier.${RST}" >&2
-  exit 2
-fi
-# <<< core tier: release refusal <<<
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.

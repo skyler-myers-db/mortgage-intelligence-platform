@@ -262,6 +262,9 @@ restore_rendered_sql_fail_closed() {
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
     rm -f "$APP_LAST_DEPLOY_PAYLOAD"
   fi
+  if [[ -n "${CORE_BLUE_RESTORE_PAYLOAD_FILE:-}" ]]; then
+    rm -f "$CORE_BLUE_RESTORE_PAYLOAD_FILE"
+  fi
   if [[ -n "${APP_BUNDLE_SUMMARY:-}" ]]; then
     rm -f "$APP_BUNDLE_SUMMARY"
   fi

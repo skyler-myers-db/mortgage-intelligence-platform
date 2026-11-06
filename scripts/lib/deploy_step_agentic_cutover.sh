@@ -9,6 +9,8 @@
   exit 2
 }
 
+# Agentic-only (M2-PR7b): deploy.sh sources this in the agentic tier only; the core tier refuses.
+tier_is_agentic || { echo "${RED}[deploy] ${BASH_SOURCE[0]##*/} is agentic-only and refuses the core tier (MIP_AGENTIC_TIER=off).${RST}" >&2; exit 2; }
 _AGENT_PROXY_BOUNDARY_APP_URL="${MIP_APP_URL:-}"
 if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_BOUNDARY_APP_URL" ]]; then
   _AGENT_PROXY_BOUNDARY_APP_URL="https://dry-run.databricksapps.com"
