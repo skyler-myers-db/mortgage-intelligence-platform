@@ -1,41 +1,54 @@
 #!/usr/bin/env python3
-"""Audit the runtime's foreign UC access from a metastore-owner control plane."""
+"""Audit an agent identity's foreign UC access: estate inventory, account plane and self-view.
+
+The agentic tier (M4-PR1) needs no deployer metastore ownership and no
+self-view-only proof. Three sources are combined, and any of them refuses:
+
+* the owner's estate inventory (``estate.inventory``), the metastore-owner
+  facts: every catalog, binding-denied ones included, its bindings and who owns
+  what below it, for this exact metastore, workspace and install catalog, at
+  most 30 days old and acknowledged by its exact ``estate`` digest;
+* the deployer's account-plane and workspace reads: the identity's workspace
+  assignments (with exact defunct-workspace entries), its groups, the
+  catalogs the deployer lists (the inventory must cover them unchanged), and
+  every inventoried owner, judged as before (foreign ownership is never
+  acceptable);
+* the identity's own view (``estate.self_view``): its effective privileges on
+  everything it can see, through its accepted-exposure matcher.
+
+``MIP_UC_FOREIGN_CATALOG_BINDING_POLICY`` is retired: set, it refuses (the
+inventory carries the reviewed binding-denied catalogs). The audit is the
+agentic tier's alone; the core tier never runs it.
+"""
 
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.config import Config
 from tools.databricks.agent_runtime_uc_baseline import (
-    _MAX_INVENTORY_WORKERS,
-    CatalogBindingEvidence,
     ControlPlaneForeignCatalogProof,
     _issue_control_plane_foreign_catalog_proof,
     authoritative_workspace_id,
 )
-from tools.databricks.agent_runtime_uc_inventory import (
-    _assert_no_catalog_child_privileges,
-    _assert_privileges,
-    _catalog_name,
-    _effective_privilege_sources,
-    _full_name,
-    _text,
-)
+from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
 from tools.databricks.campaign_treatment_identity_probe import target_identity_groups_probe
+from tools.databricks.estate import inventory_audit
 from tools.databricks.estate.accepted_exposure import ExposureMatcher, identity_matcher
-from tools.databricks.estate.uc_exposure import UcExposureScope
+from tools.databricks.estate.inventory import EstateInventory, load_estate_inventory
+from tools.databricks.estate.self_view import assert_self_view, self_view_client
+
+# The parser is re-exported for the retired binding remediation tooling only
+# (M4-PR2 deletes both); the audit no longer reads the policy.
 from tools.databricks.foreign_catalog_binding_policy import (
     _WORKSPACE_BINDING_TYPES,
-    parse_foreign_catalog_binding_policy,
+    parse_foreign_catalog_binding_policy,  # noqa: F401
 )
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
@@ -95,7 +108,11 @@ def _assert_metastore_owner_inventory_identity(
     *,
     expected_principal: str,
 ) -> tuple[str, str]:
-    """Bind the audit to the expected caller and its current metastore authority."""
+    """Bind the caller to its current metastore authority (the retired remediation manifest only).
+
+    The audit itself no longer requires the deployer to own the metastore: the
+    owner's estate inventory carries those facts (M4-PR1).
+    """
 
     assert_workspace_admin_inventory_identity(
         workspace,
@@ -309,8 +326,15 @@ def _assert_runtime_workspace_assignment_boundary(
     metastore_id: str,
     workspace_id: str,
     approved_foreign_workspace_ids: set[str],
+    inventory: EstateInventory | None = None,
 ) -> set[str]:
-    """Prove the runtime is assigned only to MIP, never to bound foreign workspaces."""
+    """Prove the runtime is assigned only to MIP, never to bound foreign workspaces.
+
+    With the estate inventory, each assigned workspace is first classified on
+    the account plane (``inventory_audit.classify_workspace``): a defunct one
+    passes only with its exact inventory entry, and whatever its assignment
+    listing still returns gets the same audit as a live one.
+    """
 
     normalized_target_ids = {value.strip() for value in target_scim_ids if value.strip()}
     if account_target_scim_id not in normalized_target_ids:
@@ -374,7 +398,21 @@ def _assert_runtime_workspace_assignment_boundary(
         direct_assignments: list[tuple[str, ...]] = []
         reviewed_group_assignments: dict[str, list[tuple[str, ...]]] = {}
         forbidden_group_assignments: list[tuple[str, tuple[str, ...]]] = []
-        for assignment in account.workspace_assignment.list(int(assigned_workspace_id)):
+        listing: Any = None
+        state = (
+            inventory_audit.LIVE
+            if inventory is None
+            else inventory_audit.classify_workspace(
+                account, assigned_workspace_id, install_workspace=workspace_id, inventory=inventory
+            )
+        )
+        if inventory is not None and state == inventory_audit.DEFUNCT:
+            listing = inventory_audit.defunct_assignments(account, assigned_workspace_id, inventory=inventory)
+            if listing is None:
+                continue
+        for assignment in (
+            account.workspace_assignment.list(int(assigned_workspace_id)) if listing is None else listing
+        ):
             principal = getattr(assignment, "principal", None)
             principal_id = _text(getattr(principal, "principal_id", None))
             service_principal_name = _text(getattr(principal, "service_principal_name", None))
@@ -437,7 +475,11 @@ def _assert_runtime_workspace_assignment_boundary(
 
 
 def _catalog_bindings(workspace: Any, *, catalog: str) -> dict[str, str]:
-    """Every workspace an ISOLATED catalog is bound to, and how; incomplete evidence fails."""
+    """Every workspace an ISOLATED catalog is bound to, and how; incomplete evidence fails.
+
+    The audit reads bindings from the estate inventory now; the owner-run
+    exposure candidate listing (``estate.cli``) still reads them live.
+    """
 
     bindings_by_workspace: dict[str, str] = {}
     for binding in workspace.workspace_bindings.get_bindings("catalog", catalog):
@@ -455,70 +497,15 @@ def _catalog_bindings(workspace: Any, *, catalog: str) -> dict[str, str]:
     return bindings_by_workspace
 
 
-def _exposure_scope(
-    workspace: Any,
-    matcher: ExposureMatcher | None,
-    catalog_inventory: Mapping[str, tuple[str, object]],
-) -> UcExposureScope | None:
-    """The identity's accepted UC exposure, or ``None`` when it covers nothing (no extra read)."""
-
-    if matcher is None or not matcher.active:
-        return None
-    cache: dict[str, tuple[str, tuple[str, ...]]] = {}
-    lock = Lock()
-
-    def binding(catalog: str) -> tuple[str, tuple[str, ...]]:
-        with lock:
-            if catalog in cache:
-                return cache[catalog]
-        mode = catalog_inventory[catalog][0] if catalog in catalog_inventory else ""
-        bound = sorted(_catalog_bindings(workspace, catalog=catalog)) if mode == "ISOLATED" else []
-        with lock:
-            return cache.setdefault(catalog, (mode, tuple(bound)))
-
-    return UcExposureScope(matcher=matcher, binding=binding)
-
-
-def _binding_evidence(
-    workspace: Any,
-    *,
-    catalog: str,
-    owner: str,
-    catalog_type: str,
-    isolation_mode: str,
-    workspace_id: str,
-) -> CatalogBindingEvidence | None:
-    """Return exact workspace-denial evidence, or None for an accessible catalog."""
-
-    if isolation_mode != "ISOLATED":
-        if isolation_mode == "OPEN":
-            return None
-        raise RuntimeError(
-            f"UC control-plane catalog {catalog} has an unknown isolation mode: "
-            f"{isolation_mode or '<empty>'}"
-        )
-    if not workspace_id:
-        raise RuntimeError("UC control-plane audit found no current workspace identity")
-    bindings_by_workspace = _catalog_bindings(workspace, catalog=catalog)
-    if workspace_id in bindings_by_workspace:
-        return None
-    return CatalogBindingEvidence(
-        catalog=catalog,
-        owner=owner,
-        catalog_type=catalog_type,
-        isolation_mode=isolation_mode,
-        bindings=tuple(sorted(bindings_by_workspace.items())),
-    )
-
-
 def audit_foreign_uc_access(
     workspace: Any,
     *,
     application_id: str,
     catalog: str,
     expected_inventory_principal: str,
+    inventory: EstateInventory,
+    self_view: Any,
     allow_missing_mip_catalog: bool = False,
-    foreign_catalog_binding_policy: str = "",
     account_factory: Callable[[], Any] = account_client_from_env,
     group_membership_probe: Callable[[Any, str, str, str, str], bool] | None = None,
     target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
@@ -529,9 +516,12 @@ def audit_foreign_uc_access(
     """Prove zero target-principal access on every ordinary foreign catalog.
 
     Zero beyond the target identity's accepted exposure: ``exposure`` is the
-    agent-runtime's or agent-proxy's matcher (M2-PR4), read class only. A
-    catalog whose exposure it accepts is still grant-audited, so the
-    self-view verifiers skip it as before.
+    agent-runtime's or agent-proxy's matcher (M2-PR4), read class only, and
+    the self-view (``self_view``, a client authenticated as exactly that
+    identity) consults it. ``inventory`` is the owner's estate inventory for
+    this metastore, loaded and acknowledged right before the call
+    (``estate.inventory.load_estate_inventory``); the deployer needs to be a
+    workspace admin, not the metastore's owner.
     """
 
     principal = application_id.strip()
@@ -545,11 +535,14 @@ def audit_foreign_uc_access(
         or expected_inventory_principal != inventory_principal
     ):
         raise ValueError("application ID, MIP catalog, and inventory principal are required")
-    metastore_id, workspace_id = _assert_metastore_owner_inventory_identity(
-        workspace,
-        expected_principal=inventory_principal,
+    assert_workspace_admin_inventory_identity(workspace, expected_principal=inventory_principal)
+    metastore_id = _text(getattr(workspace.metastores.current(), "metastore_id", None))
+    if not metastore_id:
+        raise RuntimeError("UC control-plane audit found no current metastore identity")
+    workspace_id = authoritative_workspace_id(workspace)
+    inventory_audit.assert_inventory_binds(
+        inventory, metastore_id=metastore_id, workspace_id=workspace_id, install_catalog=mip_catalog
     )
-    binding_policy = parse_foreign_catalog_binding_policy(foreign_catalog_binding_policy)
     account = account_factory()
     workspace_target = workspace_target_identity(
         workspace,
@@ -617,11 +610,6 @@ def audit_foreign_uc_access(
         effective_groups=effective_target_groups,
         implicit_system_groups=implicit_system_groups,
     )
-    approved_foreign_workspace_ids = {
-        binding_workspace_id
-        for evidence in binding_policy.values()
-        for binding_workspace_id, _binding_type in evidence.bindings
-    }
     _assert_runtime_workspace_assignment_boundary(
         account,
         application_id=principal,
@@ -635,200 +623,84 @@ def audit_foreign_uc_access(
         allowed_workspace_groups=normalized_allowed_workspace_groups,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
-        approved_foreign_workspace_ids=approved_foreign_workspace_ids,
+        approved_foreign_workspace_ids=inventory_audit.binding_workspace_ids(inventory),
+        inventory=inventory,
     )
-    catalog_inventory: dict[str, tuple[str, object]] = {}
-    for item in workspace.catalogs.list(include_browse=True, include_unbound=True):
-        name = _text(getattr(item, "name", None))
-        if not name:
-            raise RuntimeError("UC control-plane catalog inventory returned an empty name")
-        if name in catalog_inventory:
-            raise RuntimeError("UC control-plane catalog inventory returned duplicate names")
-        catalog_inventory[name] = (
-            _text(getattr(item, "isolation_mode", None)).upper(),
-            item,
-        )
-    scope = _exposure_scope(workspace, exposure, catalog_inventory)
-    mip_catalog_exists = mip_catalog in catalog_inventory
-    if not mip_catalog_exists and not allow_missing_mip_catalog:
-        raise RuntimeError("configured MIP catalog is missing from control-plane inventory")
-    internal = catalog_inventory.get(_DATABRICKS_INTERNAL_CATALOG)
-    if internal is not None:
-        isolation_mode, item = internal
-        catalog_type = _text(getattr(item, "catalog_type", None)).upper()
-        owner = _exact_owner(
-            item,
-            context="Databricks internal catalog inventory",
-        )
-        if isolation_mode != "OPEN" or catalog_type != "INTERNAL_CATALOG" or owner != "System user":
-            raise RuntimeError(
-                "Databricks internal catalog does not match the fixed platform identity"
-            )
-        internal_sources = _effective_privilege_sources(
-            workspace,
-            securable_type="catalog",
-            full_name=_DATABRICKS_INTERNAL_CATALOG,
-            principal=principal,
-        )
-        if internal_sources:
-            raise RuntimeError(
-                "agent-runtime has forbidden access on Databricks internal catalog: "
-                f"{internal_sources}"
-            )
-    excluded_catalogs = set(_PLATFORM_CATALOGS)
-    if mip_catalog_exists:
-        excluded_catalogs.add(mip_catalog)
-    foreign_catalogs = sorted(set(catalog_inventory) - excluded_catalogs)
-    foreign_objects: list[object] = []
-    binding_denied_objects: list[object] = []
-    binding_denied_catalogs: dict[str, CatalogBindingEvidence] = {}
-    foreign_objects_lock = Lock()
-
-    def record_owner(item: object) -> None:
-        with foreign_objects_lock:
-            foreign_objects.append(item)
-
-    def record_binding_denied_owner(item: object) -> None:
-        with foreign_objects_lock:
-            binding_denied_objects.append(item)
-
-    def inspect_catalog(foreign_catalog: str) -> None:
-        isolation_mode, catalog_object = catalog_inventory[foreign_catalog]
-        catalog_owner = _exact_owner(
-            catalog_object,
-            context=f"UC control-plane catalog {foreign_catalog}",
-        )
-        evidence = _binding_evidence(
-            workspace,
-            catalog=foreign_catalog,
-            owner=catalog_owner,
-            catalog_type=_text(getattr(catalog_object, "catalog_type", None)).upper(),
-            isolation_mode=isolation_mode,
-            workspace_id=workspace_id,
-        )
-        if evidence is not None:
-            expected_evidence = binding_policy.get(foreign_catalog)
-            if evidence != expected_evidence:
-                raise RuntimeError(
-                    f"UC control-plane catalog {foreign_catalog} does not match the "
-                    "reviewed binding-denial policy"
-                )
-            record_binding_denied_owner(catalog_object)
-            with foreign_objects_lock:
-                binding_denied_catalogs[foreign_catalog] = evidence
-            return
-        record_owner(catalog_object)
-        if foreign_catalog in binding_policy:
-            raise RuntimeError(
-                f"UC control-plane catalog {foreign_catalog} is not binding-denied as reviewed"
-            )
-        sources = _effective_privilege_sources(
-            workspace,
-            securable_type="catalog",
-            full_name=foreign_catalog,
-            principal=principal,
-        )
-        if scope is not None:
-            sources = scope.residual(
-                securable_type="catalog",
-                full_name=foreign_catalog,
-                item_id=foreign_catalog,
-                sources=sources,
-            )
-        if sources:
-            raise RuntimeError(
-                f"agent-runtime has forbidden access on catalog {foreign_catalog}: {sources}"
-            )
-        _assert_no_catalog_child_privileges(
-            workspace,
-            catalog=foreign_catalog,
-            catalog_type=_text(getattr(catalog_object, "catalog_type", None)),
-            catalog_owner=catalog_owner,
-            principal=principal,
-            owner_check=record_owner,
-            exposure=scope,
-        )
-
-    if foreign_catalogs:
-        with ThreadPoolExecutor(
-            max_workers=min(_MAX_INVENTORY_WORKERS, len(foreign_catalogs)),
-            thread_name_prefix="mip-uc-control-plane",
-        ) as executor:
-            futures = [executor.submit(inspect_catalog, name) for name in foreign_catalogs]
-            for future in as_completed(futures):
-                future.result()
-
-    registered_models = list(workspace.registered_models.list(include_browse=True))
-    for model in registered_models:
-        model_catalog = _catalog_name(model)
-        full_name = _full_name(model)
-        if not model_catalog or not full_name:
-            raise RuntimeError(
-                "UC control-plane registered-model inventory returned an incomplete identity"
-            )
-        if model_catalog not in catalog_inventory:
-            raise RuntimeError(
-                "UC control-plane registered-model catalog is absent from catalog inventory"
-            )
-        if model_catalog in {mip_catalog, *_PLATFORM_CATALOGS}:
-            continue
-        if model_catalog in binding_denied_catalogs:
-            record_binding_denied_owner(model)
-            continue
-        record_owner(model)
-        _assert_privileges(
-            workspace,
-            securable_type="function",
-            full_name=full_name,
-            principal=principal,
-            expected=set(),
-            exposure=scope,
-            item_id=full_name,
-        )
+    # What the deployer lists must be in the inventory, unchanged.
+    inventory_audit.assert_live_catalogs(
+        workspace.catalogs.list(include_browse=True, include_unbound=True),
+        inventory=inventory,
+        allow_missing_install=allow_missing_mip_catalog,
+    )
+    inventory_audit.assert_platform_catalogs(inventory)
+    inventory_audit.assert_information_schema_owners(inventory)
+    accessible_owners, binding_denied_owners = inventory_audit.owner_objects(inventory)
     _assert_no_binding_denied_runtime_ownership(
         target_aliases=target.aliases,
         effective_groups=effective_target_groups,
         implicit_system_groups=implicit_system_groups,
-        objects=binding_denied_objects,
+        objects=binding_denied_owners,
     )
     _assert_no_foreign_ownership(
         workspace,
         target=target,
-        objects=foreign_objects,
+        objects=accessible_owners,
         account_factory=lambda: account,
         group_membership_probe=frozen_membership_probe,
     )
-    if set(binding_policy) != set(binding_denied_catalogs):
-        raise RuntimeError("foreign catalog binding-denial policy was not fully proven")
+    grant_audited = assert_self_view(
+        self_view,
+        application_id=principal,
+        inventory=inventory,
+        exposure=exposure,
+    )
+    binding_denied = inventory_audit.binding_evidence(inventory)
     return _issue_control_plane_foreign_catalog_proof(
         application_id=principal,
         catalog=mip_catalog,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
-        grant_audited_catalogs=frozenset(set(foreign_catalogs) - set(binding_denied_catalogs)),
-        binding_denied_catalogs=tuple(
-            binding_denied_catalogs[name] for name in sorted(binding_denied_catalogs)
-        ),
+        grant_audited_catalogs=grant_audited,
+        binding_denied_catalogs=binding_denied,
     )
+
+
+def load_audit_inventory(workspace: Any, *, catalog: str) -> EstateInventory:
+    """The owner's inventory for this deployed metastore, recomputed and acknowledged now."""
+
+    return load_estate_inventory(
+        metastore_id=_text(getattr(workspace.metastores.current(), "metastore_id", None)),
+        workspace_id=authoritative_workspace_id(workspace),
+        install_catalog=catalog.strip(),
+    )
+
+
+def load_audit_inputs(
+    workspace: Any, *, identity: str, application_id: str, catalog: str
+) -> tuple[EstateInventory, Any]:
+    """The inventory, recomputed and acknowledged now, and the identity's self-view client."""
+
+    inventory = load_audit_inventory(workspace, catalog=catalog)
+    host = _text(getattr(getattr(workspace, "config", None), "host", None))
+    return inventory, self_view_client(identity, application_id=application_id.strip(), host=host)
 
 
 def main(argv: list[str] | None = None) -> int:
     # Hard socket + wall-clock deadlines; rationale and incident trail live
     # with the implementation in tools.databricks.probe_deadlines.
     install_probe_deadlines(label="identity-probe")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--application-id", required=True)
     parser.add_argument("--catalog", default="mip")
     parser.add_argument("--expected-inventory-principal", required=True)
     parser.add_argument(
-        "--foreign-catalog-binding-policy-json",
-        default=os.environ.get("MIP_UC_FOREIGN_CATALOG_BINDING_POLICY", ""),
-        help=("Exact versioned JSON contract for ordinary catalogs denied by workspace binding."),
-    )
-    parser.add_argument(
         "--exposure-identity",
         choices=("runtime", "proxy"),
-        help="Remove what this identity's accepted exposure (MIP_ACCEPTED_EXPOSURE_JSON) accepts.",
+        required=True,
+        help=(
+            "The audited identity: its self-view credential and the accepted exposure "
+            "(MIP_ACCEPTED_EXPOSURE_JSON) its matcher accepts."
+        ),
     )
     parser.add_argument(
         "--allow-missing-mip-catalog",
@@ -839,20 +711,25 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+    # Same stalled-read posture as uc_owner_policy.account_client_from_env
+    # (2026-08-09); the deployer binding caches a github-oidc token for all workers.
+    workspace = deployment_workspace_client(
+        factory=lambda **auth: WorkspaceClient(config=Config(**auth, http_timeout_seconds=120))
+    )
+    inventory, self_view = load_audit_inputs(
+        workspace, identity=args.exposure_identity, application_id=args.application_id, catalog=args.catalog
+    )
     audit_foreign_uc_access(
-        # Same stalled-read posture as uc_owner_policy.account_client_from_env
-        # (2026-08-09); the deployer binding caches a github-oidc token for all workers.
-        deployment_workspace_client(
-            factory=lambda **auth: WorkspaceClient(config=Config(**auth, http_timeout_seconds=120))
-        ),
+        workspace,
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
+        inventory=inventory,
+        self_view=self_view,
         allow_missing_mip_catalog=args.allow_missing_mip_catalog,
-        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
-        exposure=identity_matcher(args.exposure_identity) if args.exposure_identity else None,
+        exposure=identity_matcher(args.exposure_identity),
     )
-    print("agent-runtime foreign UC control-plane boundary: PASS")
+    print("agent-runtime foreign UC boundary (estate inventory, account plane, self-view): PASS")
     return 0
 
 

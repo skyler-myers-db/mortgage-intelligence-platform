@@ -40,6 +40,9 @@ DEPLOY_SLICED_LIBRARIES = (
     _LIB / "deploy_bundle_plan_gate_lifecycle.sh",
     # The adopt and unadopt phases (M2-PR6), sourced right after the gate.
     _LIB / "deploy_adopt_phase_lifecycle.sh",
+    # The estate inventory (M4-PR1): the retired binding policy and the
+    # agentic tier's pre-lease inventory check.
+    _LIB / "deploy_estate_inventory_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (

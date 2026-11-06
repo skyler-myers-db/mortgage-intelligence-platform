@@ -24,6 +24,7 @@ from tests.fixtures.client_profiles import (
     env_file_text,
     paychex_shaped_profile,
 )
+from tests.fixtures.deploy_sandbox import inherited
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
     DEPLOY_SOURCED_SCRIPTS,
@@ -4842,11 +4843,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     )
     fake_databricks.chmod(0o755)
     env = {
-        **{
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith(("COV_CORE", "COVERAGE", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
-        },
+        **{name: value for name, value in os.environ.items() if not inherited(name)},
         "DATABRICKS_STUB_LOG": str(log),
         # A Python SDK client built by mistake fails offline.
         "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
@@ -5878,14 +5875,9 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     binding = "MIP_UC_APPROVED_OWNER_PRINCIPALS: " "${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}"
     assert workflow.count(binding) == 2
     assert "MIP_UC_APPROVED_OWNER_PRINCIPALS=${MIP_UC_APPROVED_OWNER_PRINCIPALS}" in workflow
-    binding_policy = (
-        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY: "
-        "${{ vars.MIP_UC_FOREIGN_CATALOG_BINDING_POLICY }}"
-    )
-    assert workflow.count(binding_policy) == 2
-    assert (
-        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY=" "${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY}"
-    ) in workflow
+    # Retired (M4-PR1): the owner's estate inventory carries the reviewed
+    # binding-denied catalogs, so CI no longer plumbs the policy anywhere.
+    assert "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" not in workflow
     assert "DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}" in workflow
     assert (
         "DATABRICKS_ACCOUNT_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
@@ -5893,6 +5885,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     script = _deploy_entrypoint_text()
     assert "dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS" in script
     assert "deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" in script
+    assert "export MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" not in script
     assert 'resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"' in script
     assert "account-SCIM OAuth client must be distinct from" in script
     assert "account_client_id not in values" in script
@@ -6539,11 +6532,7 @@ def test_deploy_preflight_requires_no_runtime_hmac_input(
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
 
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
-    }
+    env = {name: value for name, value in os.environ.items() if not inherited(name)}
     env.update(shell)
     env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
     env["MIP_DEPLOY_PYTHON"] = sys.executable
