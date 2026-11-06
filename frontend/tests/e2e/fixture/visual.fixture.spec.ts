@@ -109,22 +109,6 @@ async function legendCaptionMask(page: Page) {
   await expect(caption).toContainText('Colored by: marketable population');
   return [caption];
 }
-/**
- * The ZCTA drill's legend sits on the same fractional `backdrop-filter` layer as
- * legendCaptionMask's, but at the drilled map's offset both its caption AND its
- * Lower / Higher end labels land within 0.02px of a pixel boundary, so the CI
- * double run re-rasters both lines (354 and 412 px in dark and light, all inside
- * the legend text; the ZIP polygons and the ramp were byte-stable). Mask those two
- * lines only, after asserting their copy.
- */
-async function zctaLegendMask(page: Page) {
-  const map = page.locator('#main-content .map-wrap');
-  const ends = map.locator('.map-legend__end');
-  await expect(ends).toHaveText(['Lower', 'Higher']);
-  const caption = map.locator('.map-legend__caption').first();
-  await expect(caption).toContainText('Colored by: marketable population');
-  return [caption, ends];
-}
 const ROUTE_BY_NAME = new Map(FIXTURE_ROUTES.map((route) => [route.name, route]));
 
 function route(name: string): FixtureRoute {
@@ -271,7 +255,11 @@ for (const theme of FIXTURE_THEMES) {
 
     // M (W5c w5-zcta-watchlist, dataviz-01): the Segments map drilled to
     // Illinois, its ZIP areas as the committed ZCTA polygons (the approved
-    // operator build, 2026-10-26).
+    // operator build, 2026-10-26). Nothing is masked: over the ZIP areas the
+    // legend is painted with the page, not a backdrop-filter surface whose
+    // raster kept the pre-drill sub-pixel phase (its caption and end labels
+    // were masked for that, and its class bar lost a row; deviation:zcta-legend-flat,
+    // zcta-legend-raster.fixture.spec.ts).
     test('segment-intelligence · zcta drill', async ({ app, mockApi, page }) => {
       const { naturalLoad } = await load(app, mockApi, route('segment-intelligence'), theme);
       await page.locator('path[data-map-unit="il"]').click();
@@ -292,7 +280,7 @@ for (const theme of FIXTURE_THEMES) {
       await map.scrollIntoViewIfNeeded();
       await app.settle();
       await expectNoSurfaceOverflow(page, { route: 'segment-intelligence', state: 'zcta-drill', theme });
-      await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map, mask: await zctaLegendMask(page) });
+      await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map });
       expectNoAuditedReadSince(mockApi, drilled, 'segment-intelligence · zcta drill');
     });
 
