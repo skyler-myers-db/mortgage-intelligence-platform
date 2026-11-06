@@ -26,8 +26,8 @@ import pytest
 from tests.fixtures.client_profiles import env_file_text, paychex_shaped_profile
 from tests.fixtures.deploy_sandbox import (
     ANSI,
-    INHERITED_PREFIXES,
     dry_run,
+    inherited,
     planned_commands,
     sandbox,
 )
@@ -50,9 +50,7 @@ def _deploy(cwd: Path, env: dict[str, str], *args: str) -> subprocess.CompletedP
 
 
 def _clean_env() -> dict[str, str]:
-    return {
-        name: value for name, value in os.environ.items() if not name.startswith(INHERITED_PREFIXES)
-    }
+    return {name: value for name, value in os.environ.items() if not inherited(name)}
 
 
 def _refresh_off(checkout: Path) -> None:

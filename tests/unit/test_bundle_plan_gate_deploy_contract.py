@@ -150,7 +150,10 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
     # The adopt phases' plan block (M2-PR6) sits right before it, also at top level.
     before = text[: text.index(GATE_START)].rstrip()
     assert before.endswith("# <<< adopt phase: plan <<<")
-    assert before[: before.index("# >>> adopt phase: plan >>>")].rstrip().endswith(
+    # Before it, the agentic tier's estate inventory check (M4-PR1), also at top level.
+    estate = before[: before.index("# >>> adopt phase: plan >>>")].rstrip()
+    assert estate.endswith("check_estate_inventory_prelease\n# <<< estate inventory: pre-lease <<<")
+    assert estate[: estate.index("# >>> estate inventory: pre-lease >>>")].rstrip().endswith(
         "fi"
     ), "outside the dry-run branches"
     # Only the release's budget admission (M1-PR6), also at top level, sits

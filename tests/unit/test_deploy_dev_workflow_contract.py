@@ -27,6 +27,7 @@ from tests.fixtures.client_profiles import (
     paychex_shaped_profile,
     split_contexts,
 )
+from tests.fixtures.deploy_sandbox import inherited
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
     DEPLOY_SOURCED_SCRIPTS,
@@ -4825,11 +4826,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     )
     fake_databricks.chmod(0o755)
     env = {
-        **{
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith(("COV_CORE", "COVERAGE", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
-        },
+        **{name: value for name, value in os.environ.items() if not inherited(name)},
         "DATABRICKS_STUB_LOG": str(log),
         # A Python SDK client built by mistake fails offline.
         "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
@@ -5312,8 +5309,8 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     # account principal are client profile fields, which the
     # resolve-client-profile action writes to .env.local from the
     # environment's variables and secrets: the workflow names none of them.
-    # The foreign-catalog binding policy is no profile field (it retires with
-    # M4-PR2), so the per-client workflow carries none.
+    # The foreign-catalog binding policy is no profile field, and M4-PR1
+    # retired it, so the per-client workflow carries none.
     for name in (
         "MIP_DEFAULT_CATALOG",
         "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY",
@@ -5328,6 +5325,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     script = _deploy_entrypoint_text()
     assert "dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS" in script
     assert "deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" in script
+    assert "export MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" not in script
     assert 'resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"' in script
     assert "account-SCIM OAuth client must be distinct from" in script
     assert "account_client_id not in values" in script
@@ -5967,11 +5965,7 @@ def test_deploy_preflight_requires_no_runtime_hmac_input(
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
 
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
-    }
+    env = {name: value for name, value in os.environ.items() if not inherited(name)}
     env.update(shell)
     env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
     env["MIP_DEPLOY_PYTHON"] = sys.executable

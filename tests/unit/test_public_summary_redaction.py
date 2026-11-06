@@ -72,9 +72,9 @@ REPOSITORY_VARS = {"MIP_TENANT_ID": "tenant-zyrplax-EXAMPLE-7f3a91"}
 REPOSITORY_SECRETS = {"DATABRICKS_TOKEN": "dapi-EXAMPLE-PLACEHOLDER-retired"}
 # A profile name another test left in this worker's os.environ (the Lakebase
 # tools write LAKEBASE_DATABASE straight into it): a shell value beats the
-# .env.local the action writes, so the sandbox must strip it (CI, by test order).
-AMBIENT = {"LAKEBASE_DATABASE": "ambient_database", "LAKEBASE_INSTANCE_NAME": "ambient-instance",
-           "APP_ENV": "dev", "PGDATABASE": "ambient_database"}
+# .env.local the action writes, so the sandbox must strip it (CI, by test order;
+# tests/fixtures/deploy_sandbox.inherited).
+AMBIENT = {"LAKEBASE_DATABASE": "ambient_database", "LAKEBASE_INSTANCE_NAME": "ambient-instance", "APP_ENV": "dev"}
 # Steps the offline sandbox cannot run: their headers are still rendered and checked.
 HEADER_ONLY = {"Install the deploy tooling offline and hash-pinned", "Prove the GitHub OIDC deployer identity",
                "Record the quiesce window journal state"}

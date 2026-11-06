@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import SecretStr
 
-from tests.fixtures.lakebase_env import isolate_lakebase_env
+from tests.fixtures.env_isolation import LAKEBASE_CONNECTION_ENV, restore_on_teardown
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "tools" / "sync_lifecycle_warehouse.py"
@@ -116,7 +116,8 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
         lakebase_password=SecretStr("hostile-password"),
         lakebase_sslmode="disable",
     )
-    isolate_lakebase_env(monkeypatch)
+    # _set_lakebase_auth writes all twelve names straight into os.environ.
+    restore_on_teardown(monkeypatch, LAKEBASE_CONNECTION_ENV)
     for name, value in {
         "LAKEBASE_HOST": "hostile-ambient-lakebase.example",
         "LAKEBASE_PASSWORD": "hostile-ambient-password",
@@ -166,14 +167,17 @@ def test_lifecycle_loader_does_not_rehydrate_dotenv_auth_when_deployer_bound(
     monkeypatch.setattr(MODULE, "REPO_ROOT", tmp_path)
     monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", "REVIEWED")
     monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "REVIEWED")
-    for name in (
+    dotenv_names = (
         "DATABRICKS_HOST",
         "DATABRICKS_TOKEN",
         "DATABRICKS_AUTH_TYPE",
         "DATABRICKS_CLIENT_ID",
         "DATABRICKS_CLIENT_SECRET",
         "DATABRICKS_WAREHOUSE_ID",
-    ):
+    )
+    # _load_local_env copies .env.local's names straight into os.environ.
+    restore_on_teardown(monkeypatch, dotenv_names)
+    for name in dotenv_names:
         monkeypatch.delenv(name, raising=False)
 
     MODULE._load_local_env()

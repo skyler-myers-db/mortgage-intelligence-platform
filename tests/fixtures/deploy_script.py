@@ -49,6 +49,9 @@ DEPLOY_SLICED_LIBRARIES = (
     _LIB / "deploy_prebuilt_release_lifecycle.sh",
     # The plan's two PlanReport halves and the release's deployment pin (M1-PR7).
     _LIB / "deploy_plan_report_lifecycle.sh",
+    # The estate inventory (M4-PR1): the retired binding policy and the
+    # agentic tier's pre-lease inventory check.
+    _LIB / "deploy_estate_inventory_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (

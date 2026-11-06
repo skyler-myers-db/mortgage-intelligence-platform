@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify agent-proxy UC access with metastore-owner and proxy authority."""
+"""Verify agent-proxy UC access with the estate inventory, deployer and proxy authority."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from tools.databricks.agent_proxy_capability_group_access import (
 from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     audit_foreign_uc_access,
+    load_audit_inputs,
+    load_audit_inventory,
 )
 from tools.databricks.estate.accepted_exposure import identity_matcher
 from tools.databricks.serving_endpoint_legacy_query import (
@@ -234,10 +236,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--supervisor-id", action="append", default=[])
     parser.add_argument("--supervisor-endpoint-id", action="append", default=[])
     parser.add_argument("--genie-space-id", default="")
-    parser.add_argument(
-        "--foreign-catalog-binding-policy-json",
-        default=os.environ.get("MIP_UC_FOREIGN_CATALOG_BINDING_POLICY", ""),
-    )
     args = parser.parse_args(argv)
 
     # The deployer binding caches a github-oidc token across both foreign-UC audits
@@ -256,12 +254,17 @@ def main(argv: list[str] | None = None) -> int:
     allowed_workspace_groups = reviewed_capability_attestation.allowed_workspace_groups()
     # The proxy identity's accepted UC exposure, the same for both proofs (M2-PR4).
     exposure = identity_matcher("proxy")
+    # The owner's estate inventory, recomputed and acknowledged before each audit (M4-PR1).
+    inventory, self_view = load_audit_inputs(
+        admin_workspace, identity="proxy", application_id=args.application_id, catalog=args.catalog
+    )
     proof = audit_foreign_uc_access(
         admin_workspace,
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
-        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
+        inventory=inventory,
+        self_view=self_view,
         account_factory=lambda: account_client,
         exposure=exposure,
         allowed_workspace_groups=allowed_workspace_groups,
@@ -277,12 +280,14 @@ def main(argv: list[str] | None = None) -> int:
         catalog=args.catalog,
         foreign_control_plane_proof=proof,
     )
+    inventory = load_audit_inventory(admin_workspace, catalog=args.catalog)
     final_proof = audit_foreign_uc_access(
         admin_workspace,
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
-        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
+        inventory=inventory,
+        self_view=self_view,
         account_factory=lambda: account_client,
         exposure=exposure,
         allowed_workspace_groups=allowed_workspace_groups,

@@ -4,8 +4,7 @@ A clone of HEAD plus the working tree's uncommitted tracked edits, a stub
 ``databricks`` that answers only ``--version`` and fails on anything else, an
 ``.env.local`` holding a full synthetic client profile (the paychex-shaped one
 in tests/fixtures/client_profiles.py, M1-PR2) and a base environment stripped
-of every ambient GitHub, Databricks, MIP, Lakebase and libpq name and every
-client profile name. Moved from the CI staging
+of every ambient GitHub, Databricks and MIP name. Moved from the CI staging
 target's dry-run test, which left with that target (M0-PR3).
 """
 
@@ -21,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_shaped_profile
+from tools.clients.environment import KNOWN_NAMES
 
 REPO = Path(__file__).resolve().parents[2]
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -35,14 +35,24 @@ STUB = (
     "exit 97\n"
 )
 # Ambient names a dry run must never inherit from the developer's or the runner's shell.
-# A shell profile name beats .env.local (tools/clients/environment.from_local),
-# so every one is stripped, the three outside the MIP_/DATABRICKS_/GENIE_
-# prefixes too (LAKEBASE_DATABASE, LAKEBASE_INSTANCE_NAME, APP_ENV;
-# tests/unit/test_deploy_sandbox_env.py holds the list to the schema's). The
-# Lakebase tools' tests mint LAKEBASE_* and libpq PG* names into os.environ.
-INHERITED_PREFIXES = (
-    "COV_CORE", "COVERAGE", "GITHUB_", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_", "LAKEBASE_", "APP_ENV", "PG",
-)
+INHERITED_PREFIXES = ("COV_CORE", "COVERAGE", "GITHUB_", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_")
+
+
+# Every client-profile field and alias, whatever its prefix: the names the
+# profile reader itself accepts (tools/clients/environment.py). A shell value
+# wins over .env.local, and some names carry none of the prefixes above
+# (LAKEBASE_DATABASE, LAKEBASE_INSTANCE_NAME, APP_ENV). A test whose code under
+# test wrote one into os.environ leaked it to the next module on the same xdist
+# worker, where the dry run then refused the profile ("must agree"): a CI-only,
+# order-dependent failure (PR #321, 2026-11-05). tests/fixtures/env_isolation.py
+# stops the leaks; this strip keeps a dry run safe from any that remain.
+PROFILE_ENV_NAMES = KNOWN_NAMES
+
+
+def inherited(name: str) -> bool:
+    """True for an ambient name a dry run or an in-process profile read must not inherit."""
+
+    return name.startswith(INHERITED_PREFIXES) or name in PROFILE_ENV_NAMES
 
 
 def venv_prefix() -> Path:
@@ -94,7 +104,7 @@ def sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     (bin_dir / "databricks").write_text(STUB, encoding="utf-8")
     (bin_dir / "databricks").chmod(0o755)
     log = tmp_path / "databricks.log"
-    env = {name: value for name, value in os.environ.items() if not name.startswith(INHERITED_PREFIXES)}
+    env = {name: value for name, value in os.environ.items() if not inherited(name)}
     env.update(
         {
             # A Python SDK client the dry run builds by mistake must fail

@@ -299,9 +299,7 @@ fi
 # shell export wins; otherwise the documented .env.local value wins; defaults
 # preserve the established Entrada installation. Alias drift still fails.
 MIP_DEFAULT_CATALOG="$(deployment_control_value MIP_DEFAULT_CATALOG mip)"
-MIP_UC_FOREIGN_CATALOG_BINDING_POLICY="$(
-  deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY
-)"
+retire_foreign_catalog_binding_policy
 MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"
 # The resolver below gets the lender name only when it is configured: an
 # unset name is Summit there, and a pinned record must not meet that default.
@@ -504,7 +502,6 @@ fi
 MIP_DEPLOYMENT_SOURCE_GIT_SHA="$SOURCE_GIT_SHA"
 export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID
 export MIP_DEPLOYMENT_SOURCE_GIT_SHA
-export MIP_UC_FOREIGN_CATALOG_BINDING_POLICY
 export MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
 export LAKEBASE_DATABASE MIP_LAKEBASE_DATABASE_NAME MIP_LAKEBASE_SYNC_CATALOG
 export MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES

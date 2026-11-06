@@ -4,12 +4,38 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.env_isolation import EXACT_M2M_BINDING_ENV, restore_on_teardown
 from tools.databricks import verify_agent_proxy_uc_boundary_dual_authority as dual
 from tools.databricks.agent_runtime_uc_baseline import (
     _issue_control_plane_foreign_catalog_proof,
 )
 
 _APPLICATION_ID = "proxy-client"
+_INVENTORY = SimpleNamespace(name="estate-inventory")
+_SELF_VIEW = SimpleNamespace(name="proxy-self-view")
+
+
+@pytest.fixture(autouse=True)
+def _stub_estate_inputs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The owner's estate inventory and the proxy's self-view client (M4-PR1)."""
+
+    loads: list[str] = []
+    monkeypatch.setattr(
+        dual,
+        "load_audit_inputs",
+        lambda _workspace, **kwargs: loads.append(kwargs["identity"]) or (_INVENTORY, _SELF_VIEW),
+    )
+    monkeypatch.setattr(
+        dual, "load_audit_inventory", lambda _workspace, **_kwargs: loads.append("reload") or _INVENTORY
+    )
+    return loads
+
+
+@pytest.fixture(autouse=True)
+def _restore_exact_m2m_binding_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dual.main binds the exact M2M identity by writing os.environ directly."""
+
+    restore_on_teardown(monkeypatch, EXACT_M2M_BINDING_ENV)
 
 
 def _proof():
@@ -67,6 +93,7 @@ def _attestation(
 
 def test_dual_authority_couples_control_and_proxy_in_one_process(
     monkeypatch: pytest.MonkeyPatch,
+    _stub_estate_inputs: list[str],
 ) -> None:
     admin = SimpleNamespace(config=SimpleNamespace(host="https://workspace.example"))
     proxy = SimpleNamespace(name="proxy")
@@ -84,7 +111,9 @@ def test_dual_authority_couples_control_and_proxy_in_one_process(
         dual,
         "audit_foreign_uc_access",
         lambda workspace, **kwargs: (
-            events.append(("control", (workspace, kwargs["account_factory"]()))) or _proof()
+            events.append(("control", (workspace, kwargs["account_factory"]())))
+            or events.append(("estate", (kwargs["inventory"], kwargs["self_view"])))
+            or _proof()
         ),
     )
     monkeypatch.setattr(
@@ -104,9 +133,12 @@ def test_dual_authority_couples_control_and_proxy_in_one_process(
 
     assert events == [
         ("control", (admin, account)),
+        ("estate", (_INVENTORY, _SELF_VIEW)),
         ("proxy", (proxy, _proof())),
         ("control", (admin, account)),
+        ("estate", (_INVENTORY, _SELF_VIEW)),
     ]
+    assert _stub_estate_inputs == ["proxy", "reload"]
     assert dual.os.environ["DATABRICKS_CLIENT_ID"] == _APPLICATION_ID
     assert dual.os.environ["DATABRICKS_AUTH_TYPE"] == "oauth-m2m"
     assert "DATABRICKS_TOKEN" not in dual.os.environ

@@ -34,6 +34,7 @@ import pytest
 
 from backend.config.settings import settings  # noqa: E402
 from backend.services.genie_trusted_assets import trusted_assets  # noqa: E402
+from tests.fixtures.env_isolation import restore_on_teardown  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PGS_PATH = REPO_ROOT / "tools" / "databricks" / "provision_genie_space.py"
@@ -87,10 +88,16 @@ def test_env_local_does_not_override_catalog_routing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MIP_DEFAULT_CATALOG", raising=False)
-    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
-    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
-    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    dotenv_names = (
+        "MIP_DEFAULT_CATALOG",
+        "DATABRICKS_HOST",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+    )
+    # _load_env_local copies .env.local's names straight into os.environ.
+    restore_on_teardown(monkeypatch, dotenv_names)
+    for name in dotenv_names:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(pgs, "REPO_ROOT", tmp_path)
     (tmp_path / ".env.local").write_text(
         "MIP_DEFAULT_CATALOG=mip_demo\n"

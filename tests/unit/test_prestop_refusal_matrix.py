@@ -25,7 +25,7 @@ import json
 import shlex
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,9 @@ from tests.fixtures.prestop_estate import (
     rename_record_supervisor,
     write_estate,
 )
+from tools.clients.handover_journal import canonical_json
 from tools.databricks import prestop_refusals as codes
+from tools.databricks.estate import inventory as estate_inventory
 
 REPO = Path(__file__).resolve().parents[2]
 # Canned success for the steps the offline sandbox cannot run for real.
@@ -81,6 +83,35 @@ STOPS = (
     "-m tools.databricks.quiesce_window open",
     "-m tools.databricks.quiesce_window start",
 )
+
+
+def _estate_inventory_env() -> dict[str, str]:
+    """The owner's estate inventory of the fake estate's metastore, acknowledged (M4-PR1).
+
+    The agentic tier's pre-lease inventory check runs for real through the
+    launcher; the fake metastore holds no foreign catalog.
+    """
+
+    issued = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    document = {
+        "schema": estate_inventory.SCHEMA,
+        "purpose": estate_inventory.PURPOSE,
+        "issued_at": issued,
+        "metastore_id": "metastore-1",
+        "workspace_id": "4200000001",
+        "install_catalog": "mip",
+        "catalogs": {
+            "mip": {
+                "catalog_type": "MANAGED_CATALOG", "isolation_mode": "OPEN", "owner": DEPLOYER,
+                "bindings": [], "scope": "install", "gap": "", "owners": {}, "information_schema_owners": {},
+            }
+        },
+        "workspaces": {"assigned": ["4200000001"], "defunct": {}},
+    }  # fmt: skip
+    return {
+        estate_inventory.INVENTORY_JSON_ENV: canonical_json(document),
+        estate_inventory.ACK_ENV: estate_inventory.estate_digest(document),
+    }
 
 
 def _fake_python(tmp_path: Path) -> Path:
@@ -176,6 +207,7 @@ def _deploy(
             "DATABRICKS_VERIFIER_CLIENT_ID": VERIFIER_CLIENT,
             "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": RUNTIME_CLIENT,
             "DATABRICKS_ACCOUNT_CLIENT_ID": IDENTITY_IDS["account_principal"],
+            **_estate_inventory_env(),
             **env,
         }
     )
@@ -466,6 +498,34 @@ def test_each_refusal_exits_2_before_the_lease_and_any_stop(
 
     _assert_refused_before_the_lease(result, estate, after, reached, cli_calls, code)
     assert "nothing was changed and the App was not stopped by this run" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {estate_inventory.INVENTORY_JSON_ENV: "", estate_inventory.ACK_ENV: ""},
+        {estate_inventory.ACK_ENV: "0" * 64},
+    ],
+    ids=["no-inventory", "another-digest"],
+)
+def test_an_estate_inventory_refusal_exits_2_before_the_lease_and_any_stop(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    # The agentic tier's pre-lease inventory check (M4-PR1) refuses after the
+    # probes pass, with the App still serving and the lease never taken.
+    estate = clean_estate()
+
+    result, after, reached, cli_calls = _deploy(tmp_path, estate, **env)
+
+    detail = result.stdout[-3000:] + result.stderr[-6000:]
+    assert result.returncode == 2, detail
+    assert "[mip-prestop] pre-stop probes passed (read-only)" in result.stdout, detail
+    assert "[mip-estate] REFUSED: " in result.stderr, detail
+    assert "the estate inventory was refused before the lease" in result.stderr, detail
+    assert reached == [], f"reached {reached}: a stop primitive or the lease ran"
+    assert not any(call.startswith("apps stop") for call in cli_calls), cli_calls
+    assert after["app"]["state"] == "RUNNING"
+    assert after["app"]["active_deployment"] == estate["app"]["active_deployment"]
 
 
 @pytest.mark.parametrize("value", ("1", "true"))

@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parents[2]
 AUTOMATION_STEP = REPO / "scripts" / "lib" / "deploy_step_automation_identities.sh"
 PHASES = REPO / "scripts" / "lib" / "deploy_governed_phases_lifecycle.sh"
 PLAN_REPORT = REPO / "scripts" / "lib" / "deploy_plan_report_lifecycle.sh"
+ESTATE = REPO / "scripts" / "lib" / "deploy_estate_inventory_lifecycle.sh"
 # Every command a live --phase plan runs in this step file, in order: local
 # parses and renders, the read-only bundle validate and plan gate, the probes
 # without their Genie turn, the pii-salt listing and each phase's budget.
@@ -38,6 +39,8 @@ PLAN_CALLS = (
     "- ",  # a local heredoc: the admin-scope identities
     "tools.databricks.deploy_prestop_probes --app-name mip-app",
     "tools.databricks.pii_salt_scope check",
+    # M4-PR1: the agentic tier's estate inventory and its ack, read-only, before the lease.
+    "tools.databricks.estate.inventory_check --catalog mip",
     "run_bundle_plan_gate pre-lease",
     "tools.databricks.phase_budget describe --phase plan",
     "tools.databricks.phase_budget describe --phase release",
@@ -63,7 +66,7 @@ def _drive(tmp_path: Path, phase: str, *, actions: bool = False) -> tuple[subpro
         'case "$*" in\n'
         "  *'agent_proxy_credential_bundle all-fields'*)\n"
         "    printf 'proxy-client\\tproxy-credential\\tproxy-secret\\n'; exit 0 ;;\n"
-        "  *deploy_prestop_probes*|*pii_salt_scope*|*phase_budget*|*active_deployment_pin*|*plan_report_publish*) exit 0 ;;\n"
+        "  *deploy_prestop_probes*|*pii_salt_scope*|*estate.inventory_check*|*phase_budget*|*active_deployment_pin*|*plan_report_publish*) exit 0 ;;\n"
         "esac\n"
         "cat >/dev/null\n"
         "printf 'admin-client,release-probe-client\\n'\n",
@@ -131,6 +134,7 @@ databricks() {{ printf 'databricks %s\\n' "$*" >> {shlex.quote(str(calls))}; ret
 {actions_env}
 source {shlex.quote(str(PHASES))}
 source {shlex.quote(str(PLAN_REPORT))}
+source {shlex.quote(str(ESTATE))}
 source {shlex.quote(str(AUTOMATION_STEP))}
 echo PAST-THE-STEP-FILE
 """,
