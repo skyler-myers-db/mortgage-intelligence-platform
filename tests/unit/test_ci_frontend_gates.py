@@ -28,10 +28,11 @@ The parse job (``playwright-offline``) runs the whole route-fulfilled
 layout-stability spec: a ``--grep`` there ran one of its five tests and hid
 two broken ones, and the product layout shift behind one of them, for waves.
 
-Every job that launches a browser runs inside the image of the pin, and no
-job runs ``playwright install``: on 2026-11-05 ``--with-deps`` met an Ubuntu
-mirror serving ~40 KB/s and two jobs timed out inside the install step
-(runs 42057978132 and 42097023431). The perf job trusts its checkout for git
+Every job that launches a browser (a Playwright command, or a package.json
+script that ends in ``playwright test``) runs inside the image of the pin, and
+no step runs ``playwright install``, an apt command or an apt action: on
+2026-11-05 ``--with-deps`` met an Ubuntu mirror serving ~40 KB/s and two
+jobs timed out inside the install step (runs 42057978132 and 42097023431). The perf job trusts its checkout for git
 as root and installs CPython into a container-local tool cache; the
 cross-engine run step sets ``HOME=/root`` so Firefox starts as root.
 Nothing in ci.yml reads the secrets context, as the workflow's header
@@ -205,9 +206,56 @@ def _pin_image() -> str:
     return f"mcr.microsoft.com/playwright:v{package['devDependencies']['@playwright/test']}-noble"
 
 
+# Playwright CLI commands that launch no browser (the e2e-fixture gate merges reports on the host).
+_PLAYWRIGHT_NO_BROWSER = ("merge-reports", "install", "install-deps", "uninstall", "--version", "-V", "--help")
+# A Playwright CLI call in command position: `npx playwright test`, `npm exec -- playwright
+# screenshot`, `node_modules/.bin/playwright test`; never `playwright-report`.
+_NO_BROWSER_ALTERNATION = "|".join(map(re.escape, _PLAYWRIGHT_NO_BROWSER))
+_PLAYWRIGHT_COMMAND = re.compile(
+    rf"(?:^|[\s;&|(/])playwright\s+(?!(?:{_NO_BROWSER_ALTERNATION})(?![\w-]))\S",
+    re.MULTILINE,
+)
+# `npm [--prefix dir] run[-script] [--flag ...] <script>` and `npm test`.
+_NPM_RUN = re.compile(r"\bnpm\b[^\n;&|]*?\brun(?:-script)?\s+(?:--prefix\s+\S+\s+|--?[\w-]+(?:=\S+)?\s+)*([\w:.-]+)")
+_NPM_TEST = re.compile(r"\bnpm\b[^\n;&|]*?\s(?:test|tst|t)(?=\s|$)", re.MULTILINE)
+
+
+def _npm_scripts(command: str) -> set[str]:
+    return set(_NPM_RUN.findall(command)) | ({"test"} if _NPM_TEST.search(command) else set())
+
+
+def _browser_scripts() -> set[str]:
+    """The frontend npm scripts that end in a browser run, followed through `npm run` chains."""
+    scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]
+    found = {name for name, command in scripts.items() if _PLAYWRIGHT_COMMAND.search(command)}
+    while more := {name for name, command in scripts.items() if _npm_scripts(command) & found} - found:
+        found |= more
+    return found
+
+
 def _runs_a_browser(job: dict[str, Any]) -> bool:
+    scripts = _browser_scripts()
     runs = [str(step.get("run", "")) for step in job.get("steps", [])]
-    return any("playwright test" in run or "e2e:fixture" in run for run in runs)
+    return any(_PLAYWRIGHT_COMMAND.search(run) or _npm_scripts(run) & scripts for run in runs)
+
+
+# A step may never fetch a browser or touch the apt mirror: an apt command in any
+# position (`sudo apt update`, `/usr/bin/apt-get -qq install`, `add-apt-repository`),
+# never a word that merely holds the letters, or an action named for apt.
+_BROWSER_INSTALL = re.compile(r"\bplaywright\s+install\b|\binstall-deps\b")
+_APT_COMMAND = re.compile(r"(?<![\w.-])(?:apt(?:-get)?|aptitude|add-apt-repository)(?=\s|$)", re.MULTILINE)
+
+
+def _forbidden_install(step: dict[str, Any]) -> str | None:
+    """What the step runs or uses that installs a browser or reaches apt, if anything."""
+    run = str(step.get("run", ""))
+    for pattern in (_BROWSER_INSTALL, _APT_COMMAND):
+        if hit := pattern.search(run):
+            return hit.group(0)
+    uses = str(step.get("uses", ""))
+    if "apt" in re.split(r"[/_.-]", uses.split("@", 1)[0].lower()):
+        return uses
+    return None
 
 
 def test_every_browser_job_runs_in_the_pinned_image_and_installs_no_browser() -> None:
@@ -228,9 +276,68 @@ def test_every_browser_job_runs_in_the_pinned_image_and_installs_no_browser() ->
         assert set(container) == {"image", "options"}, f"{name}: the container takes no credentials, env or volumes"
     for name, job in jobs.items():
         for step in job.get("steps", []):
-            run = str(step.get("run", ""))
-            for banned in ("playwright install", "install-deps", "apt-get", "apt install"):
-                assert banned not in run, f"{name}: {step.get('name', run)!r} runs {banned!r}"
+            hit = _forbidden_install(step)
+            assert hit is None, f"{name}: {step.get('name', step)!r} runs or uses {hit!r}"
+
+
+def test_the_browser_scripts_are_the_playwright_test_scripts() -> None:
+    # Not vacuous: the four scripts that run `playwright test` today, and no other.
+    assert _browser_scripts() == {"e2e", "e2e:ci", "e2e:fixture", "e2e:fixture:ci"}
+
+
+@pytest.mark.parametrize(
+    ("run", "launches"),
+    [
+        ("npm --prefix frontend run e2e:ci", True),
+        ("npm run e2e", True),
+        ("npm --prefix frontend run e2e:fixture:ci -- --shard=1/4", True),
+        ("npm run --silent e2e:fixture", True),
+        ("npm run --prefix frontend e2e:ci", True),
+        ("cd frontend\nnpx playwright test tests/e2e/x.spec.ts", True),
+        ("npm exec -- playwright screenshot https://example.test out.png", True),
+        ("./node_modules/.bin/playwright test", True),
+        ("npx playwright merge-reports --reporter=dot,html blob-report", False),
+        ("npx playwright --version", False),
+        ("npm --prefix frontend run build", False),
+        ("npm --prefix frontend run test", False),
+        ("npm --prefix frontend ci", False),
+        ("rm -rf frontend/playwright-report", False),
+    ],
+)
+def test_a_browser_job_is_found_by_the_command_or_script_it_runs(run: str, launches: bool) -> None:
+    assert bool(_runs_a_browser({"steps": [{"run": run}]})) is launches
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"run": "sudo apt update"},
+        {"run": "sudo apt-get install -y fonts-noto"},
+        {"run": "apt install -y jq"},
+        {"run": "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -qq update"},
+        {"run": "set -e\nsudo aptitude install jq"},
+        {"run": "sudo add-apt-repository ppa:x/y"},
+        {"run": "npx playwright install --with-deps chromium"},
+        {"run": "npm exec -- playwright install-deps"},
+        {"uses": "awalsh128/cache-apt-pkgs-action@v1", "with": {"packages": "fonts-noto"}},
+    ],
+)
+def test_the_install_ban_sees_apt_and_browser_installs_in_any_form(step: dict[str, Any]) -> None:
+    assert _forbidden_install(step) is not None, step
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"run": "echo adapt the capture; aptly named"},
+        {"run": "npm --prefix frontend install --no-audit --no-fund"},
+        {"run": "echo never apt."},
+        {"uses": "actions/setup-python@v6"},
+        {"uses": "actions/upload-artifact@v7", "with": {"name": "apt-free"}},
+    ],
+)
+def test_the_install_ban_leaves_ordinary_steps_alone(step: dict[str, Any]) -> None:
+    assert _forbidden_install(step) is None, step
 
 
 # Every expression GitHub evaluates in a workflow value, and the context that holds stored secrets.
