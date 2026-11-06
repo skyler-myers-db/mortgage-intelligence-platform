@@ -21,6 +21,10 @@ pending or failed state; it must not claim success.
 ### Lead Queue filter reads
 
 - `GET /api/leads` still writes exactly one `VIEW_LEADS` row per served read.
+  A reconnect or a "Connection lost" recovery completes a `/leads` read
+  (Today's top leads, Segment Intelligence) only when its last attempt was
+  never answered, and never re-reads the Lead Queue's paged view (see
+  Reconnect and connection recovery below).
   The row now also records the public score and spread bounds: the effective
   `min_opportunity_score` / `min_rate_spread_bps` floors (a Genie cohort's or
   the URL's) and, when set, `max_opportunity_score` / `max_rate_spread_bps`.
@@ -230,8 +234,8 @@ the pull request that ships the behaviour, never earlier.
 | Surface | Event | When | Write mode |
 | --- | --- | --- | --- |
 | Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served page of a view (D-audit-reads-a, W5c): page 0 mints a server `view_id` and each explicit Load next serves the next 500 behind a signed cursor; every row carries `view_id`, `page_index`, `sort` (and `sort_dir`), `total_matching`, the keyed `filter_fingerprint`, `source_refreshed_at` and that page's `rendered_borrower_ids` (returned in this response); a later page echoes page 0's Growth Agent provenance. An empty answer is a served page too: the assignee and approval-request early returns write one row each (no ids, a new view, page 0, total 0; the request one carries `approval_request_batch_id`; before W5c they wrote none). A refused cursor (422), a refreshed view (409, also when a later page's assignee or approval-request population emptied since page 0, so the client restarts at page 0) and a missing cursor key (503) write nothing. Never on prefetch, scroll, poll, focus, reconnect or remount | background, fail-open (`audit.dropped`) |
-| Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}` | background, fail-open |
-| Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof` | background, fail-open |
+| Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}`; a reconnect or a "Connection lost" recovery completes it only when its last attempt was never answered (no row yet), never once the server answered it (see Reconnect and connection recovery below) | background, fail-open |
+| Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof`; never on a reconnect or a recovery, answered or not (`useBorrowerProof`: `staleTime: 'static'`, `refetchOnReconnect: false`) | background, fail-open |
 | Proof drawer Math tab: margins and "Crossed the line" (W5c) | none | the margins render from the proof already loaded; the chart reads the Borrower360 from the client cache only (never `GET /borrowers/{id}`, so no extra `VIEW_BORROWER`) and the audit-free `GET /analytics/rate-window` only while the drawer is open for a fixed-rate borrower; nothing is prefetched or read on hover | audit-free |
 | Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry) | background, fail-open |
 | Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
@@ -274,6 +278,37 @@ the pull request that ships the behaviour, never earlier.
 | Sales ops per-officer workload (`sales_workload.sales_workload`, W5e) | none | when the Sales ops tab shows a period (stale after 30 s; never polled, refetched on focus or prefetched; refetched after a Distribution Board commit) | audit-free (one Lakebase read of the roster, assignments and dispositions; staff aggregates, no borrower row or borrower id; never the warehouse; `private, no-store`) |
 | Evidence drawer freshness (`asset_freshness.get_asset_freshness`) | none | when an evidence drawer opens on a mapped asset; never on hover, prefetch or poll | audit-free (one `gold.source_readiness` row; schema internals stay on the admin metadata read) |
 | Admin Field performance (`admin_field_performance.field_performance`) | none | when Administration opens, and on an explicit Refresh or 7/28-day change; never polled or refetched on focus | audit-free (admin-only; day-grain browser RUM aggregates, no borrower data) |
+
+Reconnect and connection recovery (PR #326). Coming back online, and a
+reachable health probe after failed ones (the "Connection lost" banner),
+never re-read data already on screen, and never re-read an audited read the
+server answered: the backend writes its VIEW_* row in a background task
+after the response is sent, so a second read would add a row with no act
+behind it. The client's one rule (`connectionState.refetchableAfterNetworkLoss`,
+used by both) completes a read only when:
+
+- its last attempt never got an HTTP status (`fetch()` rejected, offline or
+  unreachable): the request never reached the server and wrote no row; or
+- the server answered and the network then lost the body (a 200 whose
+  connection dropped mid-transfer fails offline or unreachable but keeps its
+  status), and the path is a reviewed audit-free GET
+  (`frontend/src/lib/auditFreeReads.ts`). A path not on that list counts as
+  audited. `tests/unit/test_audit_free_reads_registry.py` pins every entry
+  as a mounted GET route whose dependencies take neither the audit store
+  nor a background task, and checks that no audited GET route matches one.
+
+So a panel that writes no audit row loads by itself once the network
+returns. An audited read whose answer lost its body (`VIEW_LEADS`,
+`VIEW_BORROWER`, `VIEW_AUDIT_LEDGER`) has written its row, and it stays in
+its error state until the reader retries or reopens the route. A server
+error (a 500, a warming 503 past its retry budget, an unreadable body) is
+not a network loss, so neither recovery retries it; the dependency recovery
+(`healthRecovery.ts`) still re-reads a warming 503 when its dependency comes
+back. The Lead Queue paged view (`meta.auditedPages`) and the proof are
+never re-read by either. A query that waited offline (paused) resumes on its
+own. One residual, as on main: a request that reached the server and lost
+its connection before any response header arrived looks to the client like
+one that was never sent, so a recovery completes it.
 
 Governed-text refusals (owner ruling O1, built in W5d `w5-lq-requests-binding`).
 A rationale or justification the governed text screen (PII or fair-lending)
@@ -319,7 +354,10 @@ keyed `filter_fingerprint` (below) and, for a receipt, `read_audit_event_id`: ne
 ledger row contents, an actor filter in clear, or an email. Opening
 Administration reads nothing from the ledger (its old "last event" probe
 went with the explorer, which now lives on `/audit-ledger`), and no ledger
-read is polled, prefetched or refetched on window focus. `tools/verify_live.py`'s
+read is polled, prefetched or refetched on window focus, nor re-read on a
+reconnect or a "Connection lost" recovery once the server answered it (only
+a read whose last attempt was never answered is completed; see Reconnect
+and connection recovery above). `tools/verify_live.py`'s
 ledger probes now write attributable `VIEW_AUDIT_LEDGER` rows; that is
 expected.
 
