@@ -17,13 +17,18 @@ every audit channel recording:
   recorded: ``INSERT INTO mip_app.action_audit`` written as raw SQL by a store
   (saved views, workspace, sales state, loan officers and the rest) is a write
   the store never sees;
+- the statement logs of the fake Lakebase clients themselves (the suite's
+  shared fake and a probe's own stand-in), scanned for the same INSERT from
+  where they stood before the request: a service built over the raw fake
+  (the home summary's KPI deltas) never goes through the wrapper;
 - every background task the request queues (the VIEW_* writes run in one).
 
 The call must answer 2xx (it ran to its end), and record none of the three.
 Controls prove each channel is seen: GET /api/leads (the store, in a
 background task), POST /api/workspace/saved-views (raw SQL, invisible to the
-dependency walk), and two throwaway routes that write through the factory
-singletons from their bodies.
+dependency walk), two throwaway routes that write through the factory
+singletons from their bodies, and GET /api/home/summary with a ledger INSERT
+added to its KPI-delta read, which runs over the raw shared fake.
 
 Two structural checks stay beside it:
 
@@ -35,9 +40,15 @@ Two structural checks stay beside it:
   with an entry. So no route outside the list serves a path the frontend's
   matcher would call audit-free.
 
-Residual: the warehouse repositories run as the suite's in-process fakes, so
-a write added inside a production repository on a read path is outside the
-probe; the walk and review cover it.
+Residual: an entry runs on the suite's baseline fakes wherever
+``tests/conftest.py`` installs one, and a probe's ``setup`` may install more.
+Those are the repositories (portfolio and campaigns, analytics, segments,
+leads, borrowers, geo), the geo assignment overlay, and the admin rules,
+asset metadata and home summary services. So the production code behind
+them is not run: a write added there (the Lakebase-backed campaign
+repository behind /portfolio and /campaigns among them, whose create and
+status SQL already writes ledger rows) is outside the probe, and the walk
+and review cover it.
 """
 
 from __future__ import annotations
@@ -70,6 +81,7 @@ from backend.services.asset_metadata import AssetMetadataService, get_asset_meta
 from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.databricks_jobs import get_job_operations
 from backend.services.home_attribution import get_home_attribution_service
+from backend.services.kpi_deltas import KpiDeltaService
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import (
     get_rate_sensitivity_repository,
@@ -206,8 +218,17 @@ class _Sinks:
     ledger_inserts: list[str] = field(default_factory=list)
     background_tasks: list[str] = field(default_factory=list)
 
+    # Ledger INSERTs found in a fake client's own statement log: a write
+    # through a client the service captured, which the wrapper never saw.
+    logged_inserts: list[str] = field(default_factory=list)
+
     def total(self) -> int:
-        return len(self.store_writes) + len(self.ledger_inserts) + len(self.background_tasks)
+        return (
+            len(self.store_writes)
+            + len(self.ledger_inserts)
+            + len(self.background_tasks)
+            + len(self.logged_inserts)
+        )
 
 
 class _RecordingAuditStore:
@@ -231,10 +252,43 @@ class _RecordingAuditStore:
         return getattr(self._inner, name)
 
 
+def _ledger_sql(values: typing.Iterable[Any]) -> list[str]:
+    return [
+        " ".join(value.split())[:120]
+        for value in values
+        if isinstance(value, str) and AUDIT_INSERT.search(value)
+    ]
+
+
 def _note_sql(sinks: _Sinks, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-    for value in (*args, *kwargs.values()):
-        if isinstance(value, str) and AUDIT_INSERT.search(value):
-            sinks.ledger_inserts.append(" ".join(value.split())[:120])
+    sinks.ledger_inserts.extend(_ledger_sql((*args, *kwargs.values())))
+
+
+# The statement logs a fake Lakebase client keeps (tests/conftest.py
+# _FakeLakebaseClient): each entry is a tuple whose first item is the SQL.
+_SQL_LOGS = ("executes", "fetchones", "fetchalls")
+
+
+def _sql_log_marks(*clients: Any) -> list[tuple[list[Any], int]]:
+    """Where each fake client's statement log stands now (one mark per log)."""
+
+    marks: dict[int, tuple[list[Any], int]] = {}
+    for client in clients:
+        for name in _SQL_LOGS:
+            log = getattr(client, name, None)
+            if isinstance(log, list):
+                marks.setdefault(id(log), (log, len(log)))
+    return list(marks.values())
+
+
+def _logged_ledger_sql(marks: list[tuple[list[Any], int]]) -> list[str]:
+    """The ledger INSERTs the marked logs gained, whichever client the caller held."""
+
+    found: list[str] = []
+    for log, start in marks:
+        for entry in log[start:]:
+            found.extend(_ledger_sql(entry if isinstance(entry, tuple) else (entry,)))
+    return found
 
 
 class _RecordingCursor:
@@ -463,11 +517,8 @@ def _call(
     sinks = _Sinks()
     store = _RecordingAuditStore(sinks)
     # The suite's shared fake (tests/conftest.py, reset around every test) unless the probe serves its own.
-    inner = (
-        probe.lakebase()
-        if probe.lakebase is not None
-        else app.dependency_overrides[get_lakebase_client]()
-    )
+    shared = app.dependency_overrides[get_lakebase_client]()
+    inner = probe.lakebase() if probe.lakebase is not None else shared
     lakebase = _RecordingLakebase(inner, sinks)
     for owner in {id(app): app, id(target): target}.values():
         monkeypatch.setitem(owner.dependency_overrides, get_audit_store, lambda: store)
@@ -483,6 +534,9 @@ def _call(
         probe.setup(monkeypatch, target, inner)
     sinks.store_writes.clear()
     sinks.ledger_inserts.clear()
+    # A service may hold the raw fake (conftest builds the home summary over
+    # it), so the fakes' own logs are read too, from here on.
+    marks = _sql_log_marks(shared, inner)
 
     real_init = starlette_background.BackgroundTask.__init__
 
@@ -500,6 +554,7 @@ def _call(
             method, url, headers=ACTOR, json=probe.json if probe.json is not None else {}
         )
     monkeypatch.setattr(starlette_background.BackgroundTask, "__init__", real_init)
+    sinks.logged_inserts.extend(_logged_ledger_sql(marks))
     # A write through any other method of the store still lands in its ledger.
     unrecorded = store.event_count() - len(sinks.store_writes)
     sinks.store_writes.extend(["<written without write()>"] * max(0, unrecorded))
@@ -602,6 +657,34 @@ def test_the_probe_sees_body_level_writes_through_the_factory_singletons(
     sql = _call(synthetic, monkeypatch, "GET", _Probe("/api/v1/probe/sql"))
     assert store.status == 200 and store.sinks.store_writes, store
     assert sql.status == 200 and sql.sinks.ledger_inserts, sql
+
+
+def test_the_probe_sees_a_ledger_write_through_a_client_a_service_captured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GET /api/home/summary is an entry, and the suite builds its service over
+    # the RAW shared fake (tests/conftest.py: KpiDeltaService(lakebase_client=
+    # <the fake>)), so neither the override nor the factory singleton the
+    # wrapper is installed as ever serves it. A ledger INSERT added to its
+    # previous-visit read is still seen, in the fake's own statement log.
+    original = KpiDeltaService.previous_visit
+
+    def previous_visit_with_a_ledger_write(
+        self: KpiDeltaService, actor_email: str, *, before: datetime
+    ) -> datetime | None:
+        self._lakebase().execute(
+            "INSERT INTO mip_app.action_audit (actor_email, event_type) "
+            "VALUES (%(actor_email)s, 'VIEW_HOME_SUMMARY')",
+            {"actor_email": actor_email},
+        )
+        return original(self, actor_email, before=before)
+
+    monkeypatch.setattr(KpiDeltaService, "previous_visit", previous_visit_with_a_ledger_write)
+    outcome = _call(app, monkeypatch, "GET", _entry_probe("GET", "/api/home/summary"))
+    assert outcome.status == 200, outcome.body
+    assert outcome.sinks.logged_inserts, outcome
+    # The wrapper alone would have passed it: the write never went through it.
+    assert not outcome.sinks.ledger_inserts, outcome
 
 
 def test_the_walk_classifies_every_known_audited_read_as_audited() -> None:

@@ -300,18 +300,28 @@ used by both) never re-reads a query whose every served page writes a row
   `tests/unit/test_audit_free_reads_registry.py` pins every entry by calling
   it on the mounted app with the audit store and the Lakebase client
   recording, through their dependency overrides and their factory
-  singletons: the call must answer 2xx and write no audit row (no store
-  write, no `INSERT INTO mip_app.action_audit` statement) and queue no
-  background task. Its controls show each channel is seen (`GET /leads`, the
-  raw-SQL `POST /workspace/saved-views`, and body-level factory writes). It
-  also checks that no route outside the list serves a path an entry matches,
-  by unifying route templates segment by segment per method, and keeps the
-  dependency walk: no entry takes a background task, and only the reviewed
-  ledger reads (`/audit/my-events`, `/admin/operations`, which list the
-  ledger and write nothing) take the audit store. The warehouse
-  repositories run as the suite's in-process fakes there, so a write added
-  inside a production repository on a read path is left to the walk and
-  review.
+  singletons, and with the fake Lakebase clients' own statement logs read
+  too, because a service the suite builds over the raw fake (the home
+  summary's KPI deltas) never goes through the recording wrapper. The call
+  must answer 2xx and write no audit row (no store write, no
+  `INSERT INTO mip_app.action_audit` statement) and queue no background
+  task. Its controls show each channel is seen: `GET /leads`, the raw-SQL
+  `POST /workspace/saved-views`, body-level factory writes, and a ledger
+  INSERT added to the home summary's KPI-delta read. It also checks that no
+  route outside the list serves a path an entry matches, by unifying route
+  templates segment by segment per method, and keeps the dependency walk:
+  no entry takes a background task, and only the reviewed ledger reads
+  (`/audit/my-events`, `/admin/operations`, which list the ledger and write
+  nothing) take the audit store. Residual: the probe runs each entry on the
+  suite's baseline fakes wherever `tests/conftest.py` installs one (the
+  portfolio and campaign, analytics, segment, lead, borrower and geo
+  repositories, the geo assignment overlay, and the admin rules, asset
+  metadata and home summary services) and on the route-test fakes a probe
+  installs. The production code behind those is not run, so a write added
+  there is left to the walk and review. That includes the Lakebase-backed
+  campaign repository behind `GET /portfolio`, `/portfolio/{id}`,
+  `/campaigns` and `/campaigns/{id}`, whose create and status SQL already
+  writes ledger rows.
 
 A query is judged by the request that failed. A query that fans out to
 several requests, one of them audited, therefore opts out of both
