@@ -75,6 +75,7 @@ def sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     ).stdout.split()
     for rel in changed:
         if (REPO / rel).is_file():
+            (checkout / rel).parent.mkdir(parents=True, exist_ok=True)  # a file in a new folder
             shutil.copy2(REPO / rel, checkout / rel)
         else:
             (checkout / rel).unlink(missing_ok=True)  # an uncommitted deletion

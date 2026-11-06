@@ -25,7 +25,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 AUTOMATION_STEP = REPO / "scripts" / "lib" / "deploy_step_automation_identities.sh"
 PHASES = REPO / "scripts" / "lib" / "deploy_governed_phases_lifecycle.sh"
-# The agentic tier's read-only estate inventory check (M4-PR1) runs before the plan exit.
+PLAN_REPORT = REPO / "scripts" / "lib" / "deploy_plan_report_lifecycle.sh"
 ESTATE = REPO / "scripts" / "lib" / "deploy_estate_inventory_lifecycle.sh"
 # Every command a live --phase plan runs in this step file, in order: local
 # parses and renders, the read-only bundle validate and plan gate, the probes
@@ -39,15 +39,25 @@ PLAN_CALLS = (
     "- ",  # a local heredoc: the admin-scope identities
     "tools.databricks.deploy_prestop_probes --app-name mip-app",
     "tools.databricks.pii_salt_scope check",
-    "tools.databricks.estate.inventory_check --catalog mip",  # the owner's inventory, read-only
+    # M4-PR1: the agentic tier's estate inventory and its ack, read-only, before the lease.
+    "tools.databricks.estate.inventory_check --catalog mip",
     "run_bundle_plan_gate pre-lease",
     "tools.databricks.phase_budget describe --phase plan",
     "tools.databricks.phase_budget describe --phase release",
     "tools.databricks.phase_budget describe --phase data",
+    # M1-PR7: the active deployment's digest (one apps.get) a release may pin.
+    "tools.databricks.active_deployment_pin digest --app-name mip-app",
+)
+# Under GitHub Actions, with a gate report: the PlanReport's public half to the
+# step summary (a local file) and its full half to the deployer's own
+# plan-reports folder, create-only: the plan phase's one workspace write.
+PLAN_PUBLISH_CALLS = (
+    "tools.databricks.plan_report_publish summary --public",
+    "tools.databricks.plan_report_publish publish --full",
 )
 
 
-def _drive(tmp_path: Path, phase: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def _drive(tmp_path: Path, phase: str, *, actions: bool = False) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     calls = tmp_path / "calls.log"
     fake_python = tmp_path / "fake-python.sh"
     fake_python.write_text(
@@ -56,13 +66,25 @@ def _drive(tmp_path: Path, phase: str) -> tuple[subprocess.CompletedProcess[str]
         'case "$*" in\n'
         "  *'agent_proxy_credential_bundle all-fields'*)\n"
         "    printf 'proxy-client\\tproxy-credential\\tproxy-secret\\n'; exit 0 ;;\n"
-        "  *deploy_prestop_probes*|*pii_salt_scope*|*phase_budget*|*estate.inventory_check*) exit 0 ;;\n"
+        "  *deploy_prestop_probes*|*pii_salt_scope*|*estate.inventory_check*|*phase_budget*|*active_deployment_pin*|*plan_report_publish*) exit 0 ;;\n"
         "esac\n"
         "cat >/dev/null\n"
         "printf 'admin-client,release-probe-client\\n'\n",
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
+    gate_report = (
+        f'BUNDLE_PLAN_REPORT_JSON={shlex.quote(str(tmp_path / "report.json"))}; '
+        f'BUNDLE_PLAN_PUBLIC_JSON={shlex.quote(str(tmp_path / "report.public.json"))};'
+        if actions
+        else ":;"
+    )
+    actions_env = (
+        f"GITHUB_ACTIONS=true GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1 GITHUB_STEP_SUMMARY={shlex.quote(str(tmp_path / 'summary.md'))}\n"
+        "CLIENT_DEPLOYER=deployer-application-id CLIENT_KEY=client-one"
+        if actions
+        else ""
+    )
     harness = tmp_path / "harness.sh"
     harness.write_text(
         f"""#!/usr/bin/env bash
@@ -81,7 +103,7 @@ deployment_control_value() {{ printf ''; }}
 same_identity_casefold() {{ [[ "$1" == "$2" ]]; }}
 start_proof_signing_heartbeat() {{ printf 'heartbeat\\n' >> {shlex.quote(str(calls))}; }}
 dotenv_value() {{ printf ''; }}
-run_bundle_plan_gate() {{ printf 'run_bundle_plan_gate %s\\n' "$*" >> {shlex.quote(str(calls))}; }}
+run_bundle_plan_gate() {{ printf 'run_bundle_plan_gate %s\\n' "$*" >> {shlex.quote(str(calls))}; {gate_report} }}
 TARGET=client
 CLIENT_INSTALL_CLASS=demo
 CLIENT_DEMO_FEEDS=1
@@ -109,7 +131,9 @@ DATABRICKS_ACCOUNT_HOST=https://accounts.cloud.databricks.com
 DATABRICKS_ACCOUNT_ID=account
 DATABRICKS_ACCOUNT_CLIENT_ID=account-client DATABRICKS_ACCOUNT_CLIENT_SECRET=s6
 databricks() {{ printf 'databricks %s\\n' "$*" >> {shlex.quote(str(calls))}; return 97; }}
+{actions_env}
 source {shlex.quote(str(PHASES))}
+source {shlex.quote(str(PLAN_REPORT))}
 source {shlex.quote(str(ESTATE))}
 source {shlex.quote(str(AUTOMATION_STEP))}
 echo PAST-THE-STEP-FILE
@@ -129,7 +153,7 @@ def _tool(call: str) -> str:
 def test_a_live_plan_phase_runs_only_read_only_tools_and_no_genie_turn(tmp_path: Path) -> None:
     result, calls = _drive(tmp_path, "plan")
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "plan phase complete: read-only, stopped before the lease" in result.stdout
+    assert "plan phase complete: stopped before the lease; no governed resource was changed" in result.stdout
     assert "PAST-THE-STEP-FILE" not in result.stdout
     tools = [_tool(call) for call in calls]
     assert len(tools) == len(PLAN_CALLS) and all(map(str.startswith, tools, PLAN_CALLS)), tools
@@ -137,6 +161,17 @@ def test_a_live_plan_phase_runs_only_read_only_tools_and_no_genie_turn(tmp_path:
     assert "--genie-turn off" in probe, "no Genie conversation in a plan"
     assert not any(call.startswith(("SIGNING", "heartbeat", "databricks")) for call in calls), calls
     assert not any("app_deployment_lease" in call for call in calls)
+
+
+def test_a_live_plan_phase_under_actions_publishes_both_report_halves_and_nothing_else(tmp_path: Path) -> None:
+    result, calls = _drive(tmp_path, "plan", actions=True)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    tools = [_tool(call) for call in calls]
+    assert len(tools) == len(PLAN_CALLS) + len(PLAN_PUBLISH_CALLS), tools
+    assert all(map(str.startswith, tools, (*PLAN_CALLS, *PLAN_PUBLISH_CALLS))), tools
+    publish = tools[-1]
+    assert "--principal deployer-application-id --client client-one --run-id 123 --run-attempt 1" in publish
+    assert not any(call.startswith(("SIGNING", "heartbeat", "databricks")) for call in calls), calls
 
 
 @pytest.mark.parametrize("phase", ("", "release"))

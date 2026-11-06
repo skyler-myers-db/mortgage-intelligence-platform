@@ -23,7 +23,7 @@ name: live validation (on demand)
 # all succeeded; the two verify_deployed_app_contract commit checks below are
 # what make a green run certify its own commit.
 #
-# Parked until a client environment is selected (M1-PR7). It validated the CI
+# Parked until M1-PR8 rebuilds it per client environment. It validated the CI
 # staging install that deploy-dev.yml deployed, whose workspace was deleted on
 # 2026-10-29, and the repository-level credentials still name that workspace.
 # The first job, `parked`, refuses every dispatch and every other job needs
@@ -97,13 +97,13 @@ jobs:
     # parity-live, so a refusal here skips every job that would read or write
     # a workspace (see the header). The issue filer does not need it, so a
     # parked dispatch opens no failure issue.
-    name: Parked until a client environment is selected
+    name: Parked until M1-PR8 rebuilds it per client environment
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Refuse until a client environment is selected
+      - name: Refuse until M1-PR8 rebuilds it per client environment
         run: |
-          echo "::error::live validation is parked until a client environment is selected (M1-PR7)."
+          echo "::error::live validation is parked until M1-PR8 rebuilds it per client environment."
           exit 1
 
   parity-live:

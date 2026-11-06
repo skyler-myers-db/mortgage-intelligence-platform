@@ -6,8 +6,8 @@ This repo runs five workflows:
 |---|---|---|
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`deps-report.yml`](deps-report.yml) | `schedule` (Mondays 13:17 UTC) + `workflow_dispatch` | **GITHUB_TOKEN only:** contents and actions read in `report`, issues write in `publish`. Edits one `dependency-report` issue in place; never pushes, opens no branch or pull request. |
-| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | **Parked:** its first job refuses every dispatch until a client environment is selected (M1-PR7). Otherwise required — see below. |
-| [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | **Parked:** its first job refuses every dispatch until a client environment is selected (M1-PR7). Otherwise required — GitHub OIDC (`id-token: write`, `deploy` job only) for the deployer service principal, which has no stored credential, plus the app-facing M2M and account-SCIM credentials. |
+| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | **Parked:** its first job refuses every dispatch until M1-PR8 rebuilds it per client environment. Otherwise required — see below. |
+| [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` only | **One client environment per dispatch (M1-PR7):** the `build` job holds no ID token; the `deploy` job runs in the client's GitHub Environment with GitHub OIDC (`id-token: write`) for the client's deployer service principal, which has no stored credential, and reads the whole client profile from that environment's variables and secrets. |
 | [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **GITHUB_TOKEN (actions: read) only, for the live-validation age check. Non-deploying scaffold gate only.** |
 
 The PR workflow (`ci.yml`) is designed to stay green for any contributor
@@ -15,15 +15,15 @@ including fork-based PRs: it uses placeholder BUNDLE_VARs and pytest
 fixtures that explicitly install in-process repositories where needed.
 No real workspace is touched.
 
-**Both live workflows are parked until a client environment is selected
-(M1-PR7).** They addressed the CI staging install, whose workspace was deleted
-on 2026-10-29, and the bundle's remaining `dev` target is the live install,
-which no CI run may reach. Each workflow's first job, `parked`, refuses every
-dispatch, and every other job needs it, so no job requests an ID token or
-reaches a workspace; `scripts/deploy.sh` repeats the refusal for the
-`deploy-dev.yml` ref. M1-PR7 rebuilds `deploy-dev.yml` per client environment,
-and M1-PR8 rebuilds `nightly.yml` per client under a non-admin validator
-identity (docs/deployment.md, "CI deploy (deploy-dev.yml): parked").
+**`deploy-dev.yml` deploys one client environment per dispatch (M1-PR7);
+`nightly.yml` stays parked.** `nightly.yml` addressed the CI staging install,
+whose workspace was deleted on 2026-10-29: its first job, `parked`, refuses
+every dispatch until M1-PR8 rebuilds it per client under a non-admin
+validator identity. `deploy-dev.yml` takes `client` (the client's GitHub
+Environment) and `phase` (`plan`, `release`, `data`, `adopt` or `unadopt`);
+docs/deployment.md, "CI deploy (deploy-dev.yml): one client environment per
+dispatch", holds its jobs, its preflight and every variable and secret a
+client environment holds.
 
 The live validation workflow (`nightly.yml`, retained under its historical
 filename) intentionally talks to a real Databricks workspace. It runs there so
@@ -37,26 +37,25 @@ The dev deploy workflow (`deploy-dev.yml`) is also manual-only. This repository
 currently has one maintainer, so its required environment review cannot provide
 separation of duties. Every dispatch must explicitly set
 `acknowledge_single_maintainer_break_glass=true`, and the same maintainer must
-approve the protected `dev` environment while recording the governing PR or
+approve the client's protected environment while recording the governing PR or
 issue in the approval comment. This is an audited self-approval exception, not
-independent review. The environment must restrict deployment to the reviewed
-branch and forbid administrator bypass. The original workflow run stays bound
-to the `workflow_dispatch` SHA; it is not re-dispatched through a moving branch
-reference. After approval, that run builds the reviewed commit, creates an
-ephemeral `.env.local` containing only non-secret app configuration, passes
-the Salesforce connector secrets to the provisioning step through the process
-environment (the App's runtime HMAC keys never leave Databricks: existing keys
-are kept unread and absent ones are generated once on the runner),
-seeds a temporary `DEFAULT` Databricks CLI profile that holds no credential
-(`auth_type = github-oidc` for the deployer service principal named by
-`MIP_CI_DEPLOYER_CLIENT_ID`), proves that identity read-only, runs
-`scripts/deploy.sh --no-confirm` on the bundle target, and keeps the deployed
-app smoke test enabled unless the operator explicitly selects `skip_smoke`.
-While the workflow is parked, none of this runs. Run it before live
-validation when the code under review changes app, bundle, job, SQL, or frontend
-behavior. The workflow shares a single non-cancelling concurrency lane
-(`mip-dev-live-state`) with live validation because
-parallel deploys overlap expensive refresh jobs and app promotion.
+independent review. The environment must restrict deployment to `main` and
+forbid administrator bypass; the dispatch preflight reads those rules and
+refuses a mutating phase when they differ (spike S8 is owed: if the job's token
+cannot read them, a mutating phase needs the exact `protections_unverified`
+ack). The original workflow run stays bound to the `workflow_dispatch` SHA; it
+is not re-dispatched through a moving branch reference. The `build` job, which
+holds no ID token, builds the frontend, stages the App source and downloads a
+hash-pinned wheelhouse under a sha256 manifest. After approval, the `deploy`
+job re-hashes that artifact, installs offline from it, resolves the client
+profile from its environment (masking every identifying value first, then
+writing an ephemeral mode-0600 `.env.local` and a `DEFAULT` Databricks CLI
+profile that holds no credential: `auth_type = github-oidc` for the profile's
+deployer service principal), proves that identity read-only, runs the dispatch
+preflight and then `scripts/deploy.sh -t client --phase <phase>
+--prebuilt-release <dir>`. Its deployer's federation subject is
+`repo:<owner>/<repo>:environment:<client>`. Each client gets its own
+non-cancelling concurrency lane (`mip-client-<client>`).
 
 The live mutation gate encodes the GitHub run and attempt into a reviewed,
 non-PII campaign name. It removes abandoned marked fixtures before pytest and
@@ -67,7 +66,7 @@ then may the admin transition atomically quarantine it as `failed` and
 `archived` through the public campaign API.
 
 The `rebase_unverified_app` input is a one-time adoption control, defaulting to
-false. Select it only when the existing dev App predates the signed server-owned
+false. Select it only on a release whose existing App predates the signed server-owned
 rollback record; that run stops the unverified App and must prove/capture a new
 green contract before service resumes. Routine roll-forwards leave it false.
 
@@ -89,22 +88,35 @@ read-only `GITHUB_TOKEN` (`contents: read`, `actions: read`) and no other
 credential. It passes only when the newest completed `nightly.yml` run on
 `main` whose code is runtime-equivalent to the release commit is green, at
 most 14 days old, and its parity, Playwright and simulated-drill jobs all
-succeeded. A FAIL names the fix: dispatch `deploy-dev.yml` on that commit,
-then `nightly.yml` on the same commit.
+succeeded. A FAIL names the fix: dispatch `deploy-dev.yml` on that commit
+(for the client environment, `phase` plan, release and data), then
+`nightly.yml` on the same commit.
 
 ---
 
-## Required repo secrets (dev deploy and live validation)
+## Required repo secrets (live validation)
 
-All listed below must be set under **Settings → Secrets and variables
-→ Actions → Repository secrets**. Missing any one of them aborts the
-job that needs it with a clear `::error::` pointing at the offending
-var.
+`deploy-dev.yml` reads none of the repository-level names below: since M1-PR7
+it reads its client's environment only, and no repository- or
+organization-level secret or variable may carry a client profile field name
+(GitHub would merge it into the environment's contexts). The table is the
+parked `nightly.yml`'s until M1-PR8.
+
+The table lists what the parked `nightly.yml` names under **Settings →
+Secrets and variables → Actions → Repository secrets**; nothing reads them
+while it is parked. Each row that is a profile field or alias name
+(`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_HOST`, every
+`*_CLIENT_ID` and `*_CLIENT_SECRET`,
+`DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
+`MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`) must be deleted at repository
+level before any per-client dispatch, and must not be set again while
+`deploy-dev.yml` is in use: `check-dispatch` refuses every dispatch while one
+is set, and names it (docs/deployment.md, owner steps 3 and 5).
 
 | Secret | What it is | How to obtain |
 |---|---|---|
-| `DATABRICKS_HOST` | The URL of the workspace the workflow addresses. It still names the deleted CI staging workspace; M1-PR7 moves it into each client environment. | `deploy-dev.yml`'s proof step refuses a host other than the bundle target's before its first workspace call. Both workflows are parked, so nothing reads it today. |
-| `DATABRICKS_TOKEN` | Repository-level workspace-admin Personal Access Token for the deleted CI staging workspace, which the parked `nightly.yml` jobs still name. `deploy-dev.yml` does not read it: its deployer authenticates through GitHub OIDC (`MIP_CI_DEPLOYER_CLIENT_ID` below). It is not reused as an app bearer or treated as the product app-admin identity. | Dead with that workspace. Delete the `dev` environment copy; M1-PR8 replaces the repository-level one with a validator identity (docs/deployment.md, owner step 5). |
+| `DATABRICKS_HOST` | The URL of the workspace the workflow addresses. It still names the deleted CI staging workspace; each client environment holds its own as a secret (M1-PR7). | `nightly.yml` is parked, so nothing reads the repository-level one today. |
+| `DATABRICKS_TOKEN` | Repository-level workspace-admin Personal Access Token for the deleted CI staging workspace, which the parked `nightly.yml` jobs still name. `deploy-dev.yml` does not read it: its deployer authenticates through GitHub OIDC (the profile's deployer role). It is not reused as an app bearer or treated as the product app-admin identity. | Dead with that workspace. Delete the `dev` environment copy; M1-PR8 replaces the repository-level one with a validator identity (docs/deployment.md, owner step 5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Retired as a deploy input (M1-PR3): `deploy-dev.yml` no longer reads it, because the deploy resolves the governed Genie space by its pin. The parked `nightly.yml` still names it for its live checks until M1-PR8. | Delete the `dev` environment copy once `nightly.yml` stops naming it. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
@@ -136,23 +148,37 @@ any historical `MIP_AI_GATEWAY_ENDPOINT` or
 `MIP_AI_GATEWAY_INFERENCE_TABLE` repository secrets; the workflow deliberately
 does not consume them.
 
-## Required repo or environment variables (dev deploy)
+## Repository variables (the parked nightly.yml)
 
-At least one of these non-secret variables must be set under **Settings →
-Secrets and variables → Actions → Variables** before `deploy-dev.yml` runs. The
-workflow fails closed if both are empty, so dev deploys do not implicitly grant
-app-admin access to the deploying principal.
+`deploy-dev.yml` reads none of these. It reads only its client environment's
+own variables and secrets, each profile name bound one by one
+(tools/clients/workflow_contexts.py), and its `check-dispatch` job refuses
+every dispatch while any profile field or alias name (a name in
+tools/clients/schema.py, the `*_CLIENT_ID` identity aliases included) is set
+as a repository- or organization-level variable or secret: GitHub would
+merge it into every client environment's contexts and silently fill a field
+the environment omits. So each profile name in the table below, and every
+repository-level secret above that is a profile field or alias
+(`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, the client ids and secrets and
+the signing keys), is deleted before the first per-client dispatch;
+the parked `nightly.yml` that names them is rebuilt per client by M1-PR8.
 
-The "Defaults to" values below are the workflows' fallbacks, which are the
-live install's names. M1-PR7 moves every install name into its client
-environment.
+`MIP_ADMIN_EMAILS`, `MIP_ADMIN_GROUP_NAME` and `MIP_APPROVER_GROUP_NAME` are
+identifying profile fields: a client environment holds them as **secrets**,
+never as variables at any scope (a variable prints in clear in a public run
+log).
+
+The "Defaults to" values below are `nightly.yml`'s fallbacks, which are the
+live install's names. `deploy-dev.yml` has no fallback: every install name is
+a variable of the client's environment (M1-PR7). Its deployer is the profile's
+`MIP_IDENTITY_IDS_JSON.deployer` (a secret), federated with subject
+`repo:<owner>/<repo>:environment:<client>`.
 
 | Variable | What it is | Notes |
 |---|---|---|
-| `MIP_CI_DEPLOYER_CLIENT_ID` | Application id of the CI deployer service principal: a `dev` environment variable, public, never a secret. | Required by `deploy-dev.yml`. Its Configure step writes the `DEFAULT` profile with `auth_type = github-oidc` and this `client_id`; the service principal has no OAuth secret and no PAT. Its account federation policy trusts issuer `https://token.actions.githubusercontent.com`, subject `repo:<owner>/<repo>:environment:dev`, and two audiences: the target workspace's token endpoint (`<host>/oidc/v1/token`) and the account id. It must differ from every app-facing client id and the account-SCIM client and be a workspace admin; the read-only proof step refuses the run otherwise (docs/deployment.md, "The CI deployer"). |
-| `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` | Repository variable: every retired AI Gateway proof public key, oldest first, comma-separated. | `deploy-dev.yml` passes it to `scripts/deploy.sh`. The key registry must end at the current key, and each signed lease record's `key_epoch` must be its key's index (docs/deployment.md, owner step 6). Public keys only. |
-| `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
-| `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
+| `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` | Repository variable: every retired AI Gateway proof public key, oldest first, comma-separated. | No client profile field, so `deploy-dev.yml` no longer passes it (M1-PR7); a rotation adds it to the schema first. The key registry must end at the current key, and each signed lease record's `key_epoch` must be its key's index (docs/deployment.md, owner step 6). Public keys only. |
+| `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist. | Identifying: a client environment **secret**, never a variable. Delete any repository- or `dev`-environment variable of this name. |
+| `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Identifying: a client environment **secret**, never a variable. Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
 | `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Defaults to `mip`, the live catalog. Deploy and every nightly proof/render step use the same value. |
 | `MIP_APP_NAME` | Bundle-managed Databricks App name. | Defaults to `mip-app`; use a unique DNS-style value for every isolated staging/customer workspace. |
 | `MIP_LAKEBASE_INSTANCE` | Bundle-managed Lakebase instance name. | Defaults to `mip-app-state`; it must match `LAKEBASE_INSTANCE_NAME` if that compatibility alias is also set. |

@@ -20,9 +20,12 @@ from backend.services.databricks_jobs import MANAGED_JOBS
 from tests.fixtures.client_profiles import (
     DEMO_PROFILE,
     IDENTITY_IDS,
+    core_tier_profile,
     customer_profile,
+    demo_profile,
     env_file_text,
     paychex_shaped_profile,
+    split_contexts,
 )
 from tests.fixtures.deploy_sandbox import inherited
 from tests.fixtures.deploy_script import (
@@ -32,12 +35,35 @@ from tests.fixtures.deploy_script import (
     deploy_contract_text,
     deploy_entrypoint_text,
 )
+from tools.clients import ci_profile, workflow_contexts
+from tools.clients import profile as views
+from tools.clients.environment import from_github, resolve
+from tools.clients.errors import ProfileRefusal
+from tools.clients.schema import FIELD_CLASS, FieldClass
 from tools.databricks import github_oidc_auth, temporary_credential_plane, workspace_auth
 from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
 from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
 
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
+PROFILE_ACTION = REPO / ".github" / "actions" / "resolve-client-profile" / "action.yml"
+
+
+def _unbound_workflow_text() -> str:
+    """deploy-dev.yml without its two generated env blocks, the only place a profile name is bound.
+
+    tools/clients/workflow_contexts.py names every profile field there, one by
+    one, so a name-absence check reads the rest of the workflow.
+    """
+
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    for env in (workflow_contexts.repository_scope_env(), workflow_contexts.collect_env()):
+        block = workflow_contexts.yaml_block(env, 10)
+        assert text.count(block) == 1, "the generated block, verbatim"
+        text = text.replace(block, "")
+    return text
+RUN_STEP = "Run the client phase"
+OIDC_PROOF_STEP = "Prove the GitHub OIDC deployer identity"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 DEPLOY_LIB_SCRIPTS = DEPLOY_SOURCED_SCRIPTS
 BUNDLE_CONFIG = REPO / "databricks.yml"
@@ -90,15 +116,33 @@ def test_deploy_script_target_parse_accepts_exactly_client(args: tuple[str, ...]
 DEPLOY_DEV_REF = "o/r/.github/workflows/deploy-dev.yml@refs/heads/main"
 
 
-@pytest.mark.parametrize("args", (("-t", "client"), (), ("-t", "client", "--dry-run")))
-def test_deploy_script_refuses_the_parked_deploy_dev_workflow_before_any_step(args: tuple[str, ...]) -> None:
-    """deploy-dev.yml is parked until a client environment is selected (M1-PR7), dry run included."""
+@pytest.mark.parametrize(
+    "args",
+    (("-t", "client"), (), ("-t", "client", "--dry-run"), ("--phase", "release"), ("--prebuilt-release", "<release>")),
+    ids=("no-phase", "nothing", "dry-run", "phase-without-release", "release-without-phase"),
+)
+def test_deploy_script_runs_deploy_dev_only_as_a_named_phase_from_a_prebuilt_release(
+    tmp_path: Path, args: tuple[str, ...]
+) -> None:
+    """M1-PR7: the deploy job holds an ID token and has no Node, so never npm and never a run with no phase."""
 
-    result = _target_parse(*args, env={"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF})
+    argv = [str(tmp_path) if arg == "<release>" else arg for arg in args]
+    result = _target_parse(*argv, env={"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF})
 
     assert result.returncode == 2, result.stdout + result.stderr
-    assert "deploy-dev.yml is parked until a client environment is selected (M1-PR7)" in result.stderr
+    assert "deploy-dev.yml runs one named --phase from a --prebuilt-release; refusing" in result.stderr
     assert result.stdout == "", "refused before the parse prints anything"
+
+
+@pytest.mark.parametrize("phase", ("plan", "release", "data", "adopt", "unadopt"))
+def test_deploy_script_runs_deploy_dev_with_a_phase_and_a_prebuilt_release(tmp_path: Path, phase: str) -> None:
+    result = _target_parse(
+        "-t", "client", "--phase", phase, "--prebuilt-release", str(tmp_path),
+        env={"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "client"
 
 
 @pytest.mark.parametrize(
@@ -110,7 +154,7 @@ def test_deploy_script_refuses_the_parked_deploy_dev_workflow_before_any_step(ar
     ),
     ids=("ci-workflow", "ref-outside-actions", "actions-without-ref"),
 )
-def test_the_parked_refusal_keys_on_the_deploy_dev_ref_in_actions_only(env: dict[str, str]) -> None:
+def test_the_deploy_dev_rule_keys_on_the_deploy_dev_ref_in_actions_only(env: dict[str, str]) -> None:
     """The non-vacuity control: CI's own pytest and operator runs parse unchanged."""
 
     result = _target_parse("-t", "client", env=env)
@@ -355,27 +399,6 @@ def test_sql_contract_scanner_rejects_commented_ddl_without_corrupting_literals(
     )
 
 
-def _install_environment_recorder(tmp_path: Path) -> tuple[Path, Path]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "child-env.log"
-    recorder = bin_dir / "python"
-    recorder.write_text(
-        "#!/usr/bin/env bash\n"
-        "if [[ \"${1:-}\" == '-m' && "
-        "\"${2:-}\" == 'tools.databricks.agent_proxy_credential_bundle' ]]; then\n"
-        f'  exec {shlex.quote(sys.executable)} "$@"\n'
-        "fi\n"
-        "{\n"
-        "  echo '=== child ==='\n"
-        "  /usr/bin/env | /usr/bin/sort\n"
-        '} >> "$CHILD_ENV_LOG"\n',
-        encoding="utf-8",
-    )
-    recorder.chmod(0o755)
-    return bin_dir, log
-
-
 def _deploy_exit_trap_block() -> str:
     text = _deploy_entrypoint_text()
     start = text.index("restore_rendered_sql_fail_closed() {")
@@ -463,11 +486,11 @@ def _read_env_log(path: Path) -> dict[str, str]:
 
 
 def _deploy_step_env() -> dict[str, str]:
-    """The parsed env block of deploy-dev.yml's "Deploy dev Databricks App" step."""
+    """The parsed env block of deploy-dev.yml's run step ("Run the client phase")."""
 
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
     deploy = next(
-        step for step in workflow["jobs"]["deploy"]["steps"] if step.get("name") == "Deploy dev Databricks App"
+        step for step in workflow["jobs"]["deploy"]["steps"] if step.get("name") == RUN_STEP
     )
     return {str(name): str(value) for name, value in deploy["env"].items()}
 
@@ -599,18 +622,18 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
         "DATABRICKS_AUTH_TYPE": "pat",
     }
     if mode == "github-oidc":
-        # deploy-dev.yml's Deploy step: the DEFAULT profile, the step's own
-        # host, the App's client pair exported, the runner's OIDC request
-        # variables, and no PAT. The profile and probe-plane literals are read
-        # from the workflow itself, so the harness cannot drift from it.
+        # deploy-dev.yml's run step: the DEFAULT profile, the App's secrets
+        # by name, the runner's OIDC request variables, and no PAT; the host
+        # and every client id come from .env.local (M1-PR7). The profile and
+        # probe-plane literals are read from the workflow itself, so the
+        # harness cannot drift from it.
         step_env = _deploy_step_env()
+        assert "DATABRICKS_HOST" not in step_env and "DATABRICKS_CLIENT_ID" not in step_env
         run_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(home),
             "DATABRICKS_CONFIG_PROFILE": step_env["DATABRICKS_CONFIG_PROFILE"],
             "MIP_TEMP_CREDENTIAL_PLANE": step_env["MIP_TEMP_CREDENTIAL_PLANE"],
-            "DATABRICKS_HOST": reviewed_host,
-            "DATABRICKS_CLIENT_ID": "normal-app-client",
             "DATABRICKS_CLIENT_SECRET": "normal-app-secret",
             "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
@@ -2234,170 +2257,133 @@ def test_deploy_accepts_the_client_profiles_host_without_regard_to_case_or_slash
 
 
 def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
-    """The deployer is GitHub OIDC workload identity federation: no PAT is read or stored."""
+    """The deployer is GitHub OIDC workload identity federation: no PAT is read or stored (M1-PR7).
 
-    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    The resolve-client-profile action writes the DEFAULT profile
+    (tools/clients/ci_profile.databrickscfg_text, pinned by
+    tests/unit/test_resolve_client_profile_action.py) and .env.local, both
+    create-only and mode 0600; neither the workflow nor the action prints or
+    copies either.
+    """
 
-    for secret in (
-        "secrets.DATABRICKS_HOST",
-        "secrets.DATABRICKS_WAREHOUSE_ID",
-    ):
-        assert secret in text
-    # GENIE_SPACE_ID is no deploy input: the governed space resolves by its pin (M1-PR3).
-    assert "GENIE_SPACE_ID" not in text.replace("No GENIE_SPACE_ID", "")
-    assert "secrets.DATABRICKS_TOKEN" not in text, "the deployer PAT is retired"
-    assert "MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}" in text
-    assert "secrets.MIP_CI_DEPLOYER_CLIENT_ID" not in text, "a public application id, a variable"
-
-    configure = _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")
-    profile = configure[configure.index('echo "[DEFAULT]"') : configure.index('} > "$HOME/.databrickscfg"')]
-    assert [line.strip() for line in profile.splitlines()] == [
-        'echo "[DEFAULT]"',
-        'echo "host  = ${DATABRICKS_HOST}"',
-        'echo "auth_type = github-oidc"',
-        'echo "client_id = ${MIP_CI_DEPLOYER_CLIENT_ID}"',
-    ]
-    assert "auth_type = pat" not in text
-    assert "token = " not in text
-    assert "$HOME/.databrickscfg" in text
-    assert 'chmod 600 "$HOME/.databrickscfg"' in text
-    assert "chmod 600 .env.local" in text
-    assert "cat .env.local" not in text
-    assert 'echo "$DATABRICKS_TOKEN"' not in text
-    assert 'echo "MIP_COTALITY_ID_MASK_SECRET=' not in text
-    assert 'echo "MIP_GENIE_ACTION_SECRET_CURRENT=' not in text
-    assert 'echo "MIP_GENIE_ACTION_SECRET_PREVIOUS=' not in text
+    texts = {"workflow": DEPLOY_DEV.read_text(encoding="utf-8"), "action": PROFILE_ACTION.read_text(encoding="utf-8")}
+    for label, text in texts.items():
+        assert "DATABRICKS_TOKEN" not in text, f"{label}: the deployer PAT is retired"
+        assert "GENIE_SPACE_ID" not in text, f"{label}: the governed space resolves by its pin (M1-PR3)"
+        assert "auth_type = pat" not in text and "token = " not in text, label
+        assert "cat .env.local" not in text and "cat \"$HOME/.databrickscfg\"" not in text, label
+        assert not re.search(r"echo[^\n]*\$\{?\w*(?:SECRET|SIGNING_KEY|BUNDLE|VARS_JSON)", text), f"{label}: never echoes a secret"
+        for runtime in ("MIP_COTALITY_ID_MASK_SECRET", "MIP_GENIE_ACTION_SECRET_CURRENT", "MIP_GENIE_ACTION_SECRET_PREVIOUS"):
+            assert runtime not in text, (label, runtime)
+    assert '--databrickscfg "$HOME/.databrickscfg"' in texts["action"]
+    assert "--env-local .env.local" in texts["action"]
 
 
-def test_deploy_dev_binds_only_the_public_action_key_ids() -> None:
+def test_deploy_dev_binds_no_runtime_hmac_input_and_no_key_id() -> None:
     """The runtime HMAC values stay in Databricks (presence-only provisioning).
 
     tests/unit/test_runtime_secret_inputs_stay_out_of_ci.py proves no workflow
-    names the three secret inputs at all; the public key ids still ride along.
+    names the three secret inputs at all. Their public key ids rode along as
+    repository variables before M1-PR7; they are no client profile field, so
+    the per-client workflow carries none (an existing key keeps its kid in the
+    runtime scope; a client that needs one set needs the field in
+    tools/clients/schema.py first).
     """
+
     text = DEPLOY_DEV.read_text(encoding="utf-8")
 
-    for binding in (
-        "MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}",
-        "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_PREVIOUS_KID }}",
-    ):
-        assert binding in text
-    for secret in (
-        "secrets.MIP_COTALITY_ID_MASK_SECRET",
-        "secrets.MIP_GENIE_ACTION_SECRET_CURRENT",
-        "secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS",
-    ):
-        assert secret not in text
-    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID=${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID}" in text
+    assert "MIP_GENIE_ACTION_SECRET" not in text
+    assert "MIP_COTALITY_ID_MASK_SECRET" not in text
+    assert not [name for name in FIELD_CLASS if name.startswith("MIP_GENIE_ACTION_SECRET")]
 
 
 def test_deploy_dev_has_cost_and_permission_guards() -> None:
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
     text = DEPLOY_DEV.read_text(encoding="utf-8")
-    workflow = yaml.safe_load(text)
 
-    assert "permissions:" in text
-    assert "contents: read" in text
-    assert "concurrency:" in text
-    assert "group: mip-dev-live-state" in text
-    assert "cancel-in-progress: false" in text
     # GitHub OIDC: only the deploy job may request an ID token. The workflow
-    # default stays read-only, and the refusal job inherits it.
+    # default stays read-only, the guard jobs inherit it, and the build job,
+    # where npm and the package index run, holds contents: read alone.
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["jobs"]["deploy"]["permissions"] == {"contents": "read", "id-token": "write"}
-    assert "permissions" not in workflow["jobs"]["refuse-unacknowledged"]
-    holders = [name for name, job in workflow["jobs"].items() if "id-token" in (job.get("permissions") or {})]
+    assert jobs["deploy"]["permissions"] == {"contents": "read", "actions": "read", "id-token": "write"}
+    assert jobs["build"]["permissions"] == {"contents": "read"}
+    for name in ("refuse-unacknowledged", "check-dispatch"):
+        assert "permissions" not in jobs[name], name
+    holders = [name for name, job in jobs.items() if "id-token" in (job.get("permissions") or {})]
     assert holders == ["deploy"]
     assert text.count("id-token: write") == 1
+    # One non-cancelling lane per client, never one lane for every client.
+    assert "concurrency" not in workflow
+    assert jobs["deploy"]["concurrency"] == {"group": "mip-client-${{ inputs.client }}", "cancel-in-progress": False}
 
 
 def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers() -> None:
-    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    text = _unbound_workflow_text()
     script = _deploy_entrypoint_text()
 
-    assert "MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}" in text
-    assert "MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}" in text
-    assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}" in text
-    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in text
-    assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
-    assert "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
+    # M1-PR7: the admin allowlists, every client id and every client secret
+    # are profile fields held as environment secrets; the resolve-client-profile
+    # action writes them to .env.local, and the workflow names none of them.
+    for name in (
+        "MIP_ADMIN_EMAILS",
+        "MIP_ADMIN_GROUP_NAME",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_ADMIN_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+        "DATABRICKS_ADMIN_CLIENT_SECRET",
+    ):
+        assert name not in text, name
     assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in text
     assert "Mint initial per-run app Bearers" not in text
     assert "--github-env MIP_BEARER_TOKEN" not in text
     assert "--github-env MIP_ADMIN_BEARER_TOKEN" not in text
-    assert "DATABRICKS_OPERATOR2_CLIENT_SECRET" not in text
     assert "mint_m2m_token MIP_BEARER_TOKEN" in script
     assert "mint_m2m_token MIP_ADMIN_BEARER_TOKEN" in script
-    assert (
-        "Normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy "
-        "M2M client IDs "
-        "must be pairwise distinct." in text
-    )
-    assert "os.environ[name].strip().casefold()" in text
-    assert ").strip().casefold()" in text
-    assert (
-        "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}" in text
-    )
-    assert (
-        "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID},"
-        "${DATABRICKS_RELEASE_PROBE_CLIENT_ID}" in text
-    )
-    assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" not in text
+    # The approver and admin identities the App payload gets: the profile's
+    # normal/operator2 and admin/release-probe roles, after any extra ones.
+    profile = resolve(from_github(*split_contexts(core_tier_profile()), environment="client-one"))
+    payload = views.app_payload_env(profile)
+    assert payload["MIP_APPROVER_IDENTITIES"].endswith(f"{IDENTITY_IDS['normal']},{IDENTITY_IDS['operator2']}")
+    assert payload["MIP_ADMIN_IDENTITIES"].endswith(f"{IDENTITY_IDS['admin']},{IDENTITY_IDS['release_probe']}")
 
 
 def test_deploy_dev_carries_the_read_only_auditor_allowlist_like_the_admin_one() -> None:
-    """D-audit-reads-c3: the auditor allowlist reaches .env.local exactly like
-    MIP_ADMIN_EMAILS: a repository variable, kept out of child processes, and
-    written only when non-empty (an empty value means no auditors)."""
-    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    """D-audit-reads-c3: the auditor allowlist reaches .env.local exactly like MIP_ADMIN_EMAILS.
 
-    assert "MIP_AUDITOR_EMAILS: ${{ vars.MIP_AUDITOR_EMAILS }}" in text
-    assert re.search(r"export -n [^\n]*\bMIP_AUDITOR_EMAILS\b", text)
-    assert (
-        'if [ -n "${MIP_AUDITOR_EMAILS:-}" ]; then\n'
-        '              echo "MIP_AUDITOR_EMAILS=${MIP_AUDITOR_EMAILS}"\n'
-        "            fi" in text
-    )
-    assert "secrets.MIP_AUDITOR_EMAILS" not in text
+    Since M1-PR7 both are client profile fields held as environment secrets:
+    the resolve-client-profile action writes each to .env.local only when set
+    (an empty value means no auditors), and the workflow names neither.
+    """
+
+    text = _unbound_workflow_text()
+    assert "MIP_AUDITOR_EMAILS" not in text and "MIP_ADMIN_EMAILS" not in text
+    assert FIELD_CLASS["MIP_AUDITOR_EMAILS"] is FIELD_CLASS["MIP_ADMIN_EMAILS"] is FieldClass.IDENTIFYING
+    with_auditors = resolve(from_github(*split_contexts(demo_profile()), environment="fictional-demo"))
+    without = resolve(from_github(*split_contexts(demo_profile(MIP_AUDITOR_EMAILS=None)), environment="fictional-demo"))
+    assert views.deploy_controls(with_auditors)["MIP_AUDITOR_EMAILS"] == DEMO_PROFILE["MIP_AUDITOR_EMAILS"]
+    assert "MIP_AUDITOR_EMAILS" not in views.deploy_controls(without)
 
 
-def test_deploy_dev_carries_the_refusal_capture_switch_like_the_admin_allowlist() -> None:
-    """D-audit-reads-d: a lender's MIP_GENIE_REFUSAL_TEXT_CAPTURE reaches
-    .env.local exactly like MIP_ADMIN_EMAILS (a repository variable, kept out
-    of child processes, written only when non-empty); unset, the payload's
-    explicit 'enabled' default applies."""
-    text = DEPLOY_DEV.read_text(encoding="utf-8")
+def test_deploy_dev_carries_no_refusal_capture_switch_outside_the_profile() -> None:
+    """D-audit-reads-d's switch is no client profile field, so the per-client workflow carries none (M1-PR7).
 
-    assert "MIP_GENIE_REFUSAL_TEXT_CAPTURE: ${{ vars.MIP_GENIE_REFUSAL_TEXT_CAPTURE }}" in text
-    assert re.search(r"export -n [^\n]*\bMIP_GENIE_REFUSAL_TEXT_CAPTURE\b", text)
-    assert (
-        'if [ -n "${MIP_GENIE_REFUSAL_TEXT_CAPTURE:-}" ]; then\n'
-        '              echo "MIP_GENIE_REFUSAL_TEXT_CAPTURE=${MIP_GENIE_REFUSAL_TEXT_CAPTURE}"\n'
-        "            fi" in text
-    )
-    assert "secrets.MIP_GENIE_REFUSAL_TEXT_CAPTURE" not in text
+    Unset, the payload's explicit 'enabled' default applies, as it did for
+    every dispatch that left the variable empty. A client that needs it off
+    needs the field in tools/clients/schema.py first.
+    """
+
+    assert "MIP_GENIE_REFUSAL_TEXT_CAPTURE" not in DEPLOY_DEV.read_text(encoding="utf-8")
+    assert "MIP_GENIE_REFUSAL_TEXT_CAPTURE" not in FIELD_CLASS
 
 
 def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     script = _deploy_entrypoint_text()
 
-    assert (
-        workflow.count(
-            "DATABRICKS_RELEASE_PROBE_CLIENT_ID: "
-            "${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}"
-        )
-        == 2
-    )
-    assert (
-        workflow.count(
-            "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET: "
-            "${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET }}"
-        )
-        == 1
-    )
-    required_loop = workflow[workflow.index('missing=""') : workflow.index("python - <<'PY'")]
-    assert "DATABRICKS_RELEASE_PROBE_CLIENT_ID" in required_loop
-    assert "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET" not in required_loop
+    # M1-PR7: the role's id (MIP_IDENTITY_IDS_JSON) and its secret are profile
+    # fields the resolve-client-profile action writes to .env.local.
+    assert "DATABRICKS_RELEASE_PROBE_CLIENT" not in workflow
     assert "export MIP_ADMIN_IDENTITIES" in script
     assert "\"$DATABRICKS_RELEASE_PROBE_CLIENT_ID\" <<'PYEOF'" in script
 
@@ -2593,15 +2579,13 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
 
 
 def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     script = _deploy_entrypoint_text()
     bundle = BUNDLE_CONFIG.read_text(encoding="utf-8")
 
-    for secret in (
-        "DATABRICKS_VERIFIER_CLIENT_ID",
-        "DATABRICKS_VERIFIER_CLIENT_SECRET",
-    ):
-        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    # M1-PR7: the verifier's id and secret are profile fields, from .env.local.
+    assert "DATABRICKS_VERIFIER_CLIENT" not in workflow
+    for secret in ("DATABRICKS_VERIFIER_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_SECRET"):
         assert secret in script
     assert "--identity-role verifier" in script
     assert '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in script
@@ -2630,18 +2614,16 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     verifier_boundary_helper = _shell_function("prove_exact_verifier_boundary")
     assert "-m tools.databricks.verify_verifier_identity_boundary" in verifier_boundary_helper
     assert '--protected-service-principal-id "$APP_SP_SCIM_ID"' in verifier_boundary_helper
-    assert "DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}" in workflow
+    assert "DATABRICKS_ACCOUNT_ID" not in workflow, "an identifying profile field, from .env.local (M1-PR7)"
 
 
 def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     script = _deploy_contract_text()
 
-    for secret in (
-        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
-        "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
-    ):
-        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    # M1-PR7: the runtime's id and secret are profile fields, from .env.local.
+    assert "DATABRICKS_AGENT_RUNTIME_CLIENT" not in workflow
+    for secret in ("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET"):
         assert secret in script
     runtime_block = script[
         script.index(
@@ -3311,27 +3293,21 @@ def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
 
 
 def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     nightly = NIGHTLY.read_text(encoding="utf-8")
     script = _deploy_entrypoint_text()
 
-    assert (
-        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: "
-        "${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}"
-    ) in workflow
-    assert "secrets.DATABRICKS_AGENT_PROXY_CLIENT_SECRET" not in workflow
+    # M1-PR7: the bundle is a secret profile field the resolve-client-profile
+    # action writes to .env.local; the workflow names no proxy credential.
+    assert "DATABRICKS_AGENT_PROXY" not in workflow
     for legacy_secret in (
         "secrets.DATABRICKS_AGENT_PROXY_CLIENT_ID",
         "secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_ID",
     ):
         assert legacy_secret not in workflow
         assert legacy_secret not in nightly
-    assert workflow.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
     assert nightly.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
-    assert (
-        workflow.count("python -m tools.databricks.agent_proxy_credential_bundle public-fields")
-        == 1
-    )
+    assert "agent_proxy_credential_bundle public-fields" not in workflow
     assert (
         nightly.count("python -m tools.databricks.agent_proxy_credential_bundle public-fields") == 2
     )
@@ -4937,30 +4913,20 @@ def test_deploy_fails_fast_when_python_lacks_repo_tooling_deps() -> None:
 
 
 def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
 
-    secret_binding = (
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: " "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
-    )
-    # The Configure step's presence check and the Deploy step (the credential
-    # repair, a third reader, was removed with its secrets-write token).
-    assert workflow.count(secret_binding) == 2
-    assert (
-        workflow.count(
-            "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
-            "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
-        )
-        == 1
-    )
-    model_binding = (
-        "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: "
-        "${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}"
-    )
-    assert workflow.count(model_binding) == 2
-    required_loop = workflow[workflow.index('missing=""') : workflow.index("python - <<'PY'")]
-    assert "MIP_GENIE_ACTION_SECRET_CURRENT" not in required_loop, "presence-only, not required"
-    assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" in required_loop
-    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" in required_loop
+    # M1-PR7: both keys are secret profile fields, from .env.local.
+    for key in ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"):
+        assert key not in workflow and FIELD_CLASS[key] is FieldClass.SECRET, key
+    # The key-rotation inputs are no client profile field, so the per-client
+    # workflow carries none; a rotation adds them to the schema first.
+    for name in (
+        "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS",
+        "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY",
+        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
+        "MIP_GENIE_ACTION_SECRET_CURRENT",
+    ):
+        assert name not in workflow, name
     script = _deploy_entrypoint_text()
     assert "model-attestation and verifier-proof keys must be distinct" in script
     assert "MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING" in script
@@ -5162,627 +5128,102 @@ def test_deploy_unexports_private_signing_keys_before_first_child_process() -> N
         assert secret in prefix
 
 
-def test_deploy_workflow_identity_check_inherits_only_public_client_ids() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
-    step_start = workflow.index("- name: Configure Databricks dev credentials")
-    python_pos = workflow.index("python - <<'PY'", step_start)
-    prefix = workflow[step_start:python_pos]
-    python_end = workflow.index("          PY", python_pos)
-    suffix = workflow[python_end : workflow.index("- name: Deploy dev Databricks App")]
-
-    assert "DATABRICKS_TOKEN" not in prefix, "no deployer PAT reaches the step"
-    for secret in (
-        "DATABRICKS_ACCOUNT_CLIENT_SECRET",
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
-        "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY",
-    ):
-        assert f"export -n {secret}" in prefix or secret in next(
-            line
-            for line in prefix.splitlines()
-            if line.lstrip().startswith("export -n ") and secret in line
-        )
-    for client_id in (
-        "DATABRICKS_CLIENT_ID",
-        "DATABRICKS_OPERATOR2_CLIENT_ID",
-        "DATABRICKS_ADMIN_CLIENT_ID",
-        "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
-        "DATABRICKS_VERIFIER_CLIENT_ID",
-        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
-        "DATABRICKS_AGENT_PROXY_CLIENT_ID",
-        "DATABRICKS_ACCOUNT_CLIENT_ID",
-        "MIP_CI_DEPLOYER_CLIENT_ID",
-    ):
-        assert client_id in workflow[python_pos:python_end]
-        assert client_id in suffix
-
-
-def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
-    tmp_path: Path,
-) -> None:
-    bin_dir, log = _install_environment_recorder(tmp_path)
-    home = tmp_path / "home"
-    home.mkdir()
-    required = {
-        "DATABRICKS_HOST": "https://workspace.example",
-        "MIP_CI_DEPLOYER_CLIENT_ID": "ci-deployer",
-        "DATABRICKS_WAREHOUSE_ID": "warehouse-id",
-        "GENIE_SPACE_ID": "genie-id",
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-private",
-        "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": "model-private",
-        "MIP_DEFAULT_CATALOG": "mip",
-        "DATABRICKS_CLIENT_ID": "operator-a",
-        "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
-        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
-        "DATABRICKS_RELEASE_PROBE_CLIENT_ID": "release-probe",
-        "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
-        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "runtime",
-        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE": (
-            '{"client_id":"agent-proxy","client_secret":"proxy-secret",'
-            '"credential_id":"agent-proxy-credential","version":1}'
-        ),
-        "DATABRICKS_ACCOUNT_HOST": "https://accounts.example",
-        "DATABRICKS_ACCOUNT_ID": "account-id",
-        "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
-        "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
-    }
-    # The step writes ``.env.local`` (``> .env.local``) into its working
-    # directory. Run it in a scratch checkout, never the repo root, where it
-    # would truncate the operator's real file; PYTHONPATH keeps the real
-    # ``python -m tools.databricks.agent_proxy_credential_bundle`` importable.
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    result = subprocess.run(
-        ["bash", "-c", _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")],
-        cwd=checkout,
-        env={
-            "PATH": f"{bin_dir}:/usr/bin:/bin",
-            "HOME": str(home),
-            "CHILD_ENV_LOG": str(log),
-            "PYTHONPATH": str(REPO),
-            **required,
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    # stat only: the step wrote its .env.local into the scratch checkout.
-    assert (checkout / ".env.local").stat().st_mode & 0o777 == 0o600
-    # The deployer profile holds no credential: GitHub OIDC federation only.
-    profile = home / ".databrickscfg"
-    assert profile.stat().st_mode & 0o777 == 0o600
-    assert profile.read_text(encoding="utf-8") == (
-        "[DEFAULT]\n"
-        "host  = https://workspace.example\n"
-        "auth_type = github-oidc\n"
-        "client_id = ci-deployer\n"
-    )
-    child = _read_env_log(log)
-    for client_id in (
-        "DATABRICKS_CLIENT_ID",
-        "DATABRICKS_OPERATOR2_CLIENT_ID",
-        "DATABRICKS_ADMIN_CLIENT_ID",
-        "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
-        "DATABRICKS_VERIFIER_CLIENT_ID",
-        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
-        "DATABRICKS_AGENT_PROXY_CLIENT_ID",
-        "DATABRICKS_ACCOUNT_CLIENT_ID",
-        "MIP_CI_DEPLOYER_CLIENT_ID",
-    ):
-        expected = (
-            "agent-proxy"
-            if client_id == "DATABRICKS_AGENT_PROXY_CLIENT_ID"
-            else required[client_id]
-        )
-        assert child[client_id] == expected
-    for secret in (
-        "DATABRICKS_TOKEN",
-        "DATABRICKS_ACCOUNT_CLIENT_SECRET",
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
-        "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY",
-        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
-    ):
-        assert secret not in child
-
-
-_CONFIGURE_STEP_INPUTS = {
-    "DATABRICKS_HOST": "https://workspace.example",
-    "MIP_CI_DEPLOYER_CLIENT_ID": "ci-deployer",
-    "DATABRICKS_WAREHOUSE_ID": "warehouse-id",
-    "GENIE_SPACE_ID": "genie-id",
-    "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-private",
-    "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": "model-private",
-    "MIP_DEFAULT_CATALOG": "mip_ci",
-    "DATABRICKS_CLIENT_ID": "operator-a",
-    "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
-    "DATABRICKS_ADMIN_CLIENT_ID": "admin",
-    "DATABRICKS_RELEASE_PROBE_CLIENT_ID": "release-probe",
-    "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
-    "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "runtime",
-    "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE": (
-        '{"client_id":"agent-proxy","client_secret":"proxy-secret",'
-        '"credential_id":"agent-proxy-credential","version":1}'
-    ),
-    "DATABRICKS_ACCOUNT_HOST": "https://accounts.example",
-    "DATABRICKS_ACCOUNT_ID": "account-id",
-    "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
-    "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
-}
-
-
-def _run_configure_step_for_real(
-    tmp_path: Path, **overrides: str
-) -> tuple[subprocess.CompletedProcess[str], Path]:
-    """Run the Configure step with the real interpreter, so its separation check executes."""
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    shim = bin_dir / "python"
-    shim.write_text(f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8")
-    shim.chmod(0o755)
-    home = tmp_path / "home"
-    home.mkdir()
-    checkout = tmp_path / "checkout"  # the step writes .env.local into its cwd
-    checkout.mkdir()
-    result = subprocess.run(
-        ["bash", "-c", _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")],
-        cwd=checkout,
-        env={
-            "PATH": f"{bin_dir}:/usr/bin:/bin",
-            "HOME": str(home),
-            "PYTHONPATH": str(REPO),
-            **{**_CONFIGURE_STEP_INPUTS, **overrides},
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
-    )
-    return result, home / ".databrickscfg"
-
-
-def test_configure_step_writes_the_oidc_profile_for_a_distinct_deployer(tmp_path: Path) -> None:
-    result, profile = _run_configure_step_for_real(tmp_path)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert profile.read_text(encoding="utf-8") == (
-        "[DEFAULT]\nhost  = https://workspace.example\nauth_type = github-oidc\nclient_id = ci-deployer\n"
-    )
-    for secret in ("mask-secret", "action-secret", "proof-private", "model-private", "account-secret", "proxy-secret"):
-        assert secret not in result.stdout + result.stderr
-
-
-def test_configure_step_profile_is_the_one_the_cached_deployer_client_reads(
+def test_the_github_oidc_profile_the_action_writes_is_the_one_the_cached_deployer_client_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The profile the Configure step writes is exactly what the deployer tooling consumes.
+    """The DEFAULT profile the resolve-client-profile action writes is what the deployer tooling consumes (M1-PR7).
 
-    The proof step requires the profile to hold only host, auth_type and
-    client_id; the tooling reads it the way the SDK does and must find the same
-    three keys. An exported App client id or host never redirects the exchange.
+    The proof requires the profile to hold only host, auth_type and client_id;
+    the tooling reads it the way the SDK does and must find the same three
+    keys. An exported App client id or host never redirects the exchange.
     """
 
-    result, profile = _run_configure_step_for_real(tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
+    profile = resolve(from_github(*split_contexts(core_tier_profile()), environment="client-one"))
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".databrickscfg").write_text(ci_profile.databrickscfg_text(profile), encoding="utf-8")
     environ = {
-        "HOME": str(profile.parent),
+        "HOME": str(home),
         "MIP_DEPLOYER_DATABRICKS_PROFILE": "DEFAULT",
         "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
-        "DATABRICKS_CLIENT_ID": "operator-a",
+        "DATABRICKS_CLIENT_ID": IDENTITY_IDS["normal"],
         "DATABRICKS_HOST": "https://ambient-wrong.example",
     }
 
     kwargs = _record_deployer_client(monkeypatch, environ)
 
     assert set(github_oidc_auth.profile_section("DEFAULT")) == {"host", "auth_type", "client_id"}
-    assert kwargs["host"] == _CONFIGURE_STEP_INPUTS["DATABRICKS_HOST"]
-    assert kwargs["client_id"] == _CONFIGURE_STEP_INPUTS["MIP_CI_DEPLOYER_CLIENT_ID"]
+    assert kwargs["host"] == profile.databricks_host
+    assert kwargs["client_id"] == IDENTITY_IDS["deployer"]
     assert kwargs["auth_type"] == github_oidc_auth.AUTH_TYPE
     assert isinstance(kwargs["credentials_strategy"], github_oidc_auth.CachedGitHubOidcCredentials)
 
 
-@pytest.mark.parametrize(
-    ("deployer", "message"),
-    (
-        ("operator-a", "CI deployer client ID must be distinct from every app-facing M2M client ID."),
-        ("VERIFIER", "CI deployer client ID must be distinct from every app-facing M2M client ID."),
-        (" agent-proxy ", "CI deployer client ID must be distinct from every app-facing M2M client ID."),
-        ("Account-Client", "Account-SCIM OAuth client must be distinct from the CI deployer client ID."),
-    ),
-    ids=("normal", "verifier-case", "agent-proxy-space", "account-scim"),
-)
-def test_configure_step_refuses_a_deployer_that_is_another_identity(
-    tmp_path: Path, deployer: str, message: str
+@pytest.mark.parametrize("role", ("normal", "verifier", "proxy", "account_principal"))
+def test_a_deployer_that_is_another_identity_is_refused_before_any_file_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], role: str
 ) -> None:
-    """The deployer is the UC/App authority: never an app-facing identity nor the account-SCIM client."""
+    """The deployer is the UC/App authority: never an app-facing identity nor the account-SCIM client.
 
-    result, profile = _run_configure_step_for_real(tmp_path, MIP_CI_DEPLOYER_CLIENT_ID=deployer)
-
-    assert result.returncode != 0
-    assert message in result.stderr
-    assert not profile.exists(), "refused before the profile is written"
-
-
-def test_configure_step_requires_the_deployer_variable(tmp_path: Path) -> None:
-    result, profile = _run_configure_step_for_real(tmp_path, MIP_CI_DEPLOYER_CLIENT_ID="")
-
-    assert result.returncode == 1
-    assert "::error::Missing required secrets or variables: MIP_CI_DEPLOYER_CLIENT_ID" in result.stdout
-    assert not profile.exists()
-
-
-OIDC_PROOF_STEP = "Prove the GitHub OIDC deployer identity"
-_DEPLOYER = "ci-deployer-application-id"
-_FAKE_DATABRICKS_SDK = """
-import json
-import os
-from types import SimpleNamespace
-
-
-def _log(call):
-    with open(os.environ["FAKE_DATABRICKS_CALLS"], "a", encoding="utf-8") as handle:
-        handle.write(call + "\\n")
-
-
-class WorkspaceClient:
-    def __init__(self, *, profile=None, **kwargs):
-        _log(f"sdk:WorkspaceClient(profile={profile}, extra={sorted(kwargs)})")
-        with open(os.environ["FAKE_DATABRICKS_SPEC"], encoding="utf-8") as handle:
-            self._spec = json.load(handle)
-        if self._spec.get("construct_error"):
-            raise PermissionError("token exchange refused")
-        self.config = SimpleNamespace(**self._spec["config"])
-        self.current_user = SimpleNamespace(me=self._me)
-        self.metastores = SimpleNamespace(current=self._current, get=self._metastore)
-        self.warehouses = SimpleNamespace(get=self._warehouse)
-        self.genie = SimpleNamespace(get_space=self._space)
-
-    def _me(self):
-        _log("sdk:current_user.me")
-        me = self._spec["me"]
-        groups = [SimpleNamespace(display=name) for name in me["groups"]]
-        return SimpleNamespace(user_name=me["user_name"], groups=groups)
-
-    def _current(self):
-        _log("sdk:metastores.current")
-        return SimpleNamespace(metastore_id=self._spec["metastore_id"])
-
-    def _metastore(self, metastore_id):
-        _log("sdk:metastores.get")
-        if metastore_id != self._spec["metastore_id"]:
-            raise LookupError("no such metastore")
-        return SimpleNamespace(owner=self._spec["metastore_owner"])
-
-    def _warehouse(self, warehouse_id):
-        _log("sdk:warehouses.get")
-        if warehouse_id not in self._spec["warehouses"]:
-            raise LookupError("no such warehouse")
-        return SimpleNamespace(id=warehouse_id)
-
-    def _space(self, space_id):
-        _log("sdk:genie.get_space")
-        if space_id not in self._spec["spaces"]:
-            raise LookupError("no such space")
-        return SimpleNamespace(space_id=space_id)
-"""
-_FAKE_DATABRICKS_CLI = """#!/usr/bin/env bash
-printf 'cli:%s profile_env=%s oidc_env=%s\\n' "$*" "${DATABRICKS_CONFIG_PROFILE:-}" \\
-  "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+set}" >> "$FAKE_DATABRICKS_CALLS"
-if [ -n "${FAKE_CLI_EXIT:-}" ]; then
-  echo "cli refused" >&2
-  exit "$FAKE_CLI_EXIT"
-fi
-cat "$FAKE_CLI_ME"
-"""
-_READ_ONLY_PROOF_CALLS = [
-    "sdk:WorkspaceClient(profile=DEFAULT, extra=[])",
-    "sdk:current_user.me",
-    "sdk:metastores.current",
-    "sdk:metastores.get",
-    "sdk:warehouses.get",
-    "cli:current-user me --profile DEFAULT -o json profile_env=DEFAULT oidc_env=set",
-]
-
-
-# The bundle target the proof step reads. deploy-dev.yml is parked (M1-PR7);
-# since M1-PR2 its one deployable target, `client`, names no host, so the step
-# proves the bundle commits none and takes the host from the profile and the
-# DATABRICKS_HOST secret alone. A synthetic workspace host stands in for both.
-OIDC_PROOF_TARGET = "client"
-_PROOF_HOST = "https://dbc-oidc-proof.cloud.databricks.com"
-
-
-def _bundle_target_host(target: str) -> str:
-    """The proof workspace: the committed client target names none of its own."""
-
-    assert "host" not in (yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))["targets"][target].get("workspace") or {})
-    return _PROOF_HOST
-
-
-def _oidc_profile(host: str, *, auth_type: str = "github-oidc", client_id: str = _DEPLOYER, extra: str = "") -> str:
-    return f"[DEFAULT]\nhost  = {host}\nauth_type = {auth_type}\nclient_id = {client_id}\n{extra}"
-
-
-def _run_oidc_proof(
-    tmp_path: Path,
-    *,
-    spec: dict[str, Any] | None = None,
-    profile: str | None = None,
-    cli_me: str | None = None,
-    env: dict[str, str] | None = None,
-    cli: bool = True,
-    bundle: str | None = None,
-) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run the proof step against a recording fake SDK and CLI (read-only calls only).
-
-    ``bundle`` replaces the committed databricks.yml the step reads.
+    The retired Configure step checked this itself. Since M1-PR7 the profile's
+    MIP_IDENTITY_IDS_JSON refuses any two roles that share an id
+    (tools/clients/json_fields.IdentityIds), so the resolve-client-profile
+    action writes nothing.
     """
 
-    host = _bundle_target_host(OIDC_PROOF_TARGET)
-    sdk_root = tmp_path / "sdk"
-    (sdk_root / "databricks" / "sdk").mkdir(parents=True)
-    (sdk_root / "databricks" / "__init__.py").write_text("", encoding="utf-8")
-    (sdk_root / "databricks" / "sdk" / "__init__.py").write_text(_FAKE_DATABRICKS_SDK, encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    if cli:
-        fake_cli = bin_dir / "databricks"
-        fake_cli.write_text(_FAKE_DATABRICKS_CLI, encoding="utf-8")
-        fake_cli.chmod(0o755)
-    shim = bin_dir / "python"
-    shim.write_text(f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8")
-    shim.chmod(0o755)
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".databrickscfg").write_text(_oidc_profile(host) if profile is None else profile, encoding="utf-8")
-    full_spec = {
-        "config": {"auth_type": "github-oidc", "client_id": _DEPLOYER, "host": host},
-        "me": {"user_name": _DEPLOYER, "groups": ["users", "admins"]},
-        "metastore_id": "metastore-under-test",
-        "metastore_owner": _DEPLOYER,
-        "warehouses": ["staging-warehouse"],
-        "spaces": ["staging-space"],
-        **(spec or {}),
-    }
-    spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(full_spec), encoding="utf-8")
-    cli_me_path = tmp_path / "cli-me.json"
-    cli_me_path.write_text(
-        json.dumps({"userName": _DEPLOYER, "groups": [{"display": "admins"}]}) if cli_me is None else cli_me,
-        encoding="utf-8",
-    )
-    calls = tmp_path / "calls.log"
-    cwd = REPO  # reads the committed databricks.yml; the step writes nothing
-    if bundle is not None:
-        cwd = tmp_path / "bundle"
-        cwd.mkdir()
-        (cwd / "databricks.yml").write_text(bundle, encoding="utf-8")
-    result = subprocess.run(
-        ["bash", "-c", _workflow_run_block(DEPLOY_DEV, OIDC_PROOF_STEP)],
-        cwd=cwd,
-        env={
-            "PATH": f"{bin_dir}:/usr/bin:/bin",
-            "HOME": str(home),
-            "PYTHONPATH": str(sdk_root),
-            "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
-            "MIP_CI_DEPLOYER_CLIENT_ID": _DEPLOYER,
-            "MIP_PROOF_DATABRICKS_HOST": host,
-            "MIP_PROOF_WAREHOUSE_ID": "staging-warehouse",
-            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
-            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
-            "FAKE_DATABRICKS_SPEC": str(spec_path),
-            "FAKE_DATABRICKS_CALLS": str(calls),
-            "FAKE_CLI_ME": str(cli_me_path),
-            **(env or {}),
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=120,
-    )
-    logged = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
-    return result, logged
+    ids = {**IDENTITY_IDS, "deployer": IDENTITY_IDS[role]}
+    variables, secrets = split_contexts(demo_profile(MIP_IDENTITY_IDS_JSON=json.dumps(ids)))
+    monkeypatch.setenv("MIP_VARS_JSON", json.dumps(variables))
+    monkeypatch.setenv("MIP_SECRETS_JSON", json.dumps(secrets))
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    argv = [
+        "--vars-json", "env:MIP_VARS_JSON", "--secrets-json", "env:MIP_SECRETS_JSON",
+        "--environment", "fictional-demo",
+        "--env-local", str(tmp_path / ".env.local"), "--databrickscfg", str(tmp_path / "cfg"),
+    ]
 
-
-def _proof_checks(stdout: str) -> dict[str, str]:
-    return dict(line.split("=", 1) for line in stdout.splitlines() if re.fullmatch(r"[a-z_A-Z0-9]+=(?:true|false).*", line))
+    assert ci_profile.main(argv) == 2
+    assert "must be distinct identities" in capsys.readouterr().err
+    assert not (tmp_path / ".env.local").exists() and not (tmp_path / "cfg").exists()
 
 
 def test_oidc_proof_step_is_read_only_and_ordered_before_any_deployer_mutation() -> None:
+    """tools/clients/oidc_proof.py, its checks pinned by tests/unit/test_oidc_proof.py, gates every phase."""
+
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["deploy"]["steps"]
     names = [step.get("name") for step in steps]
     proof = steps[names.index(OIDC_PROOF_STEP)]
 
-    assert names.index("Configure Databricks dev credentials") < names.index(OIDC_PROOF_STEP)
-    assert names.index(OIDC_PROOF_STEP) < names.index("Deploy dev Databricks App")
+    assert names.index("Resolve the client profile") < names.index(OIDC_PROOF_STEP)
+    assert names.index(OIDC_PROOF_STEP) < names.index("Preflight the dispatch") < names.index(RUN_STEP)
     assert "if" not in proof, "it gates the deploy unconditionally"
-    assert proof["env"] == {
-        "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
-        "MIP_CI_DEPLOYER_CLIENT_ID": "${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}",
-        "MIP_PROOF_DATABRICKS_HOST": "${{ secrets.DATABRICKS_HOST }}",
-        "MIP_PROOF_WAREHOUSE_ID": "${{ secrets.DATABRICKS_WAREHOUSE_ID }}",
-    }
-    assert not [name for name in proof["env"] if name.endswith("_SECRET") or "TOKEN" in name]
-    assert "deploy.sh" not in proof["run"]
-
-
-def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None:
-    host = _bundle_target_host(OIDC_PROOF_TARGET)
-    result, calls = _run_oidc_proof(tmp_path)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    checks = _proof_checks(result.stdout)
-    assert set(checks.values()) == {"true"}
-    assert set(checks) == {
-        "deployer_client_id_set",
-        "github_oidc_request_env_present",
-        "no_ambient_auth_override",
-        "profile_holds_only_host_auth_type_client_id",
-        "profile_auth_type_is_github_oidc",
-        "profile_client_id_is_the_deployer",
-        "profile_host_is_DATABRICKS_HOST",
-        "bundle_target_commits_no_host",
-        "sdk_authenticates_with_the_github_oidc_profile",
-        "me_is_the_deployer",
-        "me_in_admins",
-        "metastore_owner_is_the_deployer",
-        "warehouse_resolves",
-        "cli_authenticates",
-        "cli_me_is_the_deployer",
-        "cli_me_in_admins",
-    }
-    assert result.stdout.splitlines()[-1] == "GitHub OIDC deployer identity proven."
-    assert len(result.stdout.splitlines()) == len(checks) + 1, "booleans and the verdict, nothing else"
-    for value in (_DEPLOYER, host, "staging-warehouse", "staging-space", "metastore-under-test", "github-request-token"):
-        assert value not in result.stdout + result.stderr
-    assert calls == _READ_ONLY_PROOF_CALLS
-
-
-_STATIC_PROOF_REFUSALS = {
-    "secret-host-differs": ({"env": {"MIP_PROOF_DATABRICKS_HOST": "https://other-workspace.example"}}, "profile_host_is_DATABRICKS_HOST"),
-    "a-committed-bundle-host": ("committed-host", "bundle_target_commits_no_host"),
-    "pat-profile": ({"profile": "pat"}, "profile_auth_type_is_github_oidc"),
-    "stored-token": ({"profile": "token"}, "profile_holds_only_host_auth_type_client_id"),
-    "profile-client-differs": ({"profile": "client"}, "profile_client_id_is_the_deployer"),
-    "deployer-unset": ({"env": {"MIP_CI_DEPLOYER_CLIENT_ID": ""}}, "deployer_client_id_set"),
-    "no-id-token-permission": ({"env": {"ACTIONS_ID_TOKEN_REQUEST_TOKEN": ""}}, "github_oidc_request_env_present"),
-    "ambient-client-id": ({"env": {"DATABRICKS_CLIENT_ID": "normal-app-client"}}, "no_ambient_auth_override"),
-    "ambient-token": ({"env": {"DATABRICKS_TOKEN": "a-pat"}}, "no_ambient_auth_override"),
-    "ambient-auth-type": ({"env": {"DATABRICKS_AUTH_TYPE": "pat"}}, "no_ambient_auth_override"),
-    "ambient-host": ({"env": {"DATABRICKS_HOST": "https://other-workspace.example"}}, "no_ambient_auth_override"),
-    "ambient-config-file": ({"env": {"DATABRICKS_CONFIG_FILE": "/elsewhere/.databrickscfg"}}, "no_ambient_auth_override"),
-}
-
-
-@pytest.mark.parametrize("case", sorted(_STATIC_PROOF_REFUSALS))
-def test_oidc_proof_step_refuses_a_wrong_profile_before_any_network_call(tmp_path: Path, case: str) -> None:
-    arrangement, failed = _STATIC_PROOF_REFUSALS[case]
-    host = _bundle_target_host(OIDC_PROOF_TARGET)
-    kwargs: dict[str, Any] = {}
-    if arrangement == "committed-host":
-        # A host committed to the client target again: a second source of truth.
-        kwargs = {"bundle": f"targets:\n  client:\n    workspace:\n      host: {host}\n"}
-    elif "env" in arrangement:
-        kwargs = {"env": arrangement["env"]}
-    else:
-        kwargs = {
-            "profile": {
-                "pat": _oidc_profile(host, auth_type="pat"),
-                "token": _oidc_profile(host, extra="token = a-stored-pat\n"),
-                "client": _oidc_profile(host, client_id="another-service-principal"),
-            }[arrangement["profile"]]
-        }
-    result, calls = _run_oidc_proof(tmp_path, **kwargs)
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    checks = _proof_checks(result.stdout)
-    assert checks[failed] == "false"
-    assert "::error::GitHub OIDC deployer identity proof failed" in result.stdout
-    assert calls == [], "no SDK client, no CLI: nothing reaches a workspace"
-    assert "a-stored-pat" not in result.stdout + result.stderr
-
-
-_NETWORK_PROOF_REFUSALS = {
-    "another-identity": ({"spec": {"me": {"user_name": "someone-else", "groups": ["admins"]}}}, "me_is_the_deployer"),
-    "not-workspace-admin": ({"spec": {"me": {"user_name": _DEPLOYER, "groups": ["users"]}}}, "me_in_admins"),
-    "metastore-owned-elsewhere": ({"spec": {"metastore_owner": "an-owner@example.invalid"}}, "metastore_owner_is_the_deployer"),
-    "warehouse-unresolved": ({"spec": {"warehouses": []}}, "warehouse_resolves"),
-    "sdk-auth-type-drift": (
-        {"spec": {"config": {"auth_type": "pat", "client_id": _DEPLOYER, "host": "__HOST__"}}},
-        "sdk_authenticates_with_the_github_oidc_profile",
-    ),
-    "sdk-client-id-drift": (
-        {
-            "spec": {
-                "config": {
-                    "auth_type": "github-oidc",
-                    "client_id": "another-service-principal",
-                    "host": "__HOST__",
-                }
-            }
-        },
-        "sdk_authenticates_with_the_github_oidc_profile",
-    ),
-    "sdk-host-drift": (
-        {
-            "spec": {
-                "config": {
-                    "auth_type": "github-oidc",
-                    "client_id": _DEPLOYER,
-                    "host": "https://another-workspace.example.invalid",
-                }
-            }
-        },
-        "sdk_authenticates_with_the_github_oidc_profile",
-    ),
-    "sdk-exchange-refused": ({"spec": {"construct_error": True}}, "sdk_authenticates_with_the_github_oidc_profile"),
-    "cli-refused": (
-        {"env": {"FAKE_CLI_EXIT": "1"}},
-        ("cli_authenticates", "cli_me_is_the_deployer", "cli_me_in_admins"),
-    ),
-    "cli-another-identity": ({"cli_me": json.dumps({"userName": "someone-else", "groups": [{"display": "admins"}]})}, "cli_me_is_the_deployer"),
-    "cli-not-admin": ({"cli_me": json.dumps({"userName": _DEPLOYER, "groups": [{"display": "users"}]})}, "cli_me_in_admins"),
-    "cli-unparseable": ({"cli_me": "not json"}, ("cli_me_is_the_deployer", "cli_me_in_admins")),
-    "cli-not-installed": ({"cli": False}, ("cli_authenticates", "cli_me_is_the_deployer", "cli_me_in_admins")),
-    "cli-malformed-groups": ({"cli_me": json.dumps({"userName": _DEPLOYER, "groups": ["admins"]})}, "cli_me_in_admins"),
-}
-
-
-@pytest.mark.parametrize("case", sorted(_NETWORK_PROOF_REFUSALS))
-def test_oidc_proof_step_refuses_the_wrong_identity_or_authority(tmp_path: Path, case: str) -> None:
-    arrangement, failed = _NETWORK_PROOF_REFUSALS[case]
-    expected_false = [failed] if isinstance(failed, str) else list(failed)
-    host = _bundle_target_host(OIDC_PROOF_TARGET)
-    kwargs = json.loads(json.dumps(arrangement).replace("__HOST__", host))
-    result, calls = _run_oidc_proof(tmp_path, **kwargs)
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    checks = _proof_checks(result.stdout)
-    assert [check for check, value in checks.items() if not value.startswith("true")] == expected_false
-    assert "::error::GitHub OIDC deployer identity proof failed" in result.stdout
-    assert "GitHub OIDC deployer identity proven." not in result.stdout
-    assert set(calls) <= set(_READ_ONLY_PROOF_CALLS), "read-only calls only"
-    for message in (
-        "token exchange refused",
-        "no such",
-        "cli refused",
-        "someone-else",
-        "an-owner@example.invalid",
-        "another-service-principal",
-        "another-workspace.example.invalid",
-    ):
-        assert message not in result.stdout + result.stderr, "never an exception message or a value"
+    assert proof["env"] == {"DATABRICKS_CONFIG_PROFILE": "DEFAULT"}, "its expectations come from .env.local"
+    assert proof["run"] == "python -m tools.clients.oidc_proof --env-file .env.local"
 
 
 def test_deploy_step_authenticates_only_through_the_oidc_profile() -> None:
-    """The Deploy step binds the DEFAULT github-oidc profile and the workspace probe-secret plane."""
+    """The run step binds the DEFAULT github-oidc profile and the workspace probe-secret plane."""
 
-    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
-    deploy = next(step for step in workflow["jobs"]["deploy"]["steps"] if step.get("name") == "Deploy dev Databricks App")
-    env = deploy["env"]
+    env = _deploy_step_env()
 
     assert env["DATABRICKS_CONFIG_PROFILE"] == "DEFAULT"
     assert env["MIP_TEMP_CREDENTIAL_PLANE"] == "workspace"
-    assert "DATABRICKS_TOKEN" not in env
-    assert "DATABRICKS_AUTH_TYPE" not in env
-    assert env["DATABRICKS_HOST"] == "${{ secrets.DATABRICKS_HOST }}"
-    assert env["MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS"] == (
-        "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
-    ), "the key registry's retired verify keys reach deploy.sh"
-    # The account-SCIM authority is unchanged: its own client pair, never OIDC.
-    assert env["DATABRICKS_ACCOUNT_CLIENT_ID"] == "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}"
-    assert env["DATABRICKS_ACCOUNT_CLIENT_SECRET"] == "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
+    # The host, every client id and every secret come from .env.local (M1-PR7),
+    # never step env; the account-SCIM authority keeps its own client pair there.
+    for name in ("DATABRICKS_TOKEN", "DATABRICKS_AUTH_TYPE", "DATABRICKS_HOST", "DATABRICKS_CLIENT_ID", "DATABRICKS_ACCOUNT_CLIENT_ID"):
+        assert name not in env, name
+    assert not [name for name, value in env.items() if "secrets" in value], "no secret is bound to the step"
 
 
 def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> None:
     """Under github-oidc an env DATABRICKS_CLIENT_ID, TOKEN or AUTH_TYPE overrides the profile.
 
     The deployer-authenticated steps are exactly those that select the DEFAULT
-    profile. Only the Deploy step carries the App's client pair, and
-    scripts/deploy.sh un-exports it before its first child process.
+    profile. None carries a client id since M1-PR7 (the ids live in
+    .env.local), and scripts/deploy.sh un-exports every App client pair before
+    its first child process anyway.
     """
 
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
@@ -5795,21 +5236,14 @@ def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> N
 
     # M0-PR9's read-only journal record (tests/unit/test_quiesce_window_workflow.py)
     # selects the profile too; it carries no App client pair.
-    assert list(deployer_steps) == [
-        OIDC_PROOF_STEP,
-        "Deploy dev Databricks App",
-        "Record the quiesce window journal state",
-    ]
+    assert list(deployer_steps) == [OIDC_PROOF_STEP, RUN_STEP, "Record the quiesce window journal state"]
     for step in steps:
         env = step.get("env") or {}
         assert "DATABRICKS_TOKEN" not in env, step.get("name")
         assert "DATABRICKS_AUTH_TYPE" not in env, step.get("name")
+        assert "DATABRICKS_CLIENT_ID" not in env, step.get("name")
         assert "secrets.DATABRICKS_TOKEN" not in json.dumps(step), step.get("name")
-    carriers = [name for name, env in deployer_steps.items() if "DATABRICKS_CLIENT_ID" in env]
-    assert carriers == ["Deploy dev Databricks App"]
-    assert _workflow_run_block(DEPLOY_DEV, "Deploy dev Databricks App").strip().endswith(
-        './scripts/deploy.sh "${args[@]}"'
-    )
+    assert _workflow_run_block(DEPLOY_DEV, RUN_STEP).strip().endswith('./scripts/deploy.sh "${args[@]}"')
     prefix = _deploy_entrypoint_text()[: _deploy_entrypoint_text().index('REPO_ROOT="$(cd')]
     loop = prefix[prefix.index("for _PRIVATE_CREDENTIAL in") : prefix.index("unset _PRIVATE_CREDENTIAL")]
     assert "DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in loop
@@ -5821,13 +5255,15 @@ def test_every_oidc_deployer_input_the_tooling_reads_is_wired_by_the_workflow() 
 
     Step literals are named by the tools' own constants and must be values the
     tools accept. The Actions ID-token request pair comes from the runner only
-    because the deploy job holds id-token: write; no step may set or shadow it,
-    nor redirect the profile file the tooling and the proof step both read.
+    because the deploy job holds id-token: write; no step (nor the profile
+    action's) may set or shadow it, nor redirect the profile file the tooling
+    and the proof both read.
     """
 
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
     deploy_job = workflow["jobs"]["deploy"]
     step_env = _deploy_step_env()
+    action_steps = yaml.safe_load(PROFILE_ACTION.read_text(encoding="utf-8"))["runs"]["steps"]
 
     plane = step_env[temporary_credential_plane.TEMP_CREDENTIAL_PLANE_ENV]
     assert temporary_credential_plane.temporary_credential_plane(
@@ -5836,32 +5272,31 @@ def test_every_oidc_deployer_input_the_tooling_reads_is_wired_by_the_workflow() 
     assert step_env["DATABRICKS_CONFIG_PROFILE"] == "DEFAULT"
     assert deploy_job["permissions"]["id-token"] == "write"
     runner_only = (github_oidc_auth.REQUEST_URL_ENV, github_oidc_auth.REQUEST_TOKEN_ENV, "DATABRICKS_CONFIG_FILE")
-    for scope in (workflow, deploy_job, *deploy_job["steps"]):
+    for scope in (workflow, deploy_job, *deploy_job["steps"], *action_steps):
         assert not set(runner_only) & set(scope.get("env") or {}), scope.get("name", "job or workflow env")
-    # Only the Deploy step mints probe secrets; the credential repair rotates
-    # through the workspace proxy already and never reads the plane.
+    # Only the run step mints probe secrets.
     carriers = [
         step["name"]
         for step in deploy_job["steps"]
         if temporary_credential_plane.TEMP_CREDENTIAL_PLANE_ENV in (step.get("env") or {})
     ]
-    assert carriers == ["Deploy dev Databricks App"]
+    assert carriers == [RUN_STEP]
 
 
 def test_federation_subject_in_the_docs_matches_the_deploy_jobs_environment() -> None:
-    """The deployer's federation policy trusts the dev environment subject: keep the job bound to it."""
+    """The deployer's federation policy trusts the client's environment subject: keep the job bound to it."""
 
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
     environment = workflow["jobs"]["deploy"]["environment"]
-    subject = f"repo:<owner>/<repo>:environment:{environment}"
+    subject = "repo:<owner>/<repo>:environment:<client>"
 
-    assert environment == "dev"
+    assert environment == "${{ inputs.client }}"
     assert subject in (REPO / "docs" / "deployment.md").read_text(encoding="utf-8")
     assert subject in (REPO / ".github" / "workflows" / "README.md").read_text(encoding="utf-8")
 
 
 def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
 
     assert "rebase_unverified_app:" in workflow
     assert "remediate_foreign_catalog_bindings" not in workflow
@@ -5870,25 +5305,23 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     )
     assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: '0'" in workflow
     assert "MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'" in workflow
-    assert workflow.count("MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}") == 2
+    # M1-PR7: the catalog, the Gateway names, the approved owners and the
+    # account principal are client profile fields, which the
+    # resolve-client-profile action writes to .env.local from the
+    # environment's variables and secrets: the workflow names none of them.
+    # The foreign-catalog binding policy is no profile field, and M4-PR1
+    # retired it, so the per-client workflow carries none.
     for name in (
+        "MIP_DEFAULT_CATALOG",
         "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY",
         "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE",
         "MIP_AI_GATEWAY_TABLE_PREFIX",
+        "MIP_UC_APPROVED_OWNER_PRINCIPALS",
+        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY",
+        "DATABRICKS_ACCOUNT_CLIENT_ID",
     ):
-        assert workflow.count(f"{name}: ${{{{ vars.{name} }}}}") == 2
-        assert f'echo "{name}=${{{name}}}"' in workflow
-
-    binding = "MIP_UC_APPROVED_OWNER_PRINCIPALS: " "${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}"
-    assert workflow.count(binding) == 2
-    assert "MIP_UC_APPROVED_OWNER_PRINCIPALS=${MIP_UC_APPROVED_OWNER_PRINCIPALS}" in workflow
-    # Retired (M4-PR1): the owner's estate inventory carries the reviewed
-    # binding-denied catalogs, so CI no longer plumbs the policy anywhere.
-    assert "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" not in workflow
-    assert "DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}" in workflow
-    assert (
-        "DATABRICKS_ACCOUNT_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
-    ) in workflow
+        assert name not in workflow, name
+    assert "DATABRICKS_ACCOUNT_CLIENT_SECRET" not in workflow, "a secret profile field, from .env.local"
     script = _deploy_entrypoint_text()
     assert "dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS" in script
     assert "deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" in script
@@ -5899,15 +5332,10 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     assert script.index("existing target App service principal") < script.index(
         'step "keep existing App treatment writes quiesced through non-App release work"'
     )
-    assert "Account-SCIM OAuth client must be distinct from every app-facing" in workflow
-    assert (
-        "DATABRICKS_ACCOUNT_CLIENT_ID"
-        in workflow[
-            workflow.index("Configure Databricks dev credentials") : workflow.index(
-                "Deploy dev Databricks App"
-            )
-        ]
-    )
+    # The account principal is a profile role, pairwise distinct from every other (IdentityIds).
+    ids = {**IDENTITY_IDS, "account_principal": IDENTITY_IDS["normal"]}
+    with pytest.raises(ProfileRefusal, match="must be distinct identities"):
+        resolve(from_github(*split_contexts(demo_profile(MIP_IDENTITY_IDS_JSON=json.dumps(ids))), environment="fictional-demo"))
     app_yaml = (REPO / "app.yaml").read_text(encoding="utf-8")
     assert "MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED" in app_yaml
     assert 'value: "0"' in app_yaml
@@ -6400,19 +5828,17 @@ def test_app_failure_compensation_fails_if_probe_requarantine_cannot_be_proven(
     assert "converge_campaign_treatment_access" in calls
 
 
-def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflight() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+def test_deploy_dev_carries_no_salesforce_input() -> None:
+    """The Salesforce runtime secrets are presence-only in the runtime scope (plan §4.11, M0-PR2).
 
-    for binding in (
-        "SALESFORCE_EXTERNAL_ID_FIELD: ${{ vars.SALESFORCE_EXTERNAL_ID_FIELD }}",
-        "SALESFORCE_CLIENT_SECRET: ${{ secrets.SALESFORCE_CLIENT_SECRET }}",
-        "SALESFORCE_PASSWORD: ${{ secrets.SALESFORCE_PASSWORD }}",
-    ):
-        assert binding in workflow
-    required_preflight = workflow[
-        workflow.index('missing=""') : workflow.index('if [ -n "$missing" ]')
-    ]
-    assert "SALESFORCE" not in required_preflight
+    No value is stored in GitHub, and the connector's public settings are no
+    client profile field, so the per-client workflow names no Salesforce input
+    (M1-PR7). Keys already in the scope stay untouched; adding the connector's
+    settings to the schema is a follow-up a Salesforce client needs.
+    """
+
+    assert "SALESFORCE" not in DEPLOY_DEV.read_text(encoding="utf-8")
+    assert not [name for name in FIELD_CLASS if name.startswith("SALESFORCE")]
 
 
 def test_deploy_script_provisions_runtime_secrets_presence_only() -> None:
@@ -6667,13 +6093,16 @@ def test_exact_source_gate_rejects_dirty_uploaded_source(
 
 
 def test_deploy_timeout_covers_two_serial_auth_expiry_fences_with_margin() -> None:
+    from tests.unit.test_quiesce_window_workflow import phase_timeouts
+
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
-    timeout_seconds = int(workflow["jobs"]["deploy"]["timeout-minutes"]) * 60
+    minutes = phase_timeouts(workflow["jobs"]["deploy"]["timeout-minutes"])
     serialized_admission_seconds = (
         2 * (admission._MAX_BOOTSTRAP_AUTH_TTL + orchestration._EXPIRY_SKEW).total_seconds()
     )
 
-    assert timeout_seconds >= serialized_admission_seconds + 60 * 60
+    # A first install's two serial role convergences run in the release.
+    assert minutes["release"] * 60 >= serialized_admission_seconds + 60 * 60
 
 
 def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release() -> None:
@@ -7812,29 +7241,30 @@ def test_completed_redeploy_supervisor_command_pins_proxy_identity_explicitly() 
     assert "--skip-gateway" in tokens
 
 
-def test_dev_workflow_is_parked_until_a_client_environment_is_selected() -> None:
-    """M0-PR3: every dispatch refuses before the environment approval and any ID token.
-
-    The CI staging workspace was deleted and the dev target is the live
-    install, so the deploy job needs the `parked` job, whose one step fails.
-    The deploy job's `if` holds no status function, so a failed need skips it.
-    """
+def test_dev_workflow_deploys_one_client_environment_per_manual_dispatch() -> None:
+    """M1-PR7: the parked job is gone; one client's environment per dispatch, behind its break-glass."""
 
     workflow = yaml.load(DEPLOY_DEV.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     workflow_inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     jobs = workflow["jobs"]
-    parked = jobs["parked"]
-    assert list(jobs)[0] == "parked"
-    for key in ("if", "needs", "environment", "permissions", "continue-on-error"):
-        assert key not in parked, key
-    (step,) = parked["steps"]
-    assert "if" not in step and "continue-on-error" not in step
-    assert "::error::deploy-dev is parked until a client environment is selected (M1-PR7)." in step["run"]
-    assert step["run"].rstrip().endswith("exit 1")
-    deploy_job = jobs["deploy"]
-    assert deploy_job["needs"] == "parked"
-    assert deploy_job["if"] == ("${{ inputs.acknowledge_single_maintainer_break_glass }}")
-    assert not re.search(r"\b(?:always|failure|cancelled|success)\s*\(", deploy_job["if"])
+
+    assert list(workflow["on"]) == ["workflow_dispatch"], "no push, pull_request or schedule trigger"
+    assert list(jobs) == ["refuse-unacknowledged", "check-dispatch", "build", "deploy"]
+    assert jobs["build"]["needs"] == "check-dispatch" and jobs["deploy"]["needs"] == "build"
+    assert jobs["check-dispatch"]["if"] == "${{ inputs.acknowledge_single_maintainer_break_glass }}"
+    for name in ("build", "deploy"):
+        assert "if" not in jobs[name], "a skipped need skips it"
+    for job in jobs.values():
+        assert not re.search(r"\b(?:always|failure|cancelled|success)\s*\(", job.get("if", ""))
+    assert jobs["deploy"]["environment"] == "${{ inputs.client }}"
+    assert [name for name, job in jobs.items() if "environment" in job] == ["deploy"]
+    assert workflow_inputs["client"] == {
+        "description": "The client's GitHub Environment (its MIP_CLIENT key)",
+        "type": "string",
+        "required": "true",
+    }
+    assert workflow_inputs["phase"]["options"] == ["plan", "release", "data", "adopt", "unadopt"]
+    assert workflow_inputs["phase"]["default"] == "plan", "a dispatch that names no phase only reads"
 
     break_glass_input = workflow_inputs["acknowledge_single_maintainer_break_glass"]
     assert break_glass_input["type"] == "boolean"
@@ -7847,13 +7277,42 @@ def test_dev_workflow_is_parked_until_a_client_environment_is_selected() -> None
     assert "exit 1" in refusal_steps[0]["run"]
 
 
+@pytest.mark.parametrize(
+    ("client", "phase", "code"),
+    (
+        ("client-one", "plan", 0),
+        ("client-one", "unadopt", 0),
+        ("Client-One", "plan", 1),
+        ("c", "plan", 1),
+        ("client/one", "plan", 1),
+        ("../dev", "plan", 1),
+        ("client-one", "full", 1),
+        ("client-one\nexit 0", "plan", 1),
+    ),
+)
+def test_a_malformed_client_key_or_phase_refuses_before_any_job_names_an_environment(
+    client: str, phase: str, code: int
+) -> None:
+    steps = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]["check-dispatch"]["steps"]
+    (step,) = [step for step in steps if step.get("name") == "Refuse a malformed client key or phase"]
+    assert step["env"] == {"MIP_DISPATCH_CLIENT": "${{ inputs.client }}", "MIP_DISPATCH_PHASE": "${{ inputs.phase }}"}
+    result = subprocess.run(
+        ["bash", "-c", step["run"]],
+        env={"PATH": os.environ["PATH"], "MIP_DISPATCH_CLIENT": client, "MIP_DISPATCH_PHASE": phase},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == code, result.stdout + result.stderr
+
+
 def test_dev_workflow_has_no_credential_repair_or_remediation_input() -> None:
     """The normal-credential repair and the metastore-wide remediation input are gone for good.
 
     The repair rotated an OAuth secret into GitHub through a secrets-write
     token, outside scripts/deploy.sh; the remediation rewrote catalog bindings
-    for the whole shared metastore. The rule table that fenced both in CI was
-    retired with the CI staging install, so neither may come back as an input.
+    for the whole shared metastore. Neither may come back as an input.
     """
 
     text = DEPLOY_DEV.read_text(encoding="utf-8")
@@ -7863,15 +7322,212 @@ def test_dev_workflow_has_no_credential_repair_or_remediation_input() -> None:
     names = [step.get("name") for step in steps]
 
     assert set(workflow_inputs) == {
+        "client",
+        "phase",
+        "owner_attestation",
+        "operation_acks",
+        "expected_active_deployment_sha256",
+        "protections_unverified_ack",
         "skip_silver",
         "skip_smoke",
         "rebase_unverified_app",
         "acknowledge_single_maintainer_break_glass",
     }
+    assert len(workflow_inputs) <= 10, "GitHub's workflow_dispatch input limit"
     assert "Repair normal operator OAuth credential" not in names
     # tests/unit/test_no_ci_credential_mint.py holds every workflow to the same rule.
     for retired in ("--set-gh-secrets", "provision_m2m_oauth", "gh secret set"):
         assert retired not in text, retired
-    deploy = steps[names.index("Deploy dev Databricks App")]
-    assert "if" not in deploy, "the deploy step runs whenever the job does"
+    deploy = steps[names.index(RUN_STEP)]
+    assert "if" not in deploy, "the run step runs whenever the job does"
     assert deploy["env"]["MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"] == "0"
+
+
+# ------------------------------------------- the per-client CI topology (M1-PR7)
+
+
+def _jobs() -> dict[str, Any]:
+    return yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]
+
+
+def _uses(step: dict[str, Any]) -> str:
+    return str(step.get("uses", "")).partition("@")[0]
+
+
+def test_the_build_job_holds_no_id_token_and_runs_every_npm_and_index_call() -> None:
+    build = _jobs()["build"]
+    steps = build["steps"]
+    runs = "\n".join(str(step.get("run", "")) for step in steps)
+
+    assert build["permissions"] == {"contents": "read"} and "environment" not in build
+    assert "secrets." not in json.dumps(build) and "vars." not in json.dumps(build), "no profile value reaches the build"
+    assert "npm --prefix frontend ci --no-audit --no-fund" in runs and "npm --prefix frontend run build" in runs
+    assert "-m tools.databricks.app_runtime_closure stage" in runs and "--require-brotli-check" in runs
+    assert (
+        "python -m pip download --no-deps --only-binary=:all: --require-hashes \\\n"
+        '  -r requirements-deploy.hashes.txt -d "$RUNNER_TEMP/prebuilt-release/wheelhouse"'
+    ) in runs
+    assert "-m tools.databricks.prebuilt_release manifest" in runs
+    assert build["outputs"] == {"manifest-sha256": "${{ steps.manifest.outputs.sha256 }}"}
+    assert [_uses(step) for step in steps if step.get("uses")] == [
+        "actions/checkout",
+        "actions/setup-node",
+        "actions/setup-python",
+        "actions/upload-artifact",
+    ]
+
+
+def test_the_deploy_job_runs_no_node_or_npm_and_installs_offline_with_hashes() -> None:
+    deploy = _jobs()["deploy"]
+    steps = deploy["steps"]
+    uses = [_uses(step) for step in steps if step.get("uses")]
+    runs = "\n".join(str(step.get("run", "")) for step in steps)
+
+    assert "actions/setup-node" not in uses and not re.search(r"\b(?:npm|npx|node)\b", runs)
+    assert uses == [
+        "actions/checkout",
+        "actions/setup-python",
+        "databricks/setup-cli",
+        "actions/download-artifact",
+        "./.github/actions/resolve-client-profile",
+    ]
+    names = [step.get("name") for step in steps]
+    verify = steps[names.index("Verify the prebuilt release against its manifest")]
+    install = steps[names.index("Install the deploy tooling offline and hash-pinned")]
+    assert names.index(verify["name"]) < names.index(install["name"]) < names.index("Resolve the client profile")
+    assert "-m tools.databricks.prebuilt_release verify" in verify["run"]
+    assert verify["env"] == {"MIP_PREBUILT_RELEASE_SHA256": "${{ needs.build.outputs.manifest-sha256 }}"}
+    assert install["run"].split() == [
+        "set", "-euo", "pipefail",
+        "python", "-m", "pip", "install", "--no-index", "--find-links", '"$RUNNER_TEMP/prebuilt-release/wheelhouse"', "\\",
+        "--require-hashes", "--only-binary=:all:", "-r", "requirements-deploy.hashes.txt",
+    ]
+    installs = [line for line in runs.splitlines() if re.search(r"\bpip install\b", line)]
+    assert len(installs) == 1 and "--no-index" in installs[0], "the one install, from the sealed wheelhouse"
+    run = _workflow_run_block(DEPLOY_DEV, RUN_STEP)
+    assert '--prebuilt-release "$RUNNER_TEMP/prebuilt-release"' in run
+    assert _deploy_step_env()["MIP_PREBUILT_RELEASE_SHA256"] == "${{ needs.build.outputs.manifest-sha256 }}"
+
+
+def test_identifying_fields_reach_the_deploy_job_from_its_secrets_only() -> None:
+    """Each identifying or secret name is bound from secrets; from vars, by presence only (a misfiled one refuses).
+
+    No step holds toJSON(vars) or toJSON(secrets): a step's env prints in its
+    log header, and a variable prints there in clear
+    (tests/unit/test_workflow_contexts.py parses every expression).
+    """
+
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    assert "toJSON(vars)" not in text and "toJSON(secrets)" not in text
+    collect = next(step for step in _jobs()["deploy"]["steps"] if step.get("name") == "Collect the client's profile from its environment")
+    for name, value in collect["env"].items():
+        if name.startswith(workflow_contexts.VAR_PREFIX):
+            assert name.removeprefix(workflow_contexts.VAR_PREFIX) in workflow_contexts.PUBLIC_NAMES
+            assert value == f"${{{{ vars.{name.removeprefix(workflow_contexts.VAR_PREFIX)} }}}}"
+    for name in workflow_contexts.PRIVATE_NAMES:
+        assert collect["env"][f"{workflow_contexts.SECRET_PREFIX}{name}"] == f"${{{{ secrets.{name} }}}}"
+        assert f"${{{{ vars.{name} && '{name}' || '' }}}}" in collect["env"][workflow_contexts.MISFILED_ENV]
+
+
+def test_the_secret_names_the_deploy_reads_are_exactly_the_schemas() -> None:
+    """The environment's secrets are the profile's identifying and secret fields; .env.local gets exactly those.
+
+    The resolver ignores every other name in toJSON(secrets) and refuses a
+    public field there; ci_profile writes each identifying field (and its
+    aliases) and each secret field it holds, under the schema's names.
+    """
+
+    values = paychex_shaped_profile()
+    variables, secrets = split_contexts(values)
+    profile = resolve(from_github(variables, {**secrets, "UNRELATED_REPOSITORY_SECRET": "x"}, environment="client-one"))
+    written = {line.split("=", 1)[0] for line in ci_profile.env_local_text(profile).splitlines()}
+    schema_secrets = {name for name, kind in FIELD_CLASS.items() if kind is FieldClass.SECRET}
+    assert set(secrets) <= {name for name, kind in FIELD_CLASS.items() if kind is not FieldClass.PUBLIC}
+    assert {name for name in written if name in schema_secrets} == schema_secrets & set(secrets)
+    assert "UNRELATED_REPOSITORY_SECRET" not in written
+    assert set(ci_profile.secret_fields(profile)) == schema_secrets & set(secrets)
+
+
+def test_the_mask_is_the_first_step_that_prints_a_profile_value() -> None:
+    """Before the action's mask step, only the collect step reads a context, and it prints counts only.
+
+    Its own header prints the public values it binds and the runner-masked
+    secrets; an identifying name in vars prints as its name, never its value.
+    """
+
+    deploy = _jobs()["deploy"]
+    steps = deploy["steps"]
+    names = [step.get("name") for step in steps]
+    first = names.index("Resolve the client profile")
+    collect = names.index("Collect the client's profile from its environment")
+    assert collect == first - 1
+    for step in steps[:first]:
+        dumped = json.dumps(step)
+        if step.get("name") != names[collect]:
+            assert "secrets" not in dumped and "vars." not in dumped and "vars)" not in dumped, step.get("name")
+        assert ".env.local" not in dumped, step.get("name")
+    assert not re.search(r"\b(?:echo|cat|printenv|env)\b", steps[collect]["run"]), "it prints nothing but its own counts"
+    action = yaml.safe_load(PROFILE_ACTION.read_text(encoding="utf-8"))
+    assert action["runs"]["steps"][0]["name"] == "Mask every identifying profile value"
+    assert action["runs"]["steps"][0]["run"].split()[:4] == ["python", "-m", "tools.clients", "mask"]
+    assert steps[first]["with"] == {
+        "environment": "${{ inputs.client }}",
+        "vars-file": "${{ runner.temp }}/mip-client-vars.json",
+        "secrets-file": "${{ runner.temp }}/mip-client-secrets.json",
+    }
+    remove = steps[names.index("Remove the profile files")]
+    assert remove["if"] == "always()"
+    for path in (".env.local", '"$HOME/.databrickscfg"', '"$RUNNER_TEMP/mip-client-vars.json"', '"$RUNNER_TEMP/mip-client-secrets.json"'):
+        assert path in remove["run"], path
+
+
+def test_no_retired_install_name_or_databricks_token_in_the_workflow_or_its_action() -> None:
+    """The retired-install ratchet scans both tracked files at zero; this pins the token and the old names."""
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", str(DEPLOY_DEV), str(PROFILE_ACTION)],
+        cwd=REPO, capture_output=True, text=True, check=False,
+    )
+    assert tracked.returncode == 0, "both are tracked, so the ratchet reads them"
+    for path in (DEPLOY_DEV, PROFILE_ACTION):
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"(?i)environment:\s*dev\b|staging", text), path.name
+        assert "DATABRICKS_TOKEN" not in text, path.name
+        # check-dispatch names it by presence only, to refuse a repository-level one.
+        read = _unbound_workflow_text() if path == DEPLOY_DEV else text
+        assert "MIP_CI_DEPLOYER_CLIENT_ID" not in read, f"{path.name}: the deployer is the profile's role"
+
+
+def test_no_trigger_other_than_workflow_dispatch_reaches_a_deploy_job() -> None:
+    workflow = yaml.load(DEPLOY_DEV.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    for name, job in workflow["jobs"].items():
+        assert "github.event_name" not in json.dumps(job), name
+
+
+def test_no_artifact_carries_a_plan_report_and_only_the_build_uploads() -> None:
+    jobs = _jobs()
+    uploads = [
+        (name, step)
+        for name, job in jobs.items()
+        for step in job.get("steps", [])
+        if _uses(step) == "actions/upload-artifact"
+    ]
+    assert [name for name, _step in uploads] == ["build"]
+    (_name, step), = uploads
+    assert step["with"]["name"] == "prebuilt-release"
+    assert step["with"]["path"] == "${{ runner.temp }}/prebuilt-release"
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    assert "plan-report" not in text.replace("plan-reports folder", "")
+    # The plan phase publishes the full report to the workspace, never a file a step uploads.
+    assert "plan_report_publish publish" in _deploy_entrypoint_text()
+
+
+def test_the_deploy_job_sets_the_foreign_name_switch_and_reads_inputs_through_env_only() -> None:
+    """The switch is set but inert: no probe prints through tools/clients/redact.foreign() yet (plan §4.16)."""
+
+    jobs = _jobs()
+    assert jobs["deploy"]["env"] == {"MIP_REDACT_FOREIGN_NAMES": "1"}
+    for name, job in jobs.items():
+        for step in job.get("steps", []):
+            assert "${{" not in str(step.get("run", "")), f"{name}/{step.get('name')}: inputs reach a script through env"

@@ -206,7 +206,7 @@ def test_the_preflight_block_accepts_the_no_prefix_spelling_for_the_prefix_only(
 
 
 def test_the_deployment_guide_documents_the_source_controls() -> None:
-    """An operator learns the names, the no-prefix spelling and that CI does not carry them yet."""
+    """An operator learns the names, the no-prefix spelling and where CI carries them (M1-PR7)."""
 
     guide = (Path(__file__).resolve().parents[2] / "docs" / "deployment.md").read_text(encoding="utf-8")
     section = guide[guide.index("### Cotality source share") : guide.index("### Deploy interpreter")]
@@ -215,4 +215,5 @@ def test_the_deployment_guide_documents_the_source_controls() -> None:
         assert f"{name}=" in section, name
     assert f'MIP_COTALITY_SOURCE_TABLE_PREFIX="{source_names.NO_TABLE_PREFIX}"' in section
     assert "template value" in section and "local deploy controls" in section
+    assert "variables of the client's GitHub" in section, "per-client CI carries them since M1-PR7"
     assert "the share catalog literal is fixed" not in guide
