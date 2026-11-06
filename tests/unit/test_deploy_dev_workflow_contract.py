@@ -7499,7 +7499,9 @@ def test_no_retired_install_name_or_databricks_token_in_the_workflow_or_its_acti
         text = path.read_text(encoding="utf-8")
         assert not re.search(r"(?i)environment:\s*dev\b|staging", text), path.name
         assert "DATABRICKS_TOKEN" not in text, path.name
-        assert "MIP_CI_DEPLOYER_CLIENT_ID" not in text, f"{path.name}: the deployer is the profile's role"
+        # check-dispatch names it by presence only, to refuse a repository-level one.
+        read = _unbound_workflow_text() if path == DEPLOY_DEV else text
+        assert "MIP_CI_DEPLOYER_CLIENT_ID" not in read, f"{path.name}: the deployer is the profile's role"
 
 
 def test_no_trigger_other_than_workflow_dispatch_reaches_a_deploy_job() -> None:

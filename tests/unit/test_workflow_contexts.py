@@ -47,6 +47,9 @@ def test_the_bound_names_are_the_schemas_fields_and_their_aliases_never_an_ident
     assert set(contexts.PRIVATE_NAMES) == {name for name, kind in FIELD_CLASS.items() if kind is not FieldClass.PUBLIC}
     assert not set(contexts.BOUND_NAMES) & set(IDENTITY_ALIASES), "an identity alias never supplies a value"
     assert "DATABRICKS_TOKEN" not in contexts.BOUND_NAMES
+    # check-dispatch also refuses an identity alias at repository scope.
+    assert set(contexts.SCOPE_NAMES) == {*contexts.BOUND_NAMES, *IDENTITY_ALIASES}
+    assert "DATABRICKS_TOKEN" not in contexts.SCOPE_NAMES
 
 
 def test_deploy_dev_binds_exactly_the_generated_names() -> None:
@@ -77,7 +80,7 @@ def _violations(workflow: dict[str, Any]) -> list[str]:
     """Each use of vars or secrets outside the two generated steps, or of another form inside them."""
 
     allowed = {
-        SCOPE_STEP: {(context, name) for context in ("vars", "secrets") for name in contexts.BOUND_NAMES},
+        SCOPE_STEP: {(context, name) for context in ("vars", "secrets") for name in contexts.SCOPE_NAMES},
         COLLECT_STEP: {(context, name) for context in ("vars", "secrets") for name in contexts.BOUND_NAMES},
     }
     found: list[str] = []
@@ -185,6 +188,27 @@ def test_check_dispatch_refuses_a_repository_level_profile_name_and_prints_names
         assert value not in header and value not in out, "the header and the step print names only"
     assert "UNRELATED" not in out and "DATABRICKS_TOKEN" not in out, "only profile names are checked"
     assert _run_step(step, {"vars": {"UNRELATED": "x"}, "secrets": {"DATABRICKS_TOKEN": "dapiEXAMPLE"}}, tmp_path).returncode == 0
+
+
+def test_check_dispatch_refuses_a_repository_level_identity_alias_too(tmp_path: Path) -> None:
+    """An alias supplies no value (the collect step binds none), but another install's would ride along."""
+
+    step = _step(_workflow(), *SCOPE_STEP)
+    context = {
+        "vars": {"MIP_CI_DEPLOYER_CLIENT_ID": "00000000-0000-4000-8000-00000000c0de"},
+        "secrets": {"DATABRICKS_CLIENT_ID": "zyrplax-EXAMPLE-normal", "DATABRICKS_ACCOUNT_CLIENT_ID": "zyrplax-EXAMPLE-scim"},
+    }
+    result = _run_step(step, context, tmp_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    out = result.stdout + result.stderr
+    assert "variables: MIP_CI_DEPLOYER_CLIENT_ID" in out
+    assert "secrets: DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_CLIENT_ID" in out
+    for value in (*context["vars"].values(), *context["secrets"].values()):
+        assert value not in out, "names only"
+    collect = _step(_workflow(), *COLLECT_STEP)
+    for name in IDENTITY_ALIASES:
+        assert name not in " ".join(collect["env"].values()), "the collect step still binds no alias"
 
 
 @pytest.mark.parametrize(("client", "code"), (("client-one", 0), ("dev", 1), ("copilot", 1), ("github-pages", 1)))

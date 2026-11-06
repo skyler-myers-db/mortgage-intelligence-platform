@@ -4680,9 +4680,11 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    enforces that since the CI rule table was retired; M1-PR7's client
    environment carries the names.
 3. Delete every repository- and organization-level secret or variable that
-   carries a client profile field or alias name: GitHub merges those scopes
-   into the job's contexts with no sign of where an entry came from, so a
-   field the client's environment omits would be filled from them
+   carries a client profile field or alias name, the identity aliases
+   (`DATABRICKS_CLIENT_ID` and the other `*_CLIENT_ID` names) included:
+   GitHub merges those scopes into the job's contexts with no sign of where
+   an entry came from, so a field the client's environment omits would be
+   filled from them
    (tools/clients/environment.py, "Scope precondition"). `check-dispatch`
    refuses every dispatch until they are gone and names each one it finds;
    the parked `nightly.yml` that still reads some of them waits for M1-PR8
@@ -4690,7 +4692,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    may name it, and its identifying values must not stay variables. The old
    environment-level `DATABRICKS_CLIENT_ID` (2026-07-20) and the
    repository-level pairs (2026-07-26) are such entries: the client ids now
-   live in the environment secret `MIP_IDENTITY_IDS_JSON`. Re-mint the account-SCIM credential yourself. Create
+   live in the environment secret `MIP_IDENTITY_IDS_JSON`, and the collect
+   step binds no identity alias, so an alias in a client environment is
+   ignored (delete it too). Re-mint the account-SCIM credential yourself. Create
    a new OAuth secret for the service principal `DATABRICKS_ACCOUNT_CLIENT_ID`
    names and pipe it straight into `gh secret set --env <client>
    DATABRICKS_ACCOUNT_CLIENT_SECRET` (the client's environment, never the

@@ -148,12 +148,13 @@ does not consume them.
 own variables and secrets, each profile name bound one by one
 (tools/clients/workflow_contexts.py), and its `check-dispatch` job refuses
 every dispatch while any profile field or alias name (a name in
-tools/clients/schema.py) is set as a repository- or organization-level
-variable or secret: GitHub would merge it into every client environment's
-contexts and silently fill a field the environment omits. So each profile
-name in the table below, and every repository-level secret above that is a
-profile field (`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, the client
-secrets and signing keys), is deleted before the first per-client dispatch;
+tools/clients/schema.py, the `*_CLIENT_ID` identity aliases included) is set
+as a repository- or organization-level variable or secret: GitHub would
+merge it into every client environment's contexts and silently fill a field
+the environment omits. So each profile name in the table below, and every
+repository-level secret above that is a profile field or alias
+(`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, the client ids and secrets and
+the signing keys), is deleted before the first per-client dispatch;
 the parked `nightly.yml` that names them is rebuilt per client by M1-PR8.
 
 `MIP_ADMIN_EMAILS`, `MIP_ADMIN_GROUP_NAME` and `MIP_APPROVER_GROUP_NAME` are

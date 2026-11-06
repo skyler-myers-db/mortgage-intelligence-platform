@@ -22,9 +22,10 @@ organization's and the repository's entries, with the environment's winning
 on a clash, and nothing in them says which scope an entry came from. So a
 field the environment omits is filled, silently, from a repository-level entry
 of the same name. No repository- or organization-level secret or variable may
-carry a profile field or alias name: deploy-dev.yml's ``check-dispatch`` job,
-which runs in no environment and so sees only those scopes, refuses every
-dispatch while one does (tools/clients/workflow_contexts.py). A ``MIP_CLIENT``
+carry a profile field or alias name, an identity alias included:
+deploy-dev.yml's ``check-dispatch`` job, which runs in no environment and so
+sees only those scopes, refuses every dispatch while one does
+(tools/clients/workflow_contexts.SCOPE_NAMES). A ``MIP_CLIENT``
 that only the repository holds also fails the environment binding here.
 
 **Local.** A non-empty shell value beats ``.env.local``, as
@@ -32,7 +33,9 @@ that only the repository holds also fails the environment binding here.
 
 **Aliases.** A field and its aliases must agree; an alias alone supplies a
 scalar field. An identity alias (``DATABRICKS_CLIENT_ID`` and friends) never
-supplies a role, and must equal that role in ``MIP_IDENTITY_IDS_JSON``.
+supplies a role, and must equal that role in ``MIP_IDENTITY_IDS_JSON``. That
+cross-check is local only: deploy-dev.yml's collect step binds no identity
+alias, so CI reads the roles from ``MIP_IDENTITY_IDS_JSON`` alone.
 """
 
 from __future__ import annotations

@@ -114,16 +114,24 @@ jobs:
         env:
           MIP_REPOSITORY_SCOPE_VARS: >-
             ${{ vars.APP_ENV && 'APP_ENV' || '' }}
+            ${{ vars.DATABRICKS_ACCOUNT_CLIENT_ID && 'DATABRICKS_ACCOUNT_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_ACCOUNT_CLIENT_SECRET && 'DATABRICKS_ACCOUNT_CLIENT_SECRET' || '' }}
             ${{ vars.DATABRICKS_ACCOUNT_HOST && 'DATABRICKS_ACCOUNT_HOST' || '' }}
             ${{ vars.DATABRICKS_ACCOUNT_ID && 'DATABRICKS_ACCOUNT_ID' || '' }}
+            ${{ vars.DATABRICKS_ADMIN_CLIENT_ID && 'DATABRICKS_ADMIN_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_AGENT_PROXY_CLIENT_ID && 'DATABRICKS_AGENT_PROXY_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE && 'DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE' || '' }}
+            ${{ vars.DATABRICKS_AGENT_RUNTIME_CLIENT_ID && 'DATABRICKS_AGENT_RUNTIME_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET && 'DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_CLIENT_ID && 'DATABRICKS_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_CLIENT_SECRET && 'DATABRICKS_CLIENT_SECRET' || '' }}
             ${{ vars.DATABRICKS_HOST && 'DATABRICKS_HOST' || '' }}
+            ${{ vars.DATABRICKS_OPERATOR2_CLIENT_ID && 'DATABRICKS_OPERATOR2_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_RELEASE_PROBE_CLIENT_ID && 'DATABRICKS_RELEASE_PROBE_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET && 'DATABRICKS_RELEASE_PROBE_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_VERIFIER_CLIENT_ID && 'DATABRICKS_VERIFIER_CLIENT_ID' || '' }}
             ${{ vars.DATABRICKS_VERIFIER_CLIENT_SECRET && 'DATABRICKS_VERIFIER_CLIENT_SECRET' || '' }}
             ${{ vars.LAKEBASE_DATABASE && 'LAKEBASE_DATABASE' || '' }}
             ${{ vars.LAKEBASE_INSTANCE_NAME && 'LAKEBASE_INSTANCE_NAME' || '' }}
@@ -132,11 +140,14 @@ jobs:
             ${{ vars.MIP_ADMIN_GROUP_NAME && 'MIP_ADMIN_GROUP_NAME' || '' }}
             ${{ vars.MIP_ADMIN_IDENTITIES && 'MIP_ADMIN_IDENTITIES' || '' }}
             ${{ vars.MIP_AGENTIC_TIER && 'MIP_AGENTIC_TIER' || '' }}
+            ${{ vars.MIP_AGENT_PROXY_CLIENT_ID && 'MIP_AGENT_PROXY_CLIENT_ID' || '' }}
             ${{ vars.MIP_AGENT_PROXY_SECRET_SCOPE && 'MIP_AGENT_PROXY_SECRET_SCOPE' || '' }}
+            ${{ vars.MIP_AGENT_RUNTIME_CLIENT_ID && 'MIP_AGENT_RUNTIME_CLIENT_ID' || '' }}
             ${{ vars.MIP_AGENT_SUPERVISOR_NAME && 'MIP_AGENT_SUPERVISOR_NAME' || '' }}
             ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE && 'MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE' || '' }}
             ${{ vars.MIP_AI_GATEWAY_PROOF_SIGNING_KEY && 'MIP_AI_GATEWAY_PROOF_SIGNING_KEY' || '' }}
             ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX && 'MIP_AI_GATEWAY_TABLE_PREFIX' || '' }}
+            ${{ vars.MIP_AI_GATEWAY_VERIFIER_CLIENT_ID && 'MIP_AI_GATEWAY_VERIFIER_CLIENT_ID' || '' }}
             ${{ vars.MIP_APPROVER_EMAILS && 'MIP_APPROVER_EMAILS' || '' }}
             ${{ vars.MIP_APPROVER_GROUP_NAME && 'MIP_APPROVER_GROUP_NAME' || '' }}
             ${{ vars.MIP_APPROVER_IDENTITIES && 'MIP_APPROVER_IDENTITIES' || '' }}
@@ -145,6 +156,7 @@ jobs:
             ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE && 'MIP_APP_ROLLBACK_SECRET_SCOPE' || '' }}
             ${{ vars.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
             ${{ vars.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID && 'MIP_CI_DEPLOYER_CLIENT_ID' || '' }}
             ${{ vars.MIP_CLIENT && 'MIP_CLIENT' || '' }}
             ${{ vars.MIP_CLOUD && 'MIP_CLOUD' || '' }}
             ${{ vars.MIP_COTALITY_SHARE_NAME && 'MIP_COTALITY_SHARE_NAME' || '' }}
@@ -185,16 +197,24 @@ jobs:
             ${{ vars.MIP_UC_METASTORE_OWNER && 'MIP_UC_METASTORE_OWNER' || '' }}
           MIP_REPOSITORY_SCOPE_SECRETS: >-
             ${{ secrets.APP_ENV && 'APP_ENV' || '' }}
+            ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID && 'DATABRICKS_ACCOUNT_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET && 'DATABRICKS_ACCOUNT_CLIENT_SECRET' || '' }}
             ${{ secrets.DATABRICKS_ACCOUNT_HOST && 'DATABRICKS_ACCOUNT_HOST' || '' }}
             ${{ secrets.DATABRICKS_ACCOUNT_ID && 'DATABRICKS_ACCOUNT_ID' || '' }}
+            ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID && 'DATABRICKS_ADMIN_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_AGENT_PROXY_CLIENT_ID && 'DATABRICKS_AGENT_PROXY_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE && 'DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE' || '' }}
+            ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID && 'DATABRICKS_AGENT_RUNTIME_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET && 'DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_CLIENT_ID && 'DATABRICKS_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_CLIENT_SECRET && 'DATABRICKS_CLIENT_SECRET' || '' }}
             ${{ secrets.DATABRICKS_HOST && 'DATABRICKS_HOST' || '' }}
+            ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID && 'DATABRICKS_OPERATOR2_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID && 'DATABRICKS_RELEASE_PROBE_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET && 'DATABRICKS_RELEASE_PROBE_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID && 'DATABRICKS_VERIFIER_CLIENT_ID' || '' }}
             ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET && 'DATABRICKS_VERIFIER_CLIENT_SECRET' || '' }}
             ${{ secrets.LAKEBASE_DATABASE && 'LAKEBASE_DATABASE' || '' }}
             ${{ secrets.LAKEBASE_INSTANCE_NAME && 'LAKEBASE_INSTANCE_NAME' || '' }}
@@ -203,11 +223,14 @@ jobs:
             ${{ secrets.MIP_ADMIN_GROUP_NAME && 'MIP_ADMIN_GROUP_NAME' || '' }}
             ${{ secrets.MIP_ADMIN_IDENTITIES && 'MIP_ADMIN_IDENTITIES' || '' }}
             ${{ secrets.MIP_AGENTIC_TIER && 'MIP_AGENTIC_TIER' || '' }}
+            ${{ secrets.MIP_AGENT_PROXY_CLIENT_ID && 'MIP_AGENT_PROXY_CLIENT_ID' || '' }}
             ${{ secrets.MIP_AGENT_PROXY_SECRET_SCOPE && 'MIP_AGENT_PROXY_SECRET_SCOPE' || '' }}
+            ${{ secrets.MIP_AGENT_RUNTIME_CLIENT_ID && 'MIP_AGENT_RUNTIME_CLIENT_ID' || '' }}
             ${{ secrets.MIP_AGENT_SUPERVISOR_NAME && 'MIP_AGENT_SUPERVISOR_NAME' || '' }}
             ${{ secrets.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE && 'MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE' || '' }}
             ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY && 'MIP_AI_GATEWAY_PROOF_SIGNING_KEY' || '' }}
             ${{ secrets.MIP_AI_GATEWAY_TABLE_PREFIX && 'MIP_AI_GATEWAY_TABLE_PREFIX' || '' }}
+            ${{ secrets.MIP_AI_GATEWAY_VERIFIER_CLIENT_ID && 'MIP_AI_GATEWAY_VERIFIER_CLIENT_ID' || '' }}
             ${{ secrets.MIP_APPROVER_EMAILS && 'MIP_APPROVER_EMAILS' || '' }}
             ${{ secrets.MIP_APPROVER_GROUP_NAME && 'MIP_APPROVER_GROUP_NAME' || '' }}
             ${{ secrets.MIP_APPROVER_IDENTITIES && 'MIP_APPROVER_IDENTITIES' || '' }}
@@ -216,6 +239,7 @@ jobs:
             ${{ secrets.MIP_APP_ROLLBACK_SECRET_SCOPE && 'MIP_APP_ROLLBACK_SECRET_SCOPE' || '' }}
             ${{ secrets.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
             ${{ secrets.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ secrets.MIP_CI_DEPLOYER_CLIENT_ID && 'MIP_CI_DEPLOYER_CLIENT_ID' || '' }}
             ${{ secrets.MIP_CLIENT && 'MIP_CLIENT' || '' }}
             ${{ secrets.MIP_CLOUD && 'MIP_CLOUD' || '' }}
             ${{ secrets.MIP_COTALITY_SHARE_NAME && 'MIP_COTALITY_SHARE_NAME' || '' }}

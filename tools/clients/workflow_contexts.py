@@ -24,7 +24,8 @@ bound):
   there. GitHub merges those into a client environment's contexts and nothing
   says which scope an entry came from, so a field the environment omits would
   be filled silently from them: it refuses when any profile name is set at
-  either scope, and prints names only.
+  either scope, an identity alias included (``SCOPE_NAMES``: the owner deletes
+  those too, docs/deployment.md owner step 3), and prints names only.
 
 Both blocks put each expression on its own line of a folded scalar.
 ``python -m tools.clients.workflow_contexts print`` prints them;
@@ -43,9 +44,13 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from tools.clients.schema import ALIASES, FIELD_CLASS, FieldClass, name_class
+from tools.clients.schema import ALIASES, FIELD_CLASS, IDENTITY_ALIASES, FieldClass, name_class
 
 BOUND_NAMES = tuple(sorted({*FIELD_CLASS, *(alias for names in ALIASES.values() for alias in names)}))
+# An identity alias supplies no value, so the collect step binds none; at
+# repository or organization scope it is still another install's profile
+# name in every client environment's contexts, so check-dispatch refuses it.
+SCOPE_NAMES = tuple(sorted({*BOUND_NAMES, *IDENTITY_ALIASES}))
 PUBLIC_NAMES = tuple(name for name in BOUND_NAMES if name_class(name) is FieldClass.PUBLIC)
 PRIVATE_NAMES = tuple(name for name in BOUND_NAMES if name_class(name) is not FieldClass.PUBLIC)
 VAR_PREFIX = "MIP_CLIENT_VAR__"
@@ -74,8 +79,8 @@ def repository_scope_env() -> dict[str, str]:
     """check-dispatch's env: the names set at repository or organization scope, never a value."""
 
     return {
-        REPOSITORY_VARS_ENV: " ".join(_present("vars", name) for name in BOUND_NAMES),
-        REPOSITORY_SECRETS_ENV: " ".join(_present("secrets", name) for name in BOUND_NAMES),
+        REPOSITORY_VARS_ENV: " ".join(_present("vars", name) for name in SCOPE_NAMES),
+        REPOSITORY_SECRETS_ENV: " ".join(_present("secrets", name) for name in SCOPE_NAMES),
     }
 
 
