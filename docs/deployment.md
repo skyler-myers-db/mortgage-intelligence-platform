@@ -2766,6 +2766,17 @@ the first governed run owes the live timings.
   `MIP_ACK_DATA_LEDGER_SUPERSEDE=<that sha256>` for one run (shell only, never
   `.env.local`). The runner recomputes the plan, refuses on any difference, and
   never supersedes while any run of the generation is still active.
+- **A deleted bound job.** The Jobs API answers `runs/list` of a job deleted
+  out of band with `InvalidParameterValue` ("Job N does not exist."). Such an
+  entry (`tools/databricks/job_phase_activity.py`) is `absent`, not running,
+  only when `jobs/get` answers `NotFound` and no run of its job id is active
+  anywhere in the workspace; any other read error still refuses. The reset
+  plan records `ledger_job_present: false` for it, so the supersede ack names
+  the absence. Recovery is in band: the release that rebinds the job is not
+  refused by the ledger (the bundle plan gate still judges the rebind), then
+  `--phase data` refuses with the supersede ack, and that ack retires the
+  generation. A `--skip-silver` phase resumes, reruns and closes past an absent
+  silver. Never delete the signed ledger file.
 - **Rerun.** An open generation with nothing stale can still need every job
   again: a data smoke that fails after both jobs succeeded (gold scored before
   a later FRED refresh), a release that changed only the deployed SQL, or a
@@ -2790,7 +2801,9 @@ the first governed run owes the live timings.
 - **No overlap.** A data phase that exits 4 releases the lease with its job
   still running. A release, or a run with no `--phase`, reads the ledger right
   after taking its lease (`job_phase_runner quiet`, read-only) and refuses
-  while any entry of an open generation still runs.
+  while any entry of an open generation still runs. An entry whose job was
+  deleted is not running: `quiet` names it and the supersede ack remedy, and
+  passes.
 
 The runner's run-now is the one reviewed run-now site
 (`tools/databricks/stop_primitive_map.JOB_RUN_SITES`), its mutating modes are
