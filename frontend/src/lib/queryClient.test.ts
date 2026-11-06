@@ -4,7 +4,7 @@ import {
   createMipQueryClient,
   DEFAULT_QUERY_GC_MS,
   DEFAULT_QUERY_STALE_MS,
-  refetchOnReconnectIfNeverServed,
+  refetchOnReconnectAfterNetworkLoss,
 } from './queryClient';
 import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
@@ -19,7 +19,7 @@ describe('createMipQueryClient', () => {
     expect(queries?.staleTime).toBe(DEFAULT_QUERY_STALE_MS);
     expect(queries?.gcTime).toBe(DEFAULT_QUERY_GC_MS);
     expect(queries?.refetchOnWindowFocus).toBe(false);
-    expect(queries?.refetchOnReconnect).toBe(refetchOnReconnectIfNeverServed);
+    expect(queries?.refetchOnReconnect).toBe(refetchOnReconnectAfterNetworkLoss);
     expect(client.getDefaultOptions().mutations?.retry).toBe(false);
   });
 
@@ -90,29 +90,61 @@ describe('createMipQueryClient', () => {
   });
 });
 
-function failure(reason: string | undefined, extra: { status?: number | null; aborted?: boolean } = {}): ApiError {
-  return new ApiError('failed', { path: '/api/v1/leads', status: extra.status ?? null, retryable: false, reason, aborted: extra.aborted });
+function failure(
+  reason: string | undefined,
+  extra: { status?: number | null; aborted?: boolean; path?: string } = {},
+): ApiError {
+  return new ApiError('failed', {
+    path: extra.path ?? '/api/v1/leads',
+    status: extra.status ?? null,
+    retryable: false,
+    reason,
+    aborted: extra.aborted,
+  });
 }
+
+/** A reviewed audit-free read (lib/auditFreeReads), as the transport records its path. */
+const AUDIT_FREE = '/api/v1/analytics/executive?states=CA';
 
 function queryIn(error: unknown, meta?: Record<string, unknown>): Query {
   return { state: { error }, meta } as unknown as Query;
 }
 
-describe('refetchOnReconnectIfNeverServed', () => {
+describe('refetchOnReconnectAfterNetworkLoss', () => {
   it('refetches on reconnect only a read whose last attempt never reached the server', () => {
-    expect(refetchOnReconnectIfNeverServed(queryIn(null))).toBe(false);
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('offline')))).toBe(true);
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable')))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(null))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline')))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable')))).toBe(true);
     // The server answered: a warming 503, an ended session, an unreadable body.
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('warming_up', { status: 503 })))).toBe(false);
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('session_expired', { status: 401 })))).toBe(false);
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreadable_response', { status: 200 })))).toBe(false);
-    // It answered 200 and the body was lost on the way: offline or unreachable, with a status.
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable', { status: 200 })))).toBe(false);
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('offline', { status: 200 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('warming_up', { status: 503 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('session_expired', { status: 401 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreadable_response', { status: 200 })))).toBe(false);
+    // An audited read answered 200 and the body was lost on the way: offline
+    // or unreachable, with a status. Its row is written; a re-read adds one.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200 })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200 })))).toBe(false);
+    const proof = '/api/v1/borrowers/B-P5YP9ESW32R7Z/proof';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: proof })))).toBe(false);
     // The caller aborted it, or every served page writes a row.
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable', { aborted: true })))).toBe(false);
-    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable'), { auditedPages: true }))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { aborted: true })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable'), { auditedPages: true }))).toBe(false);
+  });
+
+  it('completes an audit-free read whose answer the network lost, and nothing else on that path', () => {
+    // It writes no row, so the lost 200 is completed like a read that never got a status.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE })))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE })))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { path: AUDIT_FREE })))).toBe(true);
+    // A path nobody reviewed counts as audited (fail-closed).
+    const unreviewed = '/api/v1/analytics/never-reviewed';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: unreviewed })))).toBe(false);
+    // The server answered with no network loss: still never re-read on reconnect.
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreadable_response', { status: 200, path: AUDIT_FREE })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('warming_up', { status: 503, path: AUDIT_FREE })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE, aborted: true })))).toBe(false);
+    expect(
+      refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE }), { auditedPages: true })),
+    ).toBe(false);
   });
 });
 
@@ -219,6 +251,78 @@ describe('createMipQueryClient on reconnect', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(observer.getCurrentResult().status).toBe('error');
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('completes an audit-free read whose 200 body was lost, beside an audited one it never re-reads', async () => {
+    // Through the real transport, both answered 200 and lost their body. The
+    // analytics read writes no row (lib/auditFreeReads), so the reconnect
+    // completes it and the panel loads by itself; /leads wrote VIEW_LEADS.
+    const encoder = new TextEncoder();
+    const ok = () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const bodyLost = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"rows": ['));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const scripted: Record<string, Array<() => Response>> = {
+      '/api/v1/leads': [ok, bodyLost],
+      '/api/v1/analytics/executive': [ok, bodyLost, ok],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, 'http://app.test');
+      const next = scripted[url.pathname]?.shift();
+      if (!next) throw new Error(`unexpected request ${url.pathname}`);
+      return next();
+    });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(([input]) => new URL(String(input), 'http://app.test').pathname === pathname).length;
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const audited = new QueryObserver(client, {
+      queryKey: ['mip', 'leads', 'body-lost-audited'],
+      queryFn: ({ signal }) => getJson<{ rows: unknown[] }>('/leads', signal),
+      staleTime: 0,
+    });
+    const auditFree = new QueryObserver(client, {
+      queryKey: ['mip', 'analytics', 'body-lost-audit-free'],
+      queryFn: ({ signal }) => getJson<{ rows: unknown[] }>('/analytics/executive', signal),
+      staleTime: 0,
+    });
+    const unsubscribe = [audited.subscribe(() => undefined), auditFree.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(audited.getCurrentResult().status).toBe('success'));
+      await vi.waitFor(() => expect(auditFree.getCurrentResult().status).toBe('success'));
+      // A Refresh of each: the server answers 200 and the body is lost.
+      await Promise.all([audited.refetch(), auditFree.refetch()]);
+      for (const observer of [audited, auditFree]) {
+        const error = observer.getCurrentResult().error;
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).reason).toBe('unreachable');
+        expect((error as ApiError).status).toBe(200);
+      }
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      // One reconnect pass decides both: once the audit-free read has
+      // re-read, a re-read of the audited one would already have called fetch.
+      await vi.waitFor(() => expect(auditFree.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/analytics/executive')).toBe(3);
+
+      expect(calls('/api/v1/leads')).toBe(2);
+      expect(audited.getCurrentResult().status).toBe('error');
     } finally {
       unsubscribe.forEach((stop) => stop());
       client.unmount();

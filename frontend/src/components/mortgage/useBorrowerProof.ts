@@ -18,9 +18,10 @@
  * - refetchOnMount / refetchOnReconnect / refetchOnWindowFocus false: say
  *   the same explicitly. 'static' alone already keeps the query out of every
  *   mount, reconnect and focus refetch (shouldFetchOn), with data or with an
- *   error; the global reconnect default (refetchOnReconnectIfNeverServed)
+ *   error; the global reconnect default (refetchOnReconnectAfterNetworkLoss)
  *   would otherwise complete a proof read that was never answered, and that
- *   must wait for an explicit act too.
+ *   must wait for an explicit act too. (A proof answer whose body was lost is
+ *   never completed there: /proof is not a reviewed audit-free read.)
  * - Retries stay at the client default: a warming 503 writes no audit row.
  *
  * A cache read is this hook with `enabled` false: it observes the cached

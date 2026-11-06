@@ -6,7 +6,7 @@
  * passive may reach the network again: not a remount 31 s later, not the
  * invalidation every approve applies, not a reconnect, not an enable flip,
  * not a borrower A -> B -> A round trip. Runs on the app's own query client
- * (createMipQueryClient). Its reconnect default (refetchOnReconnectIfNeverServed)
+ * (createMipQueryClient). Its reconnect default (refetchOnReconnectAfterNetworkLoss)
  * already skips a served read but completes one whose last attempt was never
  * answered; the proof's staleTime 'static' keeps it out of every reconnect
  * refetch, served or failed, which the unreachable case below pins against

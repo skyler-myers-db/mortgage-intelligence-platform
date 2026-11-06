@@ -19,6 +19,12 @@
  * wrote no row: reconnect still completes it, which the control test pins, and
  * which proves the wait below is long enough to see a reconnect refetch.
  *
+ * A read the server answered 200 whose body the network then lost fails
+ * unreachable (or offline) with its status. An audited one has written its
+ * row, so nothing completes it on its own; a reviewed audit-free one
+ * (lib/auditFreeReads) wrote none, so a reconnect and the "Connection lost"
+ * recovery both complete it and its panel loads by itself.
+ *
  * Each test lets the route's idle chunk preloads land before it goes offline
  * (assetsSettled): a preload the toggle cuts off is the test's own doing, and
  * the hygiene gate stays strict for everything else.
@@ -149,5 +155,127 @@ test.describe('a reconnect completes a read that never reached the server', () =
     // Its one audit row, written now: the failed attempt wrote none.
     expect(auditedReadsAfter(mockApi.calls, natural)).toEqual(['GET /api/leads?limit=5 (VIEW_LEADS)']);
     await expect(page.locator('#main-content').getByText("Today's top leads")).toBeVisible();
+  });
+});
+
+/** The in-page switch loseBodies installs (init scripts cannot close over test state). */
+const LOSE_BODIES = '__mipFixtureLoseBodies';
+
+/**
+ * Until `keepBodies`, every GET to `target` (path, and query when given)
+ * loses its body right after its 200 headers, as a connection that drops
+ * mid-transfer does: the mock served the read, and the app's res.json() fails
+ * with a TypeError. Every one, not the first: a route can read the same
+ * query twice while it loads (Analytics prefetches the executive read, and
+ * the mount re-reads it after a failed prefetch).
+ */
+async function loseBodies(page: Page, target: { pathname: string; search?: string }): Promise<void> {
+  await page.addInitScript(
+    ({ wanted, key }) => {
+      const realFetch = window.fetch.bind(window);
+      const state = { armed: true };
+      Object.defineProperty(window, key, { value: state });
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const response = await realFetch(input, init);
+        const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const url = new URL(raw, window.location.href);
+        const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        const hit = url.pathname === wanted.pathname && (wanted.search === undefined || url.search === wanted.search);
+        if (!state.armed || method !== 'GET' || !hit) return response;
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes.slice(0, Math.max(1, Math.floor(bytes.length / 2))));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        });
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      };
+    },
+    { wanted: target, key: LOSE_BODIES },
+  );
+}
+
+/** From now on the network delivers every body again. */
+async function keepBodies(page: Page): Promise<void> {
+  await page.evaluate((key) => {
+    (window as unknown as Record<string, { armed: boolean }>)[key].armed = false;
+  }, LOSE_BODIES);
+}
+
+const EXECUTIVE = { pathname: '/api/v1/analytics/executive' };
+const executiveReads = (mockApi: MockApi) =>
+  mockApi.calls.filter((call) => call.method === 'GET' && call.path === '/api/analytics/executive').length;
+
+test.describe('a recovery completes an audit-free read whose answer lost its body, never an audited one', () => {
+  test('Analytics: the executive read answered 200, lost its body, and loads on reconnect', async ({ app, context, mockApi, page }) => {
+    const assets = trackAssets(page);
+    await loseBodies(page, EXECUTIVE);
+    await app.gotoRoute('/analytics');
+    const served = executiveReads(mockApi);
+    expect(served).toBeGreaterThan(0);
+    await expect(page.locator('#main-content .funnel-sankey')).toHaveCount(0);
+    const natural = markNaturalLoad(mockApi);
+    await keepBodies(page);
+
+    await page.clock.setFixedTime(new Date(Date.parse(FIXTURE_NOW) + PAST_EVERY_STALE_TIME_MS));
+    await reconnect(app, context, mockApi, page, assets);
+    // Analytics reads write no row: completing it adds none.
+    await expect.poll(() => executiveReads(mockApi), { message: 'the reconnect completed the executive read' }).toBe(served + 1);
+    await app.settle();
+    await expect(page.locator('#main-content .funnel-sankey')).toBeVisible();
+    expectNoAuditedReadSince(mockApi, natural, 'analytics after a reconnect');
+  });
+
+  test('Analytics: the executive read answered 200, lost its body, and loads once "Connection lost" clears', async ({
+    app,
+    hygiene,
+    mockApi,
+    page,
+  }) => {
+    // The app cannot reach its server until the test lets it.
+    hygiene.allow('request-failed', /\/api\/v1\/health\b.* failed: /);
+    hygiene.allow('console.error', /\/api\/v1\/health\b/);
+    await loseBodies(page, EXECUTIVE);
+    await app.gotoRoute('/analytics');
+    const served = executiveReads(mockApi);
+    expect(served).toBeGreaterThan(0);
+    await expect(page.locator('#main-content .funnel-sankey')).toHaveCount(0);
+    const natural = markNaturalLoad(mockApi);
+    await keepBodies(page);
+
+    const health = /\/api\/v1\/health(?:\?|$)/;
+    await page.route(health, (route) => route.abort('failed'));
+    const lost = page.locator('.degraded-banner[data-connection="unreachable"]');
+    await expect(lost).toBeVisible({ timeout: 60_000 });
+    expect(executiveReads(mockApi)).toBe(served);
+    await page.unroute(health);
+    await expect(lost).toHaveCount(0, { timeout: 60_000 });
+    await expect.poll(() => executiveReads(mockApi), { message: 'the recovery completed the executive read' }).toBe(served + 1);
+    await app.settle();
+    await expect(page.locator('#main-content .funnel-sankey')).toBeVisible();
+    expectNoAuditedReadSince(mockApi, natural, 'analytics after "Connection lost" cleared');
+  });
+
+  test("Borrower 360, no borrower: Today's top leads answered 200 and lost its body; a reconnect never re-reads it", async ({
+    app,
+    context,
+    mockApi,
+    page,
+  }) => {
+    const assets = trackAssets(page);
+    await loseBodies(page, { pathname: '/api/v1/leads', search: '?limit=5' });
+    await app.gotoRoute('/borrower-360');
+    // The mock served it, so the server wrote its VIEW_LEADS row.
+    expect(auditedReadsAfter(mockApi.calls, 0)).toEqual(['GET /api/leads?limit=5 (VIEW_LEADS)']);
+    await expect(page.locator('#main-content').getByText("Today's top leads")).toHaveCount(0);
+    const natural = markNaturalLoad(mockApi);
+    // A re-read would now load the panel: the absence below is not the network's doing.
+    await keepBodies(page);
+
+    await page.clock.setFixedTime(new Date(Date.parse(FIXTURE_NOW) + PAST_EVERY_STALE_TIME_MS));
+    await reconnect(app, context, mockApi, page, assets);
+    expectNoAuditedReadSince(mockApi, natural, 'borrower-360 after a reconnect');
+    await expect(page.locator('#main-content').getByText("Today's top leads")).toHaveCount(0);
   });
 });

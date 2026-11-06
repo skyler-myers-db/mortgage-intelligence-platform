@@ -1,5 +1,6 @@
 import type { Query, QueryClient } from '@tanstack/react-query';
 import { ApiError, clientFailureReason } from '../lib/apiTransport';
+import { isAuditFreeRead } from '../lib/auditFreeReads';
 
 /**
  * A query whose every served page writes an audit row (`meta.auditedPages`:
@@ -8,6 +9,14 @@ import { ApiError, clientFailureReason } from '../lib/apiTransport';
  */
 export function hasAuditedPages(query: Pick<Query, 'meta'>): boolean {
   return query.meta?.auditedPages === true;
+}
+
+/** The query's last error, when the network lost it (offline or unreachable). */
+function networkLoss(query: Pick<Query, 'state'>): ApiError | null {
+  const error = query.state.error;
+  if (!(error instanceof ApiError)) return null;
+  const reason = clientFailureReason(error);
+  return reason === 'offline' || reason === 'unreachable' ? error : null;
 }
 
 /**
@@ -19,20 +28,33 @@ export function hasAuditedPages(query: Pick<Query, 'meta'>): boolean {
  * and an audited read it answered has already written its row.
  */
 export function neverAnswered(query: Pick<Query, 'state'>): boolean {
-  const error = query.state.error;
-  if (!(error instanceof ApiError) || error.status !== null) return false;
-  const reason = clientFailureReason(error);
-  return reason === 'offline' || reason === 'unreachable';
+  return networkLoss(query)?.status === null;
+}
+
+/**
+ * A query the server answered whose body the network then lost: offline or
+ * unreachable with a status. Only a reviewed audit-free read
+ * (lib/auditFreeReads) may be completed after that; any other path counts
+ * as audited, whose row the answered attempt has already written.
+ */
+export function answeredAuditFreeLoss(query: Pick<Query, 'state'>): boolean {
+  const error = networkLoss(query);
+  return error !== null && error.status !== null && isAuditFreeRead(error.path);
 }
 
 /**
  * The one rule for re-reading a query once the network is back, on a
  * reconnect (lib/queryClient.ts) or a reachable probe after failed ones
- * (refetchUnreachableQueries): its last attempt was never answered, and it is
- * not a paged query whose every served page writes a row.
+ * (refetchUnreachableQueries). Never a paged query whose every served page
+ * writes a row. Otherwise its last attempt was never answered, so it wrote
+ * nothing; or the network lost the body of an answer from a reviewed
+ * audit-free read, which writes nothing either. So a panel that writes no
+ * audit row loads by itself once the network returns, and an audited read
+ * the server answered waits for the reader's Retry.
  */
 export function refetchableAfterNetworkLoss(query: Pick<Query, 'state' | 'meta'>): boolean {
-  return neverAnswered(query) && !hasAuditedPages(query);
+  if (hasAuditedPages(query)) return false;
+  return neverAnswered(query) || answeredAuditFreeLoss(query);
 }
 
 /**
@@ -88,7 +110,8 @@ export function nextConnection(prior: ConnectionTracker, seen: ConnectionObserva
 /**
  * When a reachable probe follows one or more failed probes (the "Connection
  * lost" banner, or a one-probe blip that never showed it), refetch the
- * MOUNTED queries whose last attempt was never answered. Same narrowing
+ * MOUNTED queries refetchableAfterNetworkLoss allows: a last attempt that was
+ * never answered, or an audit-free answer whose body was lost. Same narrowing
  * as healthRecovery.ts: `type: 'active'` only, because many reads write VIEW_*
  * audit rows and an unmounted audited read must never be re-fired for a page
  * nobody is on. It needs a failed probe first: a read that fails while every
