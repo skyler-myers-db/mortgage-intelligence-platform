@@ -1,7 +1,13 @@
 import { QueryClient, QueryObserver, type Query } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
-import { answeredAuditFreeLoss, hasAuditedPages, neverAnswered, refetchUnreachableQueries } from './connectionState';
+import {
+  answeredAuditFreeLoss,
+  hasAuditedPages,
+  neverAnswered,
+  optedOutOfReconnect,
+  refetchUnreachableQueries,
+} from './connectionState';
 
 /**
  * The ONE audited-pages exclusion (W5c, D-audit-reads-a; integrator C16): a
@@ -60,6 +66,58 @@ describe('refetchUnreachableQueries', () => {
     expect(audited).toHaveBeenCalledTimes(1);
     expect(answered).toHaveBeenCalledTimes(1);
     expect(unreviewed).toHaveBeenCalledTimes(1);
+  });
+
+  it('never re-reads a query that opted out of the reconnect refetch, whatever its failure', async () => {
+    // The Offer detail's snapshot fans out: GET /borrowers/{id} (VIEW_BORROWER)
+    // was answered while POST /offers/recommend never was, so its error reads
+    // "never answered" though its audit row is written. Its own
+    // refetchOnReconnect: false keeps it out of this recovery as it does a reconnect.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const neverReached = () =>
+      Promise.reject(new ApiError('unreachable', { path: '/api/v1/offers/recommend', method: 'POST', reason: 'unreachable' }));
+    const bodyLost = () =>
+      Promise.reject(new ApiError('unreachable', { path: '/api/v1/analytics/executive', method: 'GET', reason: 'unreachable', status: 200 }));
+    const snapshot = vi.fn(neverReached);
+    const optedOutAuditFree = vi.fn(bodyLost);
+    const plain = vi.fn(neverReached);
+    for (const observer of [
+      new QueryObserver(client, { queryKey: ['snapshot'], queryFn: snapshot, refetchOnReconnect: false }),
+      new QueryObserver(client, { queryKey: ['opted-out'], queryFn: optedOutAuditFree, refetchOnReconnect: false }),
+      new QueryObserver(client, { queryKey: ['plain'], queryFn: plain }),
+    ]) {
+      cleanups.push(observer.subscribe(() => undefined));
+    }
+    cleanups.push(() => client.clear());
+    await vi.waitFor(() => {
+      for (const key of ['snapshot', 'opted-out', 'plain']) {
+        expect(client.getQueryState([key])?.status).toBe('error');
+      }
+    });
+
+    refetchUnreachableQueries(client);
+    // The control: the same failure on a query that keeps the default is completed.
+    await vi.waitFor(() => expect(plain).toHaveBeenCalledTimes(2));
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(optedOutAuditFree).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('optedOutOfReconnect', () => {
+  it('is true when an observer set refetchOnReconnect === false', () => {
+    const observedWith = (...values: unknown[]) =>
+      ({ observers: values.map((refetchOnReconnect) => ({ options: { refetchOnReconnect } })) }) as unknown as Pick<
+        Query,
+        'observers'
+      >;
+    expect(optedOutOfReconnect(observedWith(false))).toBe(true);
+    // Any observer that opted out keeps the query out (fail-closed).
+    expect(optedOutOfReconnect(observedWith(undefined, false))).toBe(true);
+    expect(optedOutOfReconnect(observedWith(true))).toBe(false);
+    expect(optedOutOfReconnect(observedWith('always'))).toBe(false);
+    expect(optedOutOfReconnect(observedWith(() => false))).toBe(false);
+    expect(optedOutOfReconnect(observedWith(undefined))).toBe(false);
+    expect(optedOutOfReconnect(observedWith())).toBe(false);
   });
 });
 

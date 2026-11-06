@@ -44,17 +44,32 @@ export function answeredAuditFreeLoss(query: Pick<Query, 'state'>): boolean {
 }
 
 /**
+ * A query an observer opted out of the reconnect refetch (`refetchOnReconnect:
+ * false`): its read runs only on an act (an open, a Retry, Regenerate), never
+ * when the network returns. TanStack honours that on a reconnect for that
+ * observer; both recoveries honour it for the query, because both are the
+ * network coming back. It is also how a query that fans out to several
+ * requests stays out of both: they judge a query by the request that failed,
+ * and an audited request beside it may have been answered (the Offer detail's
+ * snapshot: VIEW_BORROWER answered while RECOMMEND_OFFER never was).
+ */
+export function optedOutOfReconnect(query: Pick<Query, 'observers'>): boolean {
+  return query.observers.some((observer) => observer.options.refetchOnReconnect === false);
+}
+
+/**
  * The one rule for re-reading a query once the network is back, on a
  * reconnect (lib/queryClient.ts) or a reachable probe after failed ones
  * (refetchUnreachableQueries). Never a paged query whose every served page
- * writes a row. Otherwise its last attempt was never answered, so it wrote
- * nothing; or the network lost the body of an answer from a reviewed
- * audit-free read, which writes nothing either. So a panel that writes no
- * audit row loads by itself once the network returns, and an audited read
- * the server answered waits for the reader's Retry.
+ * writes a row, nor one that opted out of the reconnect refetch. Otherwise
+ * its last attempt was never answered, so it wrote nothing; or the network
+ * lost the body of an answer from a reviewed audit-free read, which writes
+ * nothing either. So a panel that writes no audit row loads by itself once
+ * the network returns, and an audited read the server answered waits for the
+ * reader's Retry.
  */
-export function refetchableAfterNetworkLoss(query: Pick<Query, 'state' | 'meta'>): boolean {
-  if (hasAuditedPages(query)) return false;
+export function refetchableAfterNetworkLoss(query: Pick<Query, 'state' | 'meta' | 'observers'>): boolean {
+  if (hasAuditedPages(query) || optedOutOfReconnect(query)) return false;
   return neverAnswered(query) || answeredAuditFreeLoss(query);
 }
 
@@ -112,7 +127,8 @@ export function nextConnection(prior: ConnectionTracker, seen: ConnectionObserva
  * When a reachable probe follows one or more failed probes (the "Connection
  * lost" banner, or a one-probe blip that never showed it), refetch the
  * MOUNTED queries refetchableAfterNetworkLoss allows: a last attempt that was
- * never answered, or an audit-free answer whose body was lost. Same narrowing
+ * never answered, or an audit-free answer whose body was lost, and never a
+ * query that opted out of the reconnect refetch. Same narrowing
  * as healthRecovery.ts: `type: 'active'` only, because many reads write VIEW_*
  * audit rows and an unmounted audited read must never be re-fired for a page
  * nobody is on. It needs a failed probe first: a read that fails while every

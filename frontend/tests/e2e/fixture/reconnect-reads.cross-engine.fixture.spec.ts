@@ -25,11 +25,17 @@
  * (lib/auditFreeReads) wrote none, so a reconnect and the "Connection lost"
  * recovery both complete it and its panel loads by itself.
  *
+ * A query that fans out is judged by the request that failed, so one with an
+ * audited request beside it opts out of both recoveries: the Offer detail's
+ * snapshot, whose VIEW_BORROWER read can be answered while its
+ * RECOMMEND_OFFER read never is.
+ *
  * Each test lets the route's idle chunk preloads land before it goes offline
  * (assetsSettled): a preload the toggle cuts off is the test's own doing, and
  * the hygiene gate stays strict for everything else.
  */
 import type { BrowserContext, Page, Request } from '@playwright/test';
+import { PRIMARY_BORROWER } from './data/borrowers';
 import { FIXTURE_NOW } from './data/reference';
 import { FIXTURE_ROUTES } from './routes';
 import { expect, test } from './test';
@@ -303,5 +309,60 @@ test.describe('a recovery completes the ledger reads that write no row', () => {
       .toBe(served + 1);
     await expect(activity.getByText('Recent activity is unavailable.')).toHaveCount(0);
     expectNoAuditedReadSince(mockApi, natural, 'the Console after a reconnect');
+  });
+});
+
+test.describe('a recovery never re-runs a query whose audited request was answered beside the one that failed', () => {
+  test('Offer detail: VIEW_BORROWER answered, RECOMMEND_OFFER never; "Connection lost" clears and nothing is re-read', async ({
+    app,
+    hygiene,
+    mockApi,
+    page,
+  }) => {
+    // The app cannot reach its server until the test lets it, and the first
+    // recommend request fails without a response on purpose.
+    hygiene.allow('request-failed', /\/api\/v1\/health\b.* failed: /);
+    hygiene.allow('console.error', /\/api\/v1\/health\b/);
+    hygiene.allow('request-failed', /\/api\/v1\/offers\/recommend failed: /);
+    hygiene.allow('console.error', /\/api\/v1\/offers\/recommend/);
+    const id = PRIMARY_BORROWER.borrower_id;
+    const borrowerReads = () => reads(mockApi, 'GET', `/api/borrowers/${id}`);
+    let failedRecommend = 0;
+    await page.route(/\/api\/v1\/offers\/recommend$/, async (route) => {
+      if (failedRecommend > 0) {
+        await route.fallback();
+        return;
+      }
+      failedRecommend += 1;
+      // Fail it with no response once the mock has answered the borrower read.
+      await expect.poll(borrowerReads, { message: 'the borrower read was answered first' }).toBe(1);
+      await route.abort('failed');
+    });
+    await app.gotoRoute(`/offer-orchestrator/${id}`);
+    expect(failedRecommend).toBe(1);
+    // The snapshot failed unreachable, judged by the recommend leg that never got a status.
+    const main = page.locator('#main-content');
+    await expect(main.getByText("Couldn't load borrower or offer.")).toBeVisible();
+    // The mock answered the borrower read (its row is written) and never saw the
+    // recommend; the draft is its own query, read once per open.
+    expect([...auditedReadsAfter(mockApi.calls, 0)].sort()).toEqual([
+      `GET /api/borrowers/${id} (VIEW_BORROWER)`,
+      'POST /api/outreach/draft (DRAFT_OUTREACH)',
+    ]);
+    const natural = markNaturalLoad(mockApi);
+
+    const health = /\/api\/v1\/health(?:\?|$)/;
+    await page.route(health, (route) => route.abort('failed'));
+    const lost = page.locator('.degraded-banner[data-connection="unreachable"]');
+    await expect(lost).toBeVisible({ timeout: 60_000 });
+    const probesBefore = reads(mockApi, 'GET', '/api/health');
+    await page.unroute(health);
+    await expect(lost).toHaveCount(0, { timeout: 60_000 });
+    await expect.poll(() => reads(mockApi, 'GET', '/api/health')).toBeGreaterThan(probesBefore);
+    await app.settle();
+    // Its VIEW_BORROWER row is written: a re-run would add a second with no act behind it.
+    expectNoAuditedReadSince(mockApi, natural, 'offer detail after "Connection lost" cleared');
+    expect(borrowerReads()).toBe(1);
+    await expect(main.getByText("Couldn't load borrower or offer.")).toBeVisible();
   });
 });

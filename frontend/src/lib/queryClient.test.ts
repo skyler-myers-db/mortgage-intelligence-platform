@@ -108,8 +108,8 @@ function failure(
 /** A reviewed audit-free read (lib/auditFreeReads), as the transport records its path. */
 const AUDIT_FREE = '/api/v1/analytics/executive?states=CA';
 
-function queryIn(error: unknown, meta?: Record<string, unknown>): Query {
-  return { state: { error }, meta } as unknown as Query;
+function queryIn(error: unknown, meta?: Record<string, unknown>, observerOptions: Record<string, unknown> = {}): Query {
+  return { state: { error }, meta, observers: [{ options: observerOptions }] } as unknown as Query;
 }
 
 describe('refetchOnReconnectAfterNetworkLoss', () => {
@@ -156,6 +156,16 @@ describe('refetchOnReconnectAfterNetworkLoss', () => {
     const savedViews = '/api/v1/workspace/saved-views';
     expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: savedViews, method: 'POST' })))).toBe(false);
     expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE, method: null })))).toBe(false);
+  });
+
+  it('never refetches a query that opted out of the reconnect refetch', () => {
+    // TanStack never calls the default for such a query; the "Connection lost"
+    // recovery shares this predicate, so the opt-out holds there too.
+    const optedOut = { refetchOnReconnect: false };
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable'), undefined, optedOut))).toBe(false);
+    expect(
+      refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE }), undefined, optedOut)),
+    ).toBe(false);
   });
 });
 
