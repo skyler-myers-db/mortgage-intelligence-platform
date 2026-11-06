@@ -8,6 +8,7 @@ import {
 } from './queryClient';
 import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
+import { getJson } from './apiTransport';
 import { LEADS_PAGED_SCOPE, leadsPagedQueryKey } from './leadsQuery';
 
 describe('createMipQueryClient', () => {
@@ -106,6 +107,9 @@ describe('refetchOnReconnectIfNeverServed', () => {
     expect(refetchOnReconnectIfNeverServed(queryIn(failure('warming_up', { status: 503 })))).toBe(false);
     expect(refetchOnReconnectIfNeverServed(queryIn(failure('session_expired', { status: 401 })))).toBe(false);
     expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreadable_response', { status: 200 })))).toBe(false);
+    // It answered 200 and the body was lost on the way: offline or unreachable, with a status.
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable', { status: 200 })))).toBe(false);
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('offline', { status: 200 })))).toBe(false);
     // The caller aborted it, or every served page writes a row.
     expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable', { aborted: true })))).toBe(false);
     expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable'), { auditedPages: true }))).toBe(false);
@@ -148,6 +152,78 @@ describe('createMipQueryClient on reconnect', () => {
       unsubscribe.forEach((stop) => stop());
       client.unmount();
       client.clear();
+    }
+  });
+
+  it('never re-reads a read the server answered 200 whose body was lost mid-transfer', async () => {
+    // Through the real transport: the second response's body stream breaks
+    // after its 200, as when the network drops mid-transfer. The server
+    // served that read, so an audited one has written its row already.
+    const encoder = new TextEncoder();
+    const responses = [
+      () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('{"rows": ['));
+              controller.error(new TypeError('network connection was lost'));
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    ];
+    const fetchMock = vi.fn(async () => {
+      const next = responses.shift();
+      if (!next) throw new Error('unexpected extra request');
+      return next();
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const observer = new QueryObserver(client, {
+      queryKey: ['mip', 'leads', 'body-lost'],
+      queryFn: ({ signal }) => getJson<{ rows: unknown[] }>('/leads', signal),
+      staleTime: 0,
+    });
+    // The control: a read that got no status, which the same reconnect completes.
+    let reachable = false;
+    const neverReached = vi.fn(async () => {
+      if (!reachable) {
+        reachable = true;
+        throw failure('unreachable');
+      }
+      return 'rows';
+    });
+    const control = new QueryObserver(client, { queryKey: ['mip', 'borrower', 'no-status'], queryFn: neverReached, staleTime: 0 });
+    const unsubscribe = [observer.subscribe(() => undefined), control.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(observer.getCurrentResult().status).toBe('success'));
+      await vi.waitFor(() => expect(control.getCurrentResult().status).toBe('error'));
+      // An explicit refetch (a Refresh): the server answers 200, the body is lost.
+      await observer.refetch();
+      const error = observer.getCurrentResult().error;
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).reason).toBe('unreachable');
+      expect((error as ApiError).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      // One reconnect pass decides every query: once the control has re-read,
+      // a re-read of the answered one would already have called fetch.
+      await vi.waitFor(() => expect(control.getCurrentResult().status).toBe('success'));
+      expect(neverReached).toHaveBeenCalledTimes(2);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(observer.getCurrentResult().status).toBe('error');
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+      vi.unstubAllGlobals();
     }
   });
 });

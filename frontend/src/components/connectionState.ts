@@ -1,5 +1,5 @@
 import type { Query, QueryClient } from '@tanstack/react-query';
-import { clientFailureReason } from '../lib/apiTransport';
+import { ApiError, clientFailureReason } from '../lib/apiTransport';
 
 /**
  * A query whose every served page writes an audit row (`meta.auditedPages`:
@@ -8,6 +8,31 @@ import { clientFailureReason } from '../lib/apiTransport';
  */
 export function hasAuditedPages(query: Pick<Query, 'meta'>): boolean {
   return query.meta?.auditedPages === true;
+}
+
+/**
+ * A query whose last attempt never got an HTTP status: fetch() itself
+ * rejected (offline, unreachable), which the transport reads as a request that
+ * never reached the server (apiFailure.ts). A body lost after its status, a
+ * 200 whose connection dropped mid-transfer, reads offline or unreachable too
+ * but keeps that status (apiTransport `_readJson`): the server answered it,
+ * and an audited read it answered has already written its row.
+ */
+export function neverAnswered(query: Pick<Query, 'state'>): boolean {
+  const error = query.state.error;
+  if (!(error instanceof ApiError) || error.status !== null) return false;
+  const reason = clientFailureReason(error);
+  return reason === 'offline' || reason === 'unreachable';
+}
+
+/**
+ * The one rule for re-reading a query once the network is back, on a
+ * reconnect (lib/queryClient.ts) or a reachable probe after failed ones
+ * (refetchUnreachableQueries): its last attempt was never answered, and it is
+ * not a paged query whose every served page writes a row.
+ */
+export function refetchableAfterNetworkLoss(query: Pick<Query, 'state' | 'meta'>): boolean {
+  return neverAnswered(query) && !hasAuditedPages(query);
 }
 
 /**
@@ -63,7 +88,7 @@ export function nextConnection(prior: ConnectionTracker, seen: ConnectionObserva
 /**
  * When a reachable probe follows one or more failed probes (the "Connection
  * lost" banner, or a one-probe blip that never showed it), refetch the
- * MOUNTED queries whose last attempt never reached the server. Same narrowing
+ * MOUNTED queries whose last attempt was never answered. Same narrowing
  * as healthRecovery.ts: `type: 'active'` only, because many reads write VIEW_*
  * audit rows and an unmounted audited read must never be re-fired for a page
  * nobody is on. It needs a failed probe first: a read that fails while every
@@ -74,9 +99,6 @@ export function nextConnection(prior: ConnectionTracker, seen: ConnectionObserva
 export function refetchUnreachableQueries(queryClient: QueryClient): void {
   void queryClient.refetchQueries({
     type: 'active',
-    predicate: (query) => {
-      const reason = clientFailureReason(query.state.error);
-      return (reason === 'unreachable' || reason === 'offline') && !hasAuditedPages(query);
-    },
+    predicate: refetchableAfterNetworkLoss,
   });
 }
