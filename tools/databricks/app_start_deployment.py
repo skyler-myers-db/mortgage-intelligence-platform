@@ -249,8 +249,14 @@ def tree_digest(
         entries = list(pool.map(digest_one, relpaths))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
-    canonical = json.dumps(entries, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(_TREE_DOMAIN.encode("ascii") + b"\0" + canonical).hexdigest()
+    return digest_entries(entries)
+
+
+def digest_entries(entries: Iterable[tuple[str, int, str]]) -> str:
+    """The full-tree digest of ``(relpath, size, sha256)`` rows, in relpath order."""
+
+    canonical = json.dumps([list(row) for row in sorted(entries)], separators=(",", ":"))
+    return hashlib.sha256(_TREE_DOMAIN.encode("ascii") + b"\0" + canonical.encode("utf-8")).hexdigest()
 
 
 def last_deployment_is(workspace: Any, *, app_name: str, deployment_id: str) -> bool:

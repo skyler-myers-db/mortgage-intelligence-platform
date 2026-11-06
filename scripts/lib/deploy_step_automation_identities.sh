@@ -288,12 +288,16 @@ PYEOF
   if ! tier_is_agentic; then
     _PRESTOP_TIER_ARGS=(--agentic-tier off)
   fi
+  # The adopt phases judge the record the way adopt-live will (M2-PR7).
+  _PRESTOP_PHASE_ARGS=()
+  [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]] || \
+    _PRESTOP_PHASE_ARGS=(--phase "$DEPLOY_PHASE")
   step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
   run_with_account_identity \
     "$PYTHON" -m tools.databricks.deploy_prestop_probes \
     --app-name "$_GRANTS_APP_NAME" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-    "${_PRESTOP_TIER_ARGS[@]}" \
+    "${_PRESTOP_TIER_ARGS[@]}" "${_PRESTOP_PHASE_ARGS[@]}" \
     --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
     --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \

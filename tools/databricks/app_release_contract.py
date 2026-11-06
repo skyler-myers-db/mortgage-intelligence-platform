@@ -14,6 +14,13 @@ Paths, all under one bundle root
   contains ``/src/``, so it can never pass for a deployment's immutable
   ``/src/`` snapshot (tools/databricks/app_deployment_state.immutable_source).
 
+An adopted copy (M2-PR7, tools/databricks/adopt_live.py) is a sibling
+``<release root>/adopted-<id12>-<digest12>``: ``id12`` is the first 12 hex of
+the sha256 of the adopted deployment's id (never the id itself, which is a
+per-client identifier) and ``digest12`` the first 12 of its full-tree digest.
+It has the same shape as a release folder but is never a release id, so prune
+and ``verify-deployment`` never treat it as one.
+
 A release id is ``<commit[:12]>-<digest[:12]>``, where the digest is the
 sha256 of one ``<path>\\t<size>\\t<sha256>\\n`` line per file, in path order.
 File modes are not part of it. The manifest (``write_manifest``) records the
@@ -42,6 +49,7 @@ from pathlib import Path, PurePosixPath
 BUNDLE_NAME = "mortgage-intelligence-platform"
 RELEASE_DIR = "app-src"
 RELEASE_ID_RE = re.compile(r"[0-9a-f]{12}-[0-9a-f]{12}")
+ADOPTED_FOLDER_RE = re.compile(r"adopted-[0-9a-f]{12}-[0-9a-f]{12}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 MANIFEST_VERSION = 1
@@ -109,7 +117,7 @@ def check_release_id(release_id: object, *, commit: str | None = None) -> str:
     return release_id
 
 
-def _check_release_shape(path: str) -> None:
+def _check_release_shape(path: str, name: re.Pattern[str] = RELEASE_ID_RE) -> None:
     parsed = PurePosixPath(path)
     parts = parsed.parts
     if (
@@ -118,7 +126,7 @@ def _check_release_shape(path: str) -> None:
         or parts[:3] != ("/", "Workspace", "Users")
         or parts[4:6] != (".bundle", BUNDLE_NAME)
         or parts[7] != RELEASE_DIR
-        or RELEASE_ID_RE.fullmatch(parts[8]) is None
+        or name.fullmatch(parts[8]) is None
         or any(part in {".", ".."} for part in parts)
         or "/src/" in path
     ):
@@ -166,6 +174,36 @@ def release_id_of(
     except ReleaseContractError:
         return None
     return candidate if expected == path else None
+
+
+def adopted_folder_name(*, deployment_id: str, tree_sha256: str) -> str:
+    """``adopted-<sha256(deployment id)[:12]>-<full-tree digest[:12]>``."""
+    if type(deployment_id) is not str or not deployment_id.strip() or deployment_id != deployment_id.strip():
+        raise ReleaseContractError("adopted deployment id is not canonical")
+    if type(tree_sha256) is not str or SHA256_RE.fullmatch(tree_sha256) is None:
+        raise ReleaseContractError("adopted full-tree digest is not a sha256")
+    id12 = hashlib.sha256(deployment_id.encode("utf-8")).hexdigest()[:12]
+    return f"adopted-{id12}-{tree_sha256[:12]}"
+
+
+def adopted_folder_path(*, principal: str, target: str, folder: str, root_leaf: str | None = None) -> str:
+    """``<release root>/adopted-<id12>-<digest12>``, checked segment by segment."""
+    if type(folder) is not str or ADOPTED_FOLDER_RE.fullmatch(folder) is None:
+        raise ReleaseContractError("adopted folder name is not adopted-<12 hex>-<12 hex>")
+    path = f"{release_root(principal=principal, target=target, root_leaf=root_leaf)}/{folder}"
+    _check_release_shape(path, ADOPTED_FOLDER_RE)
+    return path
+
+
+def adopted_folder_in(path: object) -> str:
+    """The name of a well-formed adopted copy path of any principal and leaf."""
+    if type(path) is not str:
+        raise ReleaseContractError("App source path is not a governed adopted copy")
+    try:
+        _check_release_shape(path, ADOPTED_FOLDER_RE)
+    except ReleaseContractError as exc:
+        raise ReleaseContractError("App source path is not a governed adopted copy") from exc
+    return PurePosixPath(path).parts[8]
 
 
 def api_path(path: str) -> str:
