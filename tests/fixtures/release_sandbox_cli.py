@@ -1,8 +1,11 @@
 """The ``databricks`` CLI of the past-the-lease release sandbox (test only, M2-PR3).
 
-Answers exactly the calls a first install makes through the grant and
-reconcile steps, and fails loudly (exit 97) on anything else, the Supervisor
-agents listing included: a core release never reads that API. Each call is
+Answers exactly the calls a first install makes, through the grant and
+reconcile steps and, for the core release (M2-PR7b), on through the publish,
+the one activation (``apps start`` of the stopped App, then ``apps deploy``,
+whose payload is recorded) and the data steps; it fails loudly (exit 97) on
+anything else, the Supervisor agents listing and every serving-endpoint call
+included: a core release never reads those APIs. Each call is
 appended to ``DATABRICKS_STUB_LOG`` with the bundle variables it inherited,
 so a test can read what ``databricks bundle run mip_lakebase_migrate`` would
 have rendered. SQL statements are recorded in ``SANDBOX_STATE`` and answered
@@ -14,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from tests.fixtures.release_sandbox_python import APP, WATCHED, _save, _state
@@ -25,8 +29,20 @@ TREATMENT_PROPERTIES = [
 ]
 
 
+BUNDLE_FILES = "/Workspace/sandbox/files"
+
+
 def _app(state: dict[str, Any]) -> dict[str, Any]:
-    return {**APP, "compute_status": {"state": "STOPPED"}, "url": "https://mip-app.example.invalid"}
+    compute = "ACTIVE" if state.get("app_started") else "STOPPED"
+    return {**APP, "compute_status": {"state": compute}, "url": "https://mip-app.example.invalid"}
+
+
+def _bundle_summary() -> dict[str, Any]:
+    deployer = json.loads(os.environ["MIP_TEST_DEPLOYER_JSON"])
+    return {
+        "workspace": {"file_path": BUNDLE_FILES, "current_user": {"userName": deployer}},
+        "resources": {"apps": {"mip_app": {"source_code_path": BUNDLE_FILES}}},
+    }
 
 
 def _statement(body: dict[str, Any]) -> dict[str, Any]:
@@ -57,6 +73,18 @@ def main() -> int:
         state["app_created"] = True
         _save(state)
         print(json.dumps(_app(state)))
+        return 0
+    if args == ["apps", "start", APP["name"]]:
+        state["app_started"] = True
+        _save(state)
+        return 0
+    if args[:3] == ["apps", "deploy", APP["name"]] and args[3] == "--json":
+        payload = json.loads(Path(args[4].removeprefix("@")).read_text(encoding="utf-8"))
+        state.setdefault("deploys", []).append(payload)
+        _save(state)
+        return 0
+    if args == ["bundle", "summary", "-t", "client", "-o", "json"]:
+        print(json.dumps(_bundle_summary()))
         return 0
     if args[:3] == ["apps", "get", APP["name"]]:
         if not state.get("app_created"):

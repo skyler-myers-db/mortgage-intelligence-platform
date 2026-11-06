@@ -41,7 +41,9 @@ close_quiesce_window
 # resolves nested groups and proves the effective boundary, so a broader group
 # grant or ownership path fails the release instead of being hidden by a
 # successful direct REVOKE.
-mark_blue_degraded "its Lakebase synced-catalog access is quiesced until step 10b converges it"
+_SYNC_QUIESCE_NOTE="its Lakebase synced-catalog access is quiesced until step 10b converges it"
+tier_is_agentic || _SYNC_QUIESCE_NOTE="its Lakebase synced-catalog access is quiesced, and the core tier leaves it so"
+mark_blue_degraded "$_SYNC_QUIESCE_NOTE"
 step "quiesce legacy and target Lakebase synced-catalog access"
 run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
   --mode quiesce \

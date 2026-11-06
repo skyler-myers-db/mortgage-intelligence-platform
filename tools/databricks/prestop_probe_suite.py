@@ -63,6 +63,10 @@ class ProbeSuiteConfig:
     genie_pin_ack: str = ""
     # False only for --phase plan (M1-PR6): the one Genie turn opens a conversation.
     genie_turn: bool = True
+    # --phase adopt|unadopt (M2-PR7): the record is judged as adopt-live will judge it.
+    adopt_phase: bool = False
+    # --agentic-tier (M2-PR7b): off judges the record as the core step 0a will.
+    agentic_tier: str = "on"
 
 
 def journal_state_reader(
@@ -176,6 +180,9 @@ def suite_refusals(
         app_exists=bool(app_client_id),
         rebase_unverified_app=config.rebase_unverified_app,
         journal_state=journal_state or journal_state_reader(workspace, config),
+        adopt_phase=config.adopt_phase,
+        lakebase_instance=config.lakebase_instance,
+        agentic_tier=config.agentic_tier,
     )
     refusals.extend(verdict.refusals)
     notes.extend(verdict.notes)

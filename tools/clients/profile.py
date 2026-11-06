@@ -269,6 +269,20 @@ def _identities(configured: tuple[str, ...], *derived: str | None) -> str:
     return ",".join(values)
 
 
+# The profile's optional App env names: exported only when set, so an App
+# deployed while one was unset (an adopted blue, which the emergency recipe
+# built) never carried it, and blue's rebuilt restore payload leaves it out
+# (tools/databricks/core_blue.py).
+OPTIONAL_PAYLOAD_ENV_NAMES = (
+    "MIP_AUDITOR_IDENTITIES",
+    "MIP_ADMIN_EMAILS",
+    "MIP_APPROVER_EMAILS",
+    "MIP_AUDITOR_EMAILS",
+    "MIP_ADMIN_GROUP_NAME",
+    "MIP_APPROVER_GROUP_NAME",
+)
+
+
 def app_payload_env(profile: ClientProfile) -> dict[str, str]:
     """The App runtime env the profile owns (the rest stays with the payload builder)."""
 

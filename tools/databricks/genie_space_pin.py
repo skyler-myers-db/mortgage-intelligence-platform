@@ -256,7 +256,15 @@ def record_space_id(workspace: Any, *, scope: str, app_name: str, lakebase_insta
     keys = (_record_key(app_name), _legacy_record_key(app_name))
     if all(_secret_text(workspace, scope=scope, key=key) is None for key in keys):
         return None
-    record = _load_record(workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance)
+    try:
+        # A v7 record (M2-PR7) names its space at the top level too.
+        record = _load_record(
+            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance, accept_v7=True
+        )
+    except RuntimeError as exc:
+        if str(exc).startswith("no server-owned last-good App rollback contract exists"):
+            return None  # a retired v7 tombstone names no space
+        raise
     space_id = _text(record.get("genie_space_id"))
     if not space_id:
         raise GeniePinRefusal("the signed rollback record names no Genie space")

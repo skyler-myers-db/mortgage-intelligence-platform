@@ -57,6 +57,10 @@ DEPLOY_STEP_SCRIPTS = (
     _LIB / "deploy_step_agentic_provisioning.sh",
     _LIB / "deploy_step_agentic_cutover.sh",
     _LIB / "deploy_step_agent_eval_and_smoke.sh",
+    # The core tier's steps 10b-11 (M2-PR7b), sourced instead of the three above.
+    _LIB / "deploy_step_core_activation.sh",
+    # Step 11b, both tiers: moved verbatim out of the agentic eval step file.
+    _LIB / "deploy_step_release_prune.sh",
 )
 # Every sourced file in the order ``scripts/deploy.sh`` sources it.
 DEPLOY_SOURCED_SCRIPTS = (

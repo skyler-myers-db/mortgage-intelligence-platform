@@ -172,6 +172,8 @@ def test_every_step_file_that_needs_a_stop_calls_a_window_function() -> None:
         ),
         "deploy_step_agentic_provisioning.sh": ("run stop_unsigned_rebase_app",),
         "deploy_step_agent_eval_and_smoke.sh": ("run stop_unproven_candidate_before_rollback",),
+        # The core tier's steps 10b-11 (M2-PR7b) stop an unproven green the same way.
+        "deploy_step_core_activation.sh": ("run stop_unproven_candidate_before_rollback",),
         "deploy_step_app_promotion_and_refresh.sh": ("run start_stopped_app_before_activation",),
         "deploy_first_install_lifecycle.sh": ("run stop_journal_owned_first_install_app",),
     }
