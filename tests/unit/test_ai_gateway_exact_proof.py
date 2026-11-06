@@ -23,6 +23,7 @@ from backend.services.ai_gateway_proof_ledger import (
     mark_expired_pending_proofs,
     mark_proof_verified,
 )
+from tests.fixtures.lakebase_env import isolate_lakebase_env
 from tools.databricks import verify_ai_gateway_exact_proof
 
 _TEST_GIT_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
@@ -430,6 +431,7 @@ def test_verifier_runtime_overwrites_hostile_sql_and_lakebase_auth(monkeypatch) 
             )(),
         },
     )()
+    isolate_lakebase_env(monkeypatch)
     stale = verify_ai_gateway_exact_proof.get_settings()
     monkeypatch.setattr(stale, "lakebase_host", "hostile-dotenv-lakebase.example")
     monkeypatch.setattr(stale, "lakebase_user", "hostile-dotenv-user")

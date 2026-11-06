@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests.fixtures.lakebase_env import isolate_lakebase_env
 from tools.databricks import run_agent_eval
 
 
@@ -810,17 +811,6 @@ def test_mlflow_genai_evaluate_requires_databricks_run_lookup(monkeypatch) -> No
         raise AssertionError("expected unresolved Databricks GenAI eval run to fail closed")
 
 
-_LAKEBASE_ENV_KEYS = (
-    "LAKEBASE_HOST",
-    "LAKEBASE_USER",
-    "LAKEBASE_PASSWORD",
-    "LAKEBASE_DATABASE",
-    "LAKEBASE_SSLMODE",
-    "PGHOST",
-    "PGUSER",
-    "PGPASSWORD",
-    "PGDATABASE",
-)
 
 _LAKEBASE_SETTINGS_FIELDS = (
     "lakebase_host",
@@ -839,9 +829,7 @@ def _isolate_lakebase_state(monkeypatch, verifier):
     directly; setenv-then-delenv makes monkeypatch record the pre-test value
     for every key so teardown erases whatever the function wrote.
     """
-    for key in _LAKEBASE_ENV_KEYS:
-        monkeypatch.setenv(key, "isolate-marker")
-        monkeypatch.delenv(key)
+    isolate_lakebase_env(monkeypatch)
     singleton = verifier.get_settings()
     for field in _LAKEBASE_SETTINGS_FIELDS:
         monkeypatch.setattr(singleton, field, getattr(singleton, field))

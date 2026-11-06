@@ -70,6 +70,11 @@ FOREIGN = ("zyrplax_team_catalog", "Zyrplax Shared Space", "zyrplax-readers", "o
 # What the repository's own scope adds to every environment's contexts: no profile name.
 REPOSITORY_VARS = {"MIP_TENANT_ID": "tenant-zyrplax-EXAMPLE-7f3a91"}
 REPOSITORY_SECRETS = {"DATABRICKS_TOKEN": "dapi-EXAMPLE-PLACEHOLDER-retired"}
+# A profile name another test left in this worker's os.environ (the Lakebase
+# tools write LAKEBASE_DATABASE straight into it): a shell value beats the
+# .env.local the action writes, so the sandbox must strip it (CI, by test order).
+AMBIENT = {"LAKEBASE_DATABASE": "ambient_database", "LAKEBASE_INSTANCE_NAME": "ambient-instance",
+           "APP_ENV": "dev", "PGDATABASE": "ambient_database"}
 # Steps the offline sandbox cannot run: their headers are still rendered and checked.
 HEADER_ONLY = {"Install the deploy tooling offline and hash-pinned", "Prove the GitHub OIDC deployer identity",
                "Record the quiesce window journal state"}
@@ -147,7 +152,10 @@ def _run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Compl
 @pytest.fixture(scope="module")
 def dispatch(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     tmp_path = tmp_path_factory.mktemp("dispatch")
-    checkout, base_env, log = sandbox(tmp_path)
+    with pytest.MonkeyPatch.context() as ambient:
+        for name, value in AMBIENT.items():
+            ambient.setenv(name, value)
+        checkout, base_env, log = sandbox(tmp_path)
     (checkout / ".env.local").unlink()  # the action writes it, as in the deploy job
     bin_dir = Path(base_env["PATH"].split(os.pathsep)[0])
     _shim(bin_dir)

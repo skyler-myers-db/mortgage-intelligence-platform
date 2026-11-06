@@ -13,6 +13,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import SecretStr
 
+from tests.fixtures.lakebase_env import isolate_lakebase_env
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "tools" / "sync_lifecycle_warehouse.py"
 SPEC = importlib.util.spec_from_file_location("mip_sync_lifecycle_warehouse_cli", MODULE_PATH)
@@ -114,6 +116,7 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
         lakebase_password=SecretStr("hostile-password"),
         lakebase_sslmode="disable",
     )
+    isolate_lakebase_env(monkeypatch)
     for name, value in {
         "LAKEBASE_HOST": "hostile-ambient-lakebase.example",
         "LAKEBASE_PASSWORD": "hostile-ambient-password",

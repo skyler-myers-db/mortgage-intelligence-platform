@@ -4,7 +4,8 @@ A clone of HEAD plus the working tree's uncommitted tracked edits, a stub
 ``databricks`` that answers only ``--version`` and fails on anything else, an
 ``.env.local`` holding a full synthetic client profile (the paychex-shaped one
 in tests/fixtures/client_profiles.py, M1-PR2) and a base environment stripped
-of every ambient GitHub, Databricks and MIP name. Moved from the CI staging
+of every ambient GitHub, Databricks, MIP, Lakebase and libpq name and every
+client profile name. Moved from the CI staging
 target's dry-run test, which left with that target (M0-PR3).
 """
 
@@ -34,7 +35,14 @@ STUB = (
     "exit 97\n"
 )
 # Ambient names a dry run must never inherit from the developer's or the runner's shell.
-INHERITED_PREFIXES = ("COV_CORE", "COVERAGE", "GITHUB_", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_")
+# A shell profile name beats .env.local (tools/clients/environment.from_local),
+# so every one is stripped, the three outside the MIP_/DATABRICKS_/GENIE_
+# prefixes too (LAKEBASE_DATABASE, LAKEBASE_INSTANCE_NAME, APP_ENV;
+# tests/unit/test_deploy_sandbox_env.py holds the list to the schema's). The
+# Lakebase tools' tests mint LAKEBASE_* and libpq PG* names into os.environ.
+INHERITED_PREFIXES = (
+    "COV_CORE", "COVERAGE", "GITHUB_", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_", "LAKEBASE_", "APP_ENV", "PG",
+)
 
 
 def venv_prefix() -> Path:
