@@ -34,6 +34,8 @@ mirror serving ~40 KB/s and two jobs timed out inside the install step
 (runs 42057978132 and 42097023431). The perf job trusts its checkout for git
 as root and installs CPython into a container-local tool cache; the
 cross-engine run step sets ``HOME=/root`` so Firefox starts as root.
+Nothing in ci.yml reads the secrets context, as the workflow's header
+requires, so no container can see a stored secret.
 
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
@@ -45,6 +47,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -228,6 +231,63 @@ def test_every_browser_job_runs_in_the_pinned_image_and_installs_no_browser() ->
             run = str(step.get("run", ""))
             for banned in ("playwright install", "install-deps", "apt-get", "apt install"):
                 assert banned not in run, f"{name}: {step.get('name', run)!r} runs {banned!r}"
+
+
+# Every expression GitHub evaluates in a workflow value, and the context that holds stored secrets.
+_EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+_SECRETS_CONTEXT = re.compile(r"\bsecrets\b")
+
+
+def _secret_references(node: Any, where: str = "") -> list[str]:
+    """Every place a workflow tree reads the secrets context: an expression, or a `secrets:` key."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{where}.{key}" if where else str(key)
+            if str(key) == "secrets":
+                found.append(here)
+            found += _secret_references(value, here)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found += _secret_references(value, f"{where}[{index}]")
+    elif isinstance(node, str):
+        found += [f"{where}: {expr}" for expr in _EXPRESSION.findall(node) if _SECRETS_CONTEXT.search(expr)]
+    return found
+
+
+def test_the_workflow_references_no_secrets() -> None:
+    """The header's policy, pinned for the whole workflow: nothing in ci.yml reads a secret.
+
+    A fork PR gets the same green bar, and no browser job's container can see a
+    stored secret through a job or step `env:`, a `with:` input, a container
+    field or a script.
+    """
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert _secret_references(workflow) == []
+
+
+@pytest.mark.parametrize(
+    "leak",
+    [
+        {"env": {"LEAK": "${{ secrets.MIP_CI_DEPLOYER_CLIENT_ID }}"}},
+        {"steps": [{"run": "echo ${{ secrets.X }}"}]},
+        {"steps": [{"uses": "actions/x@v1", "with": {"token": "${{ secrets['X'] }}"}}]},
+        {"container": {"image": "i", "credentials": {"username": "u", "password": "${{secrets.P}}"}}},
+        {"steps": [{"run": "echo '${{ toJSON(secrets) }}' > all.json"}]},
+        {"uses": "./.github/workflows/reusable.yml", "secrets": "inherit"},
+    ],
+    ids=["job-env", "inline-run", "with-input", "container-credentials", "all-secrets", "secrets-inherit"],
+)
+def test_the_secret_scan_sees_every_route_into_a_job(leak: dict[str, Any]) -> None:
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    workflow["jobs"]["e2e-fixture-shard"].update(leak)
+    assert _secret_references(workflow), leak
+
+
+def test_the_secret_scan_reads_only_expressions() -> None:
+    # Prose about secrets, a step named for a secret scan and other contexts are not a read.
+    assert _secret_references({"env": {"NODE": "${{ env.NODE_VERSION }}", "NOTE": "no secrets here"}}) == []
+    assert _secret_references({"steps": [{"name": "gitleaks (secret scan)", "run": "gitleaks detect"}]}) == []
 
 
 def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> None:
