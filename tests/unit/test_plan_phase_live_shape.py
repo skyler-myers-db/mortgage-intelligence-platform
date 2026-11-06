@@ -10,7 +10,8 @@ pre-stop probe. It pins the exact tools the live plan phase runs after the
 preflight, each a read-only one, the probe's ``--genie-turn off`` (its one
 call that is not a GET or a list is the Genie turn, which opens a
 conversation), and that it exits before the signed lease. A release and a run
-with no ``--phase`` still ask the turn.
+with no ``--phase`` still ask the turn. The whole live plan, preflight
+included, is tests/unit/test_plan_phase_live_sandbox.py's.
 """
 
 from __future__ import annotations

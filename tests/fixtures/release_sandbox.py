@@ -109,8 +109,14 @@ def release(
     *,
     client_ids: dict[str, str],
     excise: str | None = None,
+    flags: tuple[str, ...] = ("--skip-silver", "--skip-smoke"),
+    env: dict[str, str] | None = None,
 ) -> Release:
-    """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``."""
+    """``scripts/deploy.sh -t client --no-confirm <flags>`` with DRY_RUN=0, in the sandbox, with only ``client_ids``.
+
+    ``env`` adds names after the profile's are stripped (``GITHUB_ACTIONS=true``
+    for a live ``--phase``, which is CI-only).
+    """
 
     checkout, base_env, cli_log = sandbox(tmp_path)
     if excise is not None:
@@ -148,10 +154,11 @@ def release(
             "SANDBOX_PY_LOG": str(py_log),
             "MLFLOW_DISABLE_AGENT_HINT": "1",
             **client_ids,
+            **(env or {}),
         }
     )
     result = subprocess.run(
-        ["bash", "scripts/deploy.sh", "-t", "client", "--no-confirm", "--skip-silver", "--skip-smoke"],
+        ["bash", "scripts/deploy.sh", "-t", "client", "--no-confirm", *flags],
         cwd=checkout,
         env=run_env,
         text=True,
