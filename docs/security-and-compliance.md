@@ -294,8 +294,10 @@ used by both) never re-reads a query whose every served page writes a row
 - the server answered and the network then lost the body (a 200 whose
   connection dropped mid-transfer fails offline or unreachable but keeps its
   status), and the method and path name a reviewed audit-free read
-  (`frontend/src/lib/auditFreeReads.ts`: GET routes, and POST reads such as
-  Ask Genie's starters, `POST /genie/start`). Any other method and path count
+  (`frontend/src/lib/auditFreeReads.ts`: GET routes, and POST reads: Ask
+  Genie's starters, `POST /genie/start`, and the cohort reads of Home and the
+  Portfolio builder, `POST /portfolio/preview` and
+  `POST /portfolio/campaign-recommendation`). Any other method and path count
   as audited, and so does an error that records no method.
   `tests/unit/test_audit_free_reads_registry.py` pins every entry by calling
   it on the mounted app with the audit store and the Lakebase client
@@ -330,8 +332,10 @@ recoveries: the Offer detail's snapshot reads `GET /borrowers/{id}`
 be answered while the recommend never is.
 
 So a panel that writes no audit row, and whose query keeps the reconnect
-default, loads by itself once the network returns, the Console's "My recent
-activity" and the Admin operations panel included. An audited read whose answer lost its body (`VIEW_LEADS`,
+default, loads by itself once the network returns. That includes the
+Console's "My recent activity", the Admin operations panel, Home's KPI row
+and contactable preview, and the Portfolio builder's preview and campaign
+recommendation. An audited read whose answer lost its body (`VIEW_LEADS`,
 `VIEW_BORROWER`, `VIEW_AUDIT_LEDGER`) has written its row, and it stays in
 its error state until the reader retries or reopens the route; so does a
 query that opted out (the Offer detail, the proof, Genie history, the

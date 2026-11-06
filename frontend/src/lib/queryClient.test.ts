@@ -10,6 +10,7 @@ import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
 import { getJson, postJson } from './apiTransport';
 import { LEADS_PAGED_SCOPE, leadsPagedQueryKey } from './leadsQuery';
+import { refetchUnreachableQueries } from '../components/connectionState';
 
 describe('createMipQueryClient', () => {
   it('uses bounded freshness defaults and disables automatic focus refetch', () => {
@@ -418,6 +419,80 @@ describe('createMipQueryClient on reconnect', () => {
       client.unmount();
       client.clear();
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('createMipQueryClient: the cohort POST reads of Home and the Portfolio builder', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('completes a preview or a recommendation whose 200 body was lost, on a reconnect and on "Connection lost"', async () => {
+    // Home's KPI row and the builder preview read POST /portfolio/preview, and
+    // the builder reads POST /portfolio/campaign-recommendation: neither writes
+    // a row (backend/api/portfolio.py), so a lost answer is completed like a
+    // read that never reached the server.
+    const encoder = new TextEncoder();
+    const ok = () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const bodyLost = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"rows": ['));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const scripted: Record<string, Array<() => Response>> = {
+      '/api/v1/portfolio/preview': [bodyLost, ok],
+      '/api/v1/portfolio/campaign-recommendation': [bodyLost, ok],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, 'http://app.test');
+      const next = scripted[url.pathname]?.shift();
+      if (!next) throw new Error(`unexpected request ${url.pathname}`);
+      return next();
+    });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(([input]) => new URL(String(input), 'http://app.test').pathname === pathname).length;
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const read = (key: string, path: string) =>
+      new QueryObserver(client, {
+        queryKey: ['mip', 'portfolio', key, 'body-lost'],
+        queryFn: ({ signal }) => postJson<{ rows: unknown[] }, { criteria: object }>(path, { criteria: {} }, signal),
+        staleTime: 0,
+        retry: false,
+      });
+    const unsubscribe: Array<() => void> = [];
+    try {
+      const preview = read('preview', '/api/portfolio/preview');
+      unsubscribe.push(preview.subscribe(() => undefined));
+      await vi.waitFor(() => expect(preview.getCurrentResult().status).toBe('error'));
+      const lost = preview.getCurrentResult().error as ApiError;
+      expect([lost.status, lost.method]).toEqual([200, 'POST']);
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      await vi.waitFor(() => expect(preview.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/portfolio/preview')).toBe(2);
+
+      const recommendation = read('campaign-recommendation', '/api/portfolio/campaign-recommendation');
+      unsubscribe.push(recommendation.subscribe(() => undefined));
+      await vi.waitFor(() => expect(recommendation.getCurrentResult().status).toBe('error'));
+      // A reachable probe after failed ones (the "Connection lost" banner clearing).
+      refetchUnreachableQueries(client);
+      await vi.waitFor(() => expect(recommendation.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/portfolio/campaign-recommendation')).toBe(2);
+      expect(calls('/api/v1/portfolio/preview')).toBe(2);
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
     }
   });
 });

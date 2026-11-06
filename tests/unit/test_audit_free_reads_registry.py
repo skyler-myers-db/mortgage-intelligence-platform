@@ -491,6 +491,12 @@ PROBES: dict[tuple[str, str], _Probe] = {
         setup=_override(get_segment_combination_repository, _CombinationRepo()),
     ),
     ("POST", "/api/genie/start"): _Probe("/api/genie/start", json={"context": {}}),
+    ("POST", "/api/portfolio/campaign-recommendation"): _Probe(
+        "/api/portfolio/campaign-recommendation", json={"criteria": {}}
+    ),
+    ("POST", "/api/portfolio/preview"): _Probe(
+        "/api/portfolio/preview", json={"criteria": {"marketing_eligibility": "Any"}}
+    ),
 }
 
 

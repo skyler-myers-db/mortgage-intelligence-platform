@@ -106,10 +106,15 @@ export const AUDIT_FREE_GET_ROUTES: readonly string[] = [
 /**
  * The reviewed POST reads that write no audit row: a query that reads with a
  * POST (a body the server needs), never a write. Ask Genie's starters and
- * trusted assets (lib/genieStartQuery; the route is audit-exempt).
+ * trusted assets (lib/genieStartQuery; the route is audit-exempt), and the
+ * cohort reads of Home and the Portfolio builder: the preview counts (Home's
+ * KPI row and contactable preview, the builder preview) and the builder's
+ * campaign recommendation (backend/api/portfolio.py; it writes no state).
  */
 export const AUDIT_FREE_POST_READS: readonly string[] = [
   '/api/genie/start',
+  '/api/portfolio/campaign-recommendation',
+  '/api/portfolio/preview',
 ];
 
 const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;

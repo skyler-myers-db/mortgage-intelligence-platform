@@ -37,6 +37,13 @@ describe('isAuditFreeRead', () => {
     // Ask Genie's starters (lib/genieStartQuery): audit-exempt, read with a POST.
     expect(isAuditFreeRead('/api/v1/genie/start', 'POST')).toBe(true);
     expect(isAuditFreeRead('/api/v1/genie/start', 'GET')).toBe(false);
+    // Home's KPI row and the Portfolio builder: the cohort preview and the
+    // campaign recommendation write no row (backend/api/portfolio.py).
+    expect(isAuditFreeRead('/api/v1/portfolio/preview', 'POST')).toBe(true);
+    expect(isAuditFreeRead('/api/portfolio/campaign-recommendation', 'POST')).toBe(true);
+    // A campaign create writes its row: never a POST read.
+    expect(isAuditFreeRead('/api/v1/portfolio/create', 'POST')).toBe(false);
+    expect(isAuditFreeRead('/api/v1/portfolio', 'POST')).toBe(false);
     // POST /workspace/saved-views writes SAVE_QUEUE_VIEW in its INSERT; only the GET is listed.
     expect(isAuditFreeRead('/api/v1/workspace/saved-views', 'GET')).toBe(true);
     expect(isAuditFreeRead('/api/v1/workspace/saved-views', 'POST')).toBe(false);
