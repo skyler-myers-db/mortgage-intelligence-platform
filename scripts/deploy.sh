@@ -60,9 +60,22 @@
 #   ./scripts/deploy.sh --verify-source-only
 #                                       # run the exact-source gate and exit
 #   ./scripts/deploy.sh -t client --phase plan --dry-run
-#                                       # read-only steps and the bundle plan
-#                                       # gate, then exit before the lease
+#                                       # read-only steps, the bundle plan
+#                                       # gate and each phase's predicted
+#                                       # budget, then exit before the lease
 #                                       # (a live --phase plan is CI-only)
+#   ./scripts/deploy.sh -t client --phase release --dry-run
+#                                       # this run minus the data jobs (steps
+#                                       # 6-9b); a first install stops with
+#                                       # exit 3 after App creation until the
+#                                       # owner bootstrap --post-first-install
+#   ./scripts/deploy.sh -t client --phase data --dry-run
+#                                       # silver, mip_scheduled_refresh and the
+#                                       # data smoke only, ledgered and
+#                                       # re-attachable, under its own lease;
+#                                       # App reads only, never an App write
+#                                       # (live release and data are CI-only;
+#                                       # no --phase is release then data)
 #   ./scripts/deploy.sh -t client --phase adopt
 #                                       # bind an existing install's legacy
 #                                       # bundle state into the deployer's
@@ -202,14 +215,14 @@ while [[ $# -gt 0 ]]; do
       if [[ "$1" == --phase=* ]]; then
         DEPLOY_PHASE="${1#--phase=}"; shift
       elif [[ $# -lt 2 ]]; then
-        echo "[deploy] missing value for --phase (expected plan, adopt or unadopt)" >&2
+        echo "[deploy] missing value for --phase (expected plan, release, data, adopt or unadopt)" >&2
         exit 2
       else
         DEPLOY_PHASE="$2"; shift 2
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,103p' "$0"
+      sed -n '2,116p' "$0"
       exit 0
       ;;
     *)
@@ -237,18 +250,23 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" && "${GITHUB_WORKFLOW_REF:-}" == *"/.githu
 fi
 # >>> deploy phase >>>
 # --phase plan runs the read-only steps through the bundle plan gate and exits
-# before the signed lease. No --phase is today's full run. --phase adopt and
+# before the signed lease. No --phase is today's full run: release, then data,
+# in one process. --phase release is that run minus the data jobs, and --phase
+# data runs only the data jobs, under its own lease and never touching the App
+# (M1-PR6, scripts/lib/deploy_governed_phases_lifecycle.sh). --phase adopt and
 # --phase unadopt (M2-PR6, scripts/lib/deploy_adopt_phase_lifecycle.sh) run the
 # same read-only steps, plan the bundle state edit in place of the gate, and
 # edit only the deployer's bundle state under the lease. A live phase is
 # CI-only (attack O13): the client deployer has no secret a person can use, and
 # a person's bundle plan against a deployer root trips the CLI's run_as check.
 # A dry run makes no Databricks call, so it stays available everywhere.
-if [[ "$PHASE_SEEN" -eq 1 && "$DEPLOY_PHASE" != "plan" && \
-      "$DEPLOY_PHASE" != "adopt" && "$DEPLOY_PHASE" != "unadopt" ]]; then
-  echo "[deploy] phase must be plan, adopt or unadopt; refusing '${DEPLOY_PHASE}'" >&2
-  exit 2
-fi
+case "$PHASE_SEEN:$DEPLOY_PHASE" in
+  0:|1:plan|1:release|1:data|1:adopt|1:unadopt) ;;
+  *)
+    echo "[deploy] phase must be plan, release, data, adopt or unadopt; refusing '${DEPLOY_PHASE}'" >&2
+    exit 2
+    ;;
+esac
 if [[ "$PHASE_SEEN" -eq 1 && "$DRY_RUN" -eq 0 && "${GITHUB_ACTIONS:-}" != "true" ]]; then
   echo "[deploy] ${DEPLOY_PHASE} is CI-only; use --dry-run or make bundle-validate" >&2
   exit 2
@@ -516,6 +534,9 @@ FIRST_INSTALL_APP_CLIENT_ID=""
 FIRST_INSTALL_APP_SCIM_ID=""
 FIRST_INSTALL_JOURNAL_ENV=""
 FIRST_INSTALL_MARKED_PAYLOAD=""
+# A --phase release resuming the first install it stopped for the owner
+# bootstrap (M1-PR6, scripts/lib/deploy_governed_phases_lifecycle.sh).
+FIRST_INSTALL_RESUMED=0
 # Per-release App source (tools/databricks/app_release_contract.py). Step 1
 # stages the closure under this gitignored root, outside the exact-source
 # gate; step 5 publishes it as <bundle root>/app-src/<APP_RELEASE_ID>, the
@@ -591,6 +612,10 @@ trap quiesce_window_deadline_reached USR1
 . "$REPO_ROOT/scripts/lib/deploy_bundle_plan_gate_lifecycle.sh"
 # shellcheck source=scripts/lib/deploy_adopt_phase_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_adopt_phase_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_reviewed_function_grants_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_reviewed_function_grants_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_governed_phases_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_governed_phases_lifecycle.sh"
 # shellcheck source=scripts/lib/deploy_estate_inventory_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_estate_inventory_lifecycle.sh"
 
