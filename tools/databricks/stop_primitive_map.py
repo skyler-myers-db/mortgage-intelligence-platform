@@ -19,12 +19,19 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
   exactly. ``jobs/window_deadman.py`` (M0-PR9) holds one: the
   dead-man's ``apps start``, reached by no shell file (it runs only as the
   one-time run the window submits).
-* ``python_job_run_sites`` does the same for ``<expr>.jobs.submit`` and
-  ``cancel_run`` (``JOB_RUN_METHODS``) and the REST ``jobs/runs/submit`` and
-  ``cancel`` paths: the dead-man's submit and cancel sit
-  only in ``tools/databricks/quiesce_window_deadman.py``
-  (``JOB_RUN_SITES``), reached only through the window's ``open`` and
-  ``cancel-deadman`` modes, which only the window library calls.
+* ``python_job_run_sites`` does the same for ``<expr>.jobs.submit``,
+  ``run_now``, ``repair_run`` and ``cancel_run`` (``JOB_RUN_METHODS``) and the
+  REST ``jobs/runs/submit``, ``jobs/run-now``, ``repair`` and ``cancel``
+  paths: the dead-man's submit and cancel sit only in
+  ``tools/databricks/quiesce_window_deadman.py``, reached only through the
+  window's ``open`` and ``cancel-deadman`` modes, which only the window library
+  calls; the data phase's run-now (M1-PR6) sits only in
+  ``tools/databricks/job_phase_runner.py``'s ``start_run``, reached only
+  through its ``run`` mode, which only the data-phase library calls
+  (``JOB_RUN_SITES``). ``python_pipeline_run_sites`` does the same for a
+  pipeline update (``start_update``, ``stop``; the REST
+  ``pipelines/<id>/updates|stop`` paths), a silver refresh by another door:
+  there is none (``PIPELINE_RUN_SITES`` is empty).
 * ``reaching_entry_points`` follows a coarse static call graph (calls and
   function references through imports, nested functions folded into their
   top-level function) from each site back to the CLI modules whose ``main``
@@ -40,7 +47,12 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
   directly a read call (a tuple alias in a heredoc) outside its allowlisted
   files; and the same for one-time job runs (``databricks jobs submit``, the
   REST ``jobs/runs/submit|cancel`` paths, an inline ``.jobs`` client) outside
-  the window library.
+  the window library; and every ``databricks bundle run <job>`` outside the
+  reviewed shell job runs (``SHELL_JOB_RUN_SITES``, M1-PR6): ``--phase data``
+  runs its jobs only through the runner, and a run with no ``--phase`` keeps
+  today's ``bundle run`` sites, each named; and every pipeline update or stop
+  (``databricks pipelines start-update|stop|run|dry-run``, the REST paths, an
+  inline ``.pipelines.start_update``) in any shell file.
 
 The window library and the EXIT-trap library are the only shell callers of a
 stop; every top-level script is scanned too, so the owner-run WR5 entry
@@ -71,13 +83,39 @@ SDK_METHODS = frozenset(
         "create_update_and_wait",
     }
 )
-# One-time job runs: the dead-man's submit and cancel (M0-PR9).
+# Job runs: the dead-man's one-time submit and cancel (M0-PR9) and the data
+# phase's run-now (M1-PR6); a repair reruns a run's tasks, so it is one too.
 JOB_RUN_METHODS = frozenset(
-    {"submit", "submit_and_wait", "cancel_run", "cancel_run_and_wait", "cancel_all_runs"}
+    {
+        "submit",
+        "submit_and_wait",
+        "run_now",
+        "run_now_and_wait",
+        "repair_run",
+        "repair_run_and_wait",
+        "cancel_run",
+        "cancel_run_and_wait",
+        "cancel_all_runs",
+    }
 )
 WINDOW_LIBRARY = "scripts/lib/deploy_quiesce_window_lifecycle.sh"
 EXIT_TRAP_LIBRARY = "scripts/lib/deploy_app_release_lifecycle.sh"
 STOP_LIBRARIES = frozenset({WINDOW_LIBRARY, EXIT_TRAP_LIBRARY})
+# The data phase (M1-PR6): the only shell caller of the job phase runner.
+DATA_PHASE_LIBRARY = "scripts/lib/deploy_governed_phases_lifecycle.sh"
+JOB_RUN_LIBRARIES = frozenset({WINDOW_LIBRARY, DATA_PHASE_LIBRARY})
+# Shell file -> the bundle jobs it may ``databricks bundle run``: the release's
+# deploy-time jobs and the gold refresh's reviewed reconcile wrapper, and the
+# no-phase data refresh block, which ``--phase release`` sources but skips
+# (M1-PR6). ``--phase data`` runs its jobs only through the runner.
+SHELL_JOB_RUN_SITES: Mapping[str, frozenset[str]] = {
+    "scripts/lib/deploy_step_lakebase_and_uc_grants.sh": frozenset(
+        {"mip_lakebase_migrate", "mip_init_catalog_schemas", "mip_refresh_scores"}
+    ),
+    "scripts/lib/deploy_step_app_promotion_and_refresh.sh": frozenset(
+        {"mip_fred_rates_ingest", "mip_refresh_silver", "mip_kpi_snapshot"}
+    ),
+}
 
 # (module path, top-level function, SDK method): every reviewed SDK call site.
 PRIMITIVE_SITES = frozenset(
@@ -98,14 +136,20 @@ PRIMITIVE_SITES = frozenset(
 )
 # The scanned roots: the deploy tooling and the job sources (M0-PR9).
 SCAN_ROOTS = ("tools", "jobs")
-# (module path, top-level function, SDK method): every one-time job submit or
-# cancel (M0-PR9): the dead-man's arm and its cancel, nothing else.
+# (module path, top-level function, SDK method): every job submit, run-now or
+# cancel: the dead-man's arm and its cancel (M0-PR9) and the data phase's
+# ledgered run-now (M1-PR6), nothing else.
 JOB_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset(
     {
         ("tools/databricks/quiesce_window_deadman.py", "submit_deadman", "submit"),
         ("tools/databricks/quiesce_window_deadman.py", "cancel_deadman", "cancel_run"),
+        ("tools/databricks/job_phase_runner.py", "start_run", "run_now"),
     }
 )
+# A pipeline update or stop is a silver refresh by another door (M1-PR6): no
+# tool or job source holds one; silver refreshes only as mip_refresh_silver.
+PIPELINE_RUN_METHODS = frozenset({"start_update", "stop", "stop_and_wait"})
+PIPELINE_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -164,6 +208,12 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
         },
         callers=frozenset({WINDOW_LIBRARY}),
     ),
+    # The data phase's runner (M1-PR6): plan and quiet are read-only; begin,
+    # run and close write the signed ledger, and run starts the job. No App call.
+    "tools.databricks.job_phase_runner": EntryPoint(
+        modes={"plan": False, "quiet": False, "begin": True, "run": True, "close": True},
+        callers=frozenset({DATA_PHASE_LIBRARY}),
+    ),
 }
 # The modules that hold a primitive site: importing one is a stop path.
 SITE_MODULES = frozenset(
@@ -176,7 +226,7 @@ JOB_RUN_MODULES = frozenset(
 # A raw REST call that starts or stops an App, or runs or cancels a one-time
 # job run: in a string of a tool or a shell file, as much a primitive as the SDK.
 _REST_APP = re.compile(r"/api/2\.\d+/apps/[^\s\"'/]+/(start|stop)\b")
-_REST_JOB_RUN = re.compile(r"/api/2\.\d+/jobs/runs/(submit|cancel-all|cancel)\b")
+_REST_JOB_RUN = re.compile(r"/api/2\.\d+/jobs/(?:runs/)?(submit|run-now|repair|cancel-all|cancel)\b")
 # The reads an inline client may make; any other use of it is fail-closed.
 _APP_READS = ("get", "list", "list_deployments", "get_deployment", "get_permissions", "get_permission_levels")
 _JOB_READS = ("get", "list", "get_run", "list_runs", "get_run_output")
@@ -189,12 +239,26 @@ _INLINE_SDK = re.compile(
 )
 # A one-time job run or its cancel (M0-PR9): the window library's alone.
 _JOB_RUN = re.compile(
-    r"\bdatabricks\s+jobs\s+(submit|cancel-run|cancel-all-runs)\b|\.jobs\.("
+    r"\bdatabricks\s+jobs\s+(submit|run-now|repair-run|cancel-run|cancel-all-runs)\b|\.jobs\.("
     + "|".join(sorted(JOB_RUN_METHODS))
     + r")\s*\("
     + r"|\.jobs\b(?!\.(?:" + "|".join(_JOB_READS) + r")\s*\()"
     + r"|\bgetattr\(\s*[^,()]+,\s*[\"']jobs[\"']|"
     + _REST_JOB_RUN.pattern
+)
+
+
+# A bundle job run from shell (M1-PR6): its key is the command's first operand.
+_BUNDLE_RUN = re.compile(r"\bdatabricks\s+bundle\s+run\b(?P<rest>[^;&|#]*)")
+# A pipeline update or stop (M1-PR6): reviewed in no shell file. ``run`` starts
+# an update, and ``dry-run`` a validate-only one whose ``--restart`` stops a
+# running update.
+_REST_PIPELINE_RUN = re.compile(r"/api/2\.\d+/pipelines/[^\s\"'/]+/(updates|stop)\b")
+_PIPELINE_RUN = re.compile(
+    r"\bdatabricks\s+pipelines\s+(start-update|stop|run|dry-run)\b|\.pipelines\.("
+    + "|".join(sorted(PIPELINE_RUN_METHODS))
+    + r")\s*\(|"
+    + _REST_PIPELINE_RUN.pattern
 )
 
 
@@ -307,6 +371,12 @@ def python_job_run_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
     """Every one-time job submit or cancel on the Jobs client below ``root`` (M0-PR9)."""
 
     return _service_sites(root, "jobs", JOB_RUN_METHODS, _REST_JOB_RUN)
+
+
+def python_pipeline_run_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
+    """Every pipeline update or stop on the Pipelines client below ``root`` (M1-PR6)."""
+
+    return _service_sites(root, "pipelines", PIPELINE_RUN_METHODS, _REST_PIPELINE_RUN)
 
 
 def _site_method(
@@ -523,6 +593,13 @@ def shell_violations(path: str, text: str) -> list[str]:
         if path != WINDOW_LIBRARY:
             for match in _JOB_RUN.finditer(line):
                 found.append(f"{path}:{number}: {match.group(0).strip()}")
+        for match in _BUNDLE_RUN.finditer(line):
+            operands = [token for token in match.group("rest").split() if not token.startswith("-")]
+            key = operands[0] if operands else "<none>"
+            if key not in SHELL_JOB_RUN_SITES.get(path, frozenset()):
+                found.append(f"{path}:{number}: databricks bundle run {key}")
+        for match in _PIPELINE_RUN.finditer(line):
+            found.append(f"{path}:{number}: {match.group(0).strip()}")
     # A parenthesized ``from <package> import (...)`` spans lines in a heredoc.
     for match in re.finditer(r"\bfrom\s+(tools(?:\.\w+)*)\s+import\s*\(([^)]*)\)", text):
         names = set(re.findall(r"\w+", match.group(2)))

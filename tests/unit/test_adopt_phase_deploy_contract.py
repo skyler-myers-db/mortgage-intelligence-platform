@@ -149,8 +149,10 @@ def test_the_adopt_plan_replaces_the_pre_lease_gate_before_the_lease_and_every_s
     assert text.index("tools.databricks.deploy_prestop_probes", steps) < plan < gate < lease
     assert plan < text.index("APP_FAIL_CLOSED_ARMED=1", steps)
     gate_block = block("# >>> bundle plan gate: pre-lease >>>", "# <<< bundle plan gate: pre-lease <<<")
+    # Nor does the data phase (M1-PR6), whose read-only data plan stands in its place.
     assert (
-        'if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]]; then\n'
+        'if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" && \\\n'
+        '      "${DEPLOY_PHASE:-}" != "data" ]]; then\n'
         "  run_bundle_plan_gate pre-lease\nfi\n"
     ) in gate_block
     assert [line for line in block(PLAN_START, PLAN_END).splitlines() if not line.startswith("#")] == [

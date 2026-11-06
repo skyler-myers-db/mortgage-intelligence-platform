@@ -295,6 +295,10 @@ if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
   fi
   run "$PYTHON" -m tools.databricks.bundle_env deployment bind \
     mip_app "$_GRANTS_APP_NAME" -t "$TARGET" --auto-approve
+elif [[ "${FIRST_INSTALL_RESUMED:-0}" -eq 1 ]]; then
+  # The first install created and bound this App before it stopped for the
+  # owner bootstrap (M1-PR6); it is neither created again nor updated.
+  resume_first_install_bindings
 else
   step "update existing Databricks App resource bindings without source activation"
   if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -398,6 +402,12 @@ else
   APP_SP_CLIENT_ID="dry-run-app-client-id"
   APP_SP_SCIM_ID="dry-run-app-scim-id"
 fi
+# >>> first install: owner bootstrap gate >>>
+# --phase release (M1-PR6): the new App identity needs the owner's
+# bootstrap_account --post-first-install before any App-identity proof below;
+# until then the release stops with exit 3 and keeps the App.
+require_first_install_owner_bootstrap
+# <<< first install: owner bootstrap gate <<<
 # The legacy Database Instances role-create path and the App database binding
 # can materialize OAuth roles with PostgreSQL REPLICATION even though their
 # API-visible CREATEDB/CREATEROLE/BYPASSRLS attributes are all false.  At this

@@ -156,16 +156,24 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
     assert estate[: estate.index("# >>> estate inventory: pre-lease >>>")].rstrip().endswith(
         "fi"
     ), "outside the dry-run branches"
-    # The lease block follows at once: the core tier's release refusal (M2-PR3)
-    # was lifted with the core release path (M2-PR7b).
+    # Only the release's budget admission (M1-PR6), also at top level, sits
+    # between the gate and the lease block: the core tier's release refusal
+    # (M2-PR3) was lifted with the core release path (M2-PR7b).
     after = text[text.index(GATE_END) + len(GATE_END) :]
-    assert after.startswith('\nif [[ "$DRY_RUN" -eq 0 ]]; then\n')
+    admission_end = "# <<< release phase: budget admission <<<"
+    assert after.startswith("\n# >>> release phase: budget admission >>>\n")
+    assert after[after.index(admission_end) + len(admission_end) :].startswith(
+        '\nif [[ "$DRY_RUN" -eq 0 ]]; then\n'
+    )
     code = [line for line in lines if not line.startswith("#")]
     assert code == [
-        'if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]]; then',
+        'if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" && \\',
+        '      "${DEPLOY_PHASE:-}" != "data" ]]; then',
         "  run_bundle_plan_gate pre-lease",
         "fi",
         'if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then',
+        "  # Each phase's predicted budget (M1-PR6), read-only, kept in a local file.",
+        "  predict_phase_budgets",
         '  echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"',
         "  exit 0",
         "fi",
@@ -230,9 +238,10 @@ def test_the_phase_flag_is_parsed_and_the_live_plan_refused_before_any_databrick
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     phase = script[script.index("# >>> deploy phase >>>") : script.index("# <<< deploy phase <<<")]
 
+    # The reviewed phases (M1-PR6 adds release and data); a run with none is the full deploy.
     assert (
-        '[[ "$PHASE_SEEN" -eq 1 && "$DEPLOY_PHASE" != "plan" && \\\n'
-        '      "$DEPLOY_PHASE" != "adopt" && "$DEPLOY_PHASE" != "unadopt" ]]'
+        'case "$PHASE_SEEN:$DEPLOY_PHASE" in\n'
+        "  0:|1:plan|1:release|1:data|1:adopt|1:unadopt) ;;\n"
     ) in phase
     assert 'echo "[deploy] ${DEPLOY_PHASE} is CI-only; use --dry-run or make bundle-validate" >&2' in phase
     assert '"$PHASE_SEEN" -eq 1 && "$DRY_RUN" -eq 0 && "${GITHUB_ACTIONS:-}" != "true"' in phase
@@ -291,6 +300,8 @@ def _harness(
         # here they only record that the gate ran them, the plan after the gate.
         'check_catalog_bootstrap_skip_rule() { echo "skip-rule-checked" >&2; return 3; }\n'
         'plan_quiesce_window() { echo "window-planned $1"; }\n'
+        # The plan phase's budget prediction (M1-PR6) has its own tests.
+        'predict_phase_budgets() { echo "budgets-predicted"; }\n'
         + function("run_json_to_file")
         + function("run_bundle_plan_gate")
         + block(GATE_START, GATE_END)
@@ -320,6 +331,7 @@ def test_the_plan_phase_exits_read_only_and_never_takes_the_lease(tmp_path: Path
     assert result.returncode == 0, result.stderr
     assert "plan phase complete: read-only, stopped before the lease" in result.stdout
     assert "[mip-plan-gate] pre-lease plan gate passed (read-only)" in result.stdout
+    assert result.stdout.index("budgets-predicted") < result.stdout.index("plan phase complete")
     assert called == [
         "bundle_env.called",
         MONITOR_CALLED,

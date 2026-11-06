@@ -124,7 +124,8 @@ def test_the_inventory_check_runs_before_the_lease_and_the_plan_exit() -> None:
     call = script.index("\ncheck_estate_inventory_prelease\n")
 
     assert script.index('step "pre-stop probes:') < call
-    assert call < script.index('if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then')
+    # The top-level --phase plan exit, not an indented use of the phase (M1-PR6's probe arguments).
+    assert call < script.index('\nif [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then\n')
     assert call < script.index("app_deployment_lease recovery-root")
 
 

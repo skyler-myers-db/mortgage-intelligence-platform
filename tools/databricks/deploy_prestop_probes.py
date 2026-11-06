@@ -64,7 +64,9 @@ App down:
 7. **Serving endpoints** (``prestop_serving_endpoints``): App access only on
    record-pinned endpoints.
 8. **Genie budget** (``prestop_genie_budget``): one real turn on the
-   record-pinned space, the only call that is not a GET or a list.
+   record-pinned space, the only call that is not a GET or a list. ``--phase
+   plan`` passes ``--genie-turn off`` (M1-PR6): the plan writes nothing, so it
+   opens no conversation; the release's own pre-stop probe asks the turn.
 
 Every refusal carries a reviewed code (``prestop_refusals``). A probe whose
 reads fail refuses (``probe_error``) instead of passing; ``main`` exits 2 on
@@ -604,6 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--genie-space-name", required=True)
     parser.add_argument("--rebase-unverified-app", choices=("0", "1"), required=True)
+    parser.add_argument("--genie-turn", choices=("on", "off"), default="on")
     # --phase adopt|unadopt: the record clause judges what adopt-live will (M2-PR7).
     parser.add_argument("--phase", choices=("adopt", "unadopt"), default=None)
     args = parser.parse_args(argv)
@@ -648,6 +651,7 @@ def main(argv: list[str] | None = None) -> int:
             metastore_owner=metastore_owner_from_env(),
             # The preflight's own ack (shell only): the same plan digest adopts the same space.
             genie_pin_ack=os.environ.get(GENIE_PIN_ACK_ENV, "").strip(),
+            genie_turn=args.genie_turn == "on",
             adopt_phase=args.phase is not None,
             agentic_tier=args.agentic_tier,
         ),
