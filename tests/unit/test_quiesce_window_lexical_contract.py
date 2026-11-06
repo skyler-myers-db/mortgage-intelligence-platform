@@ -219,10 +219,13 @@ def test_a_bundle_job_runs_from_shell_only_at_its_reviewed_site() -> None:
     (
         'databricks pipelines start-update "$PIPELINE_ID" --full-refresh\n',
         'databricks pipelines stop "$PIPELINE_ID"\n',
+        "databricks pipelines run mip_feature_pipeline\n",
+        "databricks pipelines run --full-refresh-all\n",
+        "databricks pipelines dry-run --restart mip_feature_pipeline\n",
         'databricks api post /api/2.0/pipelines/abc-123/updates --json "{}"\n',
         '"$PYTHON" -c "w.pipelines.start_update(pipeline_id=p)"\n',
     ),
-    ids=("cli_start", "cli_stop", "rest", "inline"),
+    ids=("cli_start", "cli_stop", "cli_run", "cli_run_full_refresh", "cli_dry_run", "rest", "inline"),
 )
 def test_a_pipeline_update_from_shell_is_reviewed_nowhere(line: str) -> None:
     # A direct pipeline update is a silver refresh by another door (M1-PR6).
