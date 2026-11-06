@@ -24,6 +24,7 @@ from tests.fixtures.client_profiles import (
     env_file_text,
     paychex_shaped_profile,
 )
+from tests.fixtures.deploy_sandbox import inherited
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
     DEPLOY_SOURCED_SCRIPTS,
@@ -4842,11 +4843,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     )
     fake_databricks.chmod(0o755)
     env = {
-        **{
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith(("COV_CORE", "COVERAGE", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
-        },
+        **{name: value for name, value in os.environ.items() if not inherited(name)},
         "DATABRICKS_STUB_LOG": str(log),
         # A Python SDK client built by mistake fails offline.
         "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
@@ -6535,11 +6532,7 @@ def test_deploy_preflight_requires_no_runtime_hmac_input(
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
 
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
-    }
+    env = {name: value for name, value in os.environ.items() if not inherited(name)}
     env.update(shell)
     env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
     env["MIP_DEPLOY_PYTHON"] = sys.executable

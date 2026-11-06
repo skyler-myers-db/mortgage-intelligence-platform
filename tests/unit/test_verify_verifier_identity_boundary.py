@@ -9,6 +9,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import PermissionDenied
 from databricks.sdk.service.apps import ComputeState
 
+from tests.fixtures.env_isolation import EXACT_M2M_BINDING_ENV, restore_on_teardown
 from tests.fixtures.github_oidc import (
     DEPLOYER_CLIENT_ID,
     actions_keys,
@@ -23,6 +24,13 @@ from tools.databricks import verifier_customer_resource_denial as customer_denia
 from tools.databricks import verify_verifier_identity_boundary as boundary
 
 verify_boundary = boundary.verify_boundary
+
+
+@pytest.fixture(autouse=True)
+def _restore_exact_m2m_binding_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """boundary.main binds the exact M2M identity by writing os.environ directly."""
+
+    restore_on_teardown(monkeypatch, EXACT_M2M_BINDING_ENV)
 
 
 @pytest.fixture(autouse=True)
