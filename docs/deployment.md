@@ -2363,8 +2363,14 @@ counts and the `estate` digest, never a catalog, owner or id: a refusal of its
 own prints its line, and any other error (a Databricks API, HTTP or file
 error) only its class and error code, because its text can name another
 team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
-calls are pinned to a reviewed set of gets and lists
-(`tests/unit/test_bootstrap_account_safety.py`). Exit 0: written, no gap; 3:
+calls are pinned to a reviewed set of gets and lists, statically
+(`tests/unit/test_bootstrap_account_safety.py`) and by a run-time spy on every
+test path (`tests/unit/test_estate_inventory.py`). The static scan reads the
+collector and the CLI under every name they give an owner client: an SDK API
+is called where it is reached, never aliased, passed on or looked up by
+reflection, and the one function outside them that is handed a client
+(`authoritative_workspace_id`) may only read the workspace id. It is a review
+gate on those files, not a sandbox. Exit 0: written, no gap; 3:
 written with gaps (the deploy refuses it); 2: refused, nothing written.
 
 **Giving it to a run.** The inventory names other teams' catalogs and
