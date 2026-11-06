@@ -18,9 +18,12 @@ import type {
 /**
  * One dependency's state on the health body (audit delivery-01). `resuming`
  * is the serverless warehouse starting from auto-stop (its lifecycle state is
- * STARTING): not an outage. Only `down` is an outage.
+ * STARTING): not an outage. `degraded` is Genie answering its ping while its
+ * recent model turns fail on a budget/quota wall (`dependency_reasons` names
+ * the class): not an outage either, and asking Genie stays enabled. Only
+ * `down` is an outage.
  */
-export type DependencyState = 'up' | 'down' | 'resuming';
+export type DependencyState = 'up' | 'down' | 'resuming' | 'degraded';
 
 /**
  * What the shell tells `/api/health` about the tab (audit delivery-v1):
@@ -40,6 +43,11 @@ export interface HealthPayload {
    * never break the shell, so compare against `DependencyState` values.
    */
   dependencies?: Record<string, string>;
+  /**
+   * Why a dependency reads `degraded`, keyed like `dependencies` (a closed
+   * backend class such as `BUDGET_EXCEEDED`). Absent when nothing is degraded.
+   */
+  dependency_reasons?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;
   /**
