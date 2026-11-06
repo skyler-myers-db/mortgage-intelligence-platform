@@ -2338,7 +2338,8 @@ needs no inventory: a core run reads none of the names below and its dry-run
 transcript is byte-identical to the one before this change.
 
 **Taking it (the owner, as the metastore's direct owner, read-only).** At most
-30 days before the agentic run that relies on it:
+29 days before the agentic run that relies on it (the inventory expires at 30
+days, and the run's pre-lease check allows for the run's own 24 h):
 
 ```bash
 python -m tools.clients.estate_inventory --out ~/mip-estate/<client>.json \
@@ -2365,11 +2366,19 @@ parser before it is written, so a refused one never is; the file is written
 mode 0600, atomically and never through a symlink. The tool prints counts, gap
 counts and the `estate` digest, never a catalog, owner or id: a refusal of its
 own prints its line, and any other error (a Databricks API, HTTP or file
-error) only its class and error code, because its text can name another
-team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
-calls are pinned to a reviewed set of gets and lists
-(`tests/unit/test_bootstrap_account_safety.py`). Exit 0: written, no gap; 3:
-written with gaps (the deploy refuses it); 2: refused, nothing written.
+error) only its class and its error code (an OS error's errno name, never its
+free-text `strerror`), because its text can name another team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
+calls are pinned to a reviewed set of gets and lists, statically
+(`tests/unit/test_bootstrap_account_safety.py`) and by a run-time spy on every
+test path (`tests/unit/test_estate_inventory.py`). The static scan reads the
+collector and the CLI under every name they give an owner client: an SDK API
+is called where it is reached, never aliased, passed on or looked up by
+reflection, and the one function outside them that is handed a client
+(`authoritative_workspace_id`) may only read the workspace id. It is a review
+gate on those files, not a sandbox. Exit 0: written, no gap; 3:
+written with gaps (the deploy refuses it); 4: written, but printing its
+summary failed (a closed stdout, as under `| head`): run `--summarize` on it;
+2: refused, nothing written.
 
 **Giving it to a run.** The inventory names other teams' catalogs and
 principals, so it is identifying: store the file's content as the client's
@@ -2398,14 +2407,18 @@ the ack from a dispatch input.
 
 **What refuses.** In the agentic tier, before the lease and the `--phase plan`
 exit, `tools/databricks/estate/inventory_check.py` loads the inventory exactly
-as every audit will, judging its age at the end of the run's 24 h margin, and
+as every audit will, judging its age at the end of the run's 24 h margin (so
+it admits an inventory at most 29 days old, which cannot expire before the
+run's last audit), and
 prints its counts and digest. Every audit recomputes the digest right before it
 relies on the inventory. Any of these refuses:
 
 - the retired `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` is set (below);
 - no inventory, both sources, or a file that is not a private regular file;
 - no ack, a malformed one, or one that is not this inventory's estate digest;
-- `issued_at` in the future, or more than 30 days before the run (or its end);
+- `issued_at` in the future, or more than 30 days before the check (the
+  pre-lease check judges at the end of the run's margin, so it refuses one more
+  than 29 days old);
 - another metastore, install workspace or install catalog;
 - any gap;
 - a catalog the deployer or the agent identity can see that the inventory
@@ -2427,15 +2440,17 @@ relies on the inventory. Any of these refuses:
 **What is judged as of the inventory.** Only a metastore admin or a catalog's
 owner can read its workspace bindings, and neither the deployer nor the agent
 identity is either, so a catalog's bound workspace ids come from the
-inventory, at most 30 days old (plus the run's 24 h margin); its owner, type
-and isolation mode are re-read live and compared. Two things follow. The
-`binding` field of an accepted-exposure entry (plan 4.12) is matched against
-the inventory's bindings, so a catalog rebound while it stays `ISOLATED`
-still matches until the inventory is taken again; and the proof's
-binding-denial evidence carries the inventory's bindings. A catalog that is
-rebound into the install workspace and becomes visible to the identity still
-refuses, and the identity's workspace assignments, read live on the account
-plane, still confine it to the install workspace.
+inventory, at most 30 days old (the pre-lease check admits at most 29 days,
+so it cannot expire during the run); its owner, type and isolation mode are
+re-read live and compared. Two things follow. The `binding` field of an
+accepted-exposure entry (plan 4.12) is matched against the inventory's
+bindings, so a catalog rebound while it stays `ISOLATED` still matches until
+the inventory is taken again; and the proof's binding-denial evidence carries
+the inventory's bindings. A catalog whose isolation mode changes refuses (the
+inventory is stale). A catalog that is rebound into the install workspace and
+becomes visible to the identity still refuses, and the identity's workspace
+assignments, read live on the account plane, still confine it to the install
+workspace. `tests/unit/test_estate_inventory_audit.py` pins all three.
 
 **The self-view.** The audit reads the runtime's (or the proxy's) effective
 privileges as that identity, with its own OAuth credential, on every catalog it

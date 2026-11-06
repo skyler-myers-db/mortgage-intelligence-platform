@@ -21,6 +21,12 @@
   the allowlist could not see refuses outright: the raw ``api_client``,
   reflection (``getattr`` and kin) on a session client or naming an SDK
   API, ``attrgetter``/``methodcaller``, and the ``ApiClient`` class. The
+  estate scan holds the metastore owner's credential, so it is stricter:
+  every name it gives a client (``reader``, ``readers``, ``bound_readers``)
+  is a session client, an SDK API must be called where it is reached (no
+  alias under any name), reflection must name a constant that is not an API,
+  and the one function outside it that is handed a client
+  (``authoritative_workspace_id``) may only read the workspace id. The
   fake account's spy enforces the same at run time on every test path.
 """
 
@@ -155,6 +161,14 @@ HANDOVER_MODULES = frozenset({HANDOVER_OWNER_MODULE, "handover_uc_plan.py", "han
 # directory, makes exactly these, every one a get or a list.
 ESTATE_CLI_MODULE = "estate_inventory.py"
 ESTATE_COLLECTOR = ROOT / "tools" / "databricks" / "estate" / "collect.py"
+ESTATE_SOURCES = (ESTATE_COLLECTOR, ROOT / "tools" / "clients" / ESTATE_CLI_MODULE)
+# The names the estate scan gives the owner's clients: the install workspace's,
+# the account plane's, and one per bound workspace.
+ESTATE_CLIENT_NAMES = frozenset({"account", "workspace", "clients", "reader", "readers", "bound_readers"})
+# The one function outside ESTATE_SOURCES handed an owner client, and all it may do with one.
+ESTATE_CLIENT_HELPER = (ROOT / "tools" / "databricks" / "agent_runtime_uc_baseline.py", "authoritative_workspace_id")
+ESTATE_HELPER_METHODS = frozenset({"get_workspace_id", "strip"})
+ESTATE_HELPER_REFLECTED = frozenset({"config", "workspace_id"})
 ESTATE_INVENTORY_READS = frozenset(
     {
         ("current_user", "me"),
@@ -180,6 +194,8 @@ DYNAMIC_NAMES = frozenset({"api_client", "ApiClient", "attrgetter", "methodcalle
 REFLECTION = frozenset({"getattr", "setattr", "delattr", "vars"})
 # A reflective lookup of one of these reaches a session client, wherever it starts.
 CLIENT_ENTRY_NAMES = frozenset({"account", "workspace", "api_client", "do"})
+# The bootstrap's session clients and their container (``Clients``).
+SESSION_CLIENT_NAMES = frozenset({"account", "workspace", "clients"})
 
 
 @pytest.fixture
@@ -353,14 +369,6 @@ def _sdk_api_names() -> frozenset[str]:
     return frozenset(names - {"config", "api_client", "get_workspace_id", "get_workspace_client"})
 
 
-def _is_client(node: ast.expr) -> bool:
-    """``account``/``workspace`` or ``<x>.account``/``<x>.workspace``: a session client."""
-
-    if isinstance(node, ast.Name):
-        return node.id in {"account", "workspace"}
-    return isinstance(node, ast.Attribute) and node.attr in {"account", "workspace"}
-
-
 def _calls_in(source: str) -> list[tuple[ast.Call, tuple[str, str]]]:
     """Every ``<...>.<sdk api>.<method>(...)`` call in ``source``."""
 
@@ -374,17 +382,17 @@ def _calls_in(source: str) -> list[tuple[ast.Call, tuple[str, str]]]:
     return found
 
 
-def _client_rooted(node: ast.expr) -> bool:
-    """A session client, or reached from one through attributes and subscripts."""
+def _client_rooted(node: ast.expr, clients: frozenset[str] = SESSION_CLIENT_NAMES) -> bool:
+    """A session client (named in ``clients``), or reached from one through attributes and subscripts."""
 
     while isinstance(node, ast.Attribute | ast.Subscript):
-        if isinstance(node, ast.Attribute) and node.attr in {"account", "workspace"}:
+        if isinstance(node, ast.Attribute) and node.attr in clients:
             return True
         node = node.value
-    return isinstance(node, ast.Name) and node.id in {"account", "workspace", "clients"}
+    return isinstance(node, ast.Name) and node.id in clients
 
 
-def _dynamic_in(source: str) -> list[str]:
+def _dynamic_in(source: str, clients: frozenset[str] = SESSION_CLIENT_NAMES) -> list[str]:
     """Calls the allowlist cannot see: the raw API client, reflection, dynamic dispatch.
 
     Reflection is refused on a session client (any attribute) and anywhere
@@ -407,13 +415,18 @@ def _dynamic_in(source: str) -> list[str]:
             found.append(f"line {getattr(node, 'lineno', 0)}: {name}")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in REFLECTION and node.args:
             named = node.args[1] if len(node.args) > 1 else None
-            if _client_rooted(node.args[0]) or (isinstance(named, ast.Constant) and named.value in CLIENT_ENTRY_NAMES):
+            rooted = _client_rooted(node.args[0], clients)
+            if rooted or (isinstance(named, ast.Constant) and named.value in CLIENT_ENTRY_NAMES):
                 found.append(f"line {node.lineno}: {node.func.id}()")
     return found
 
 
-def _aliases_in(source: str) -> list[int]:
-    """Lines binding ``<client>.<api>`` to a name, which would hide its calls."""
+def _aliases_in(source: str, clients: frozenset[str] = SESSION_CLIENT_NAMES - {"clients"}) -> list[int]:
+    """Lines binding ``<client>.<api>`` to a name, which would hide its calls.
+
+    ``clients.workspace`` hands out the session's workspace client, not the
+    SDK's Workspace API, so the bootstrap's container is not a root here.
+    """
 
     apis = _sdk_api_names()
     return [
@@ -422,8 +435,69 @@ def _aliases_in(source: str) -> list[int]:
         if isinstance(node, ast.Assign | ast.AnnAssign)
         and isinstance(node.value, ast.Attribute)
         and node.value.attr in apis
-        and _is_client(node.value.value)
+        and _client_rooted(node.value.value, clients)
     ]
+
+
+def _api_escapes(source: str) -> list[str]:
+    """An SDK API reached other than as ``<x>.<api>.<method>(...)``, or reflection the scan cannot read.
+
+    Root-agnostic, so a client renamed first is still seen: ``<x>.<api>`` must
+    be called where it is reached (never bound, passed or returned), and every
+    ``getattr`` (and kin) names a constant that is neither an API nor a client
+    entry.
+    """
+
+    apis = _sdk_api_names()
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in apis:
+            method = parents.get(node)
+            call = parents.get(method) if method is not None else None
+            if not (isinstance(method, ast.Attribute) and isinstance(call, ast.Call) and call.func is method):
+                found.append(f"line {node.lineno}: {node.attr} uncalled")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in REFLECTION:
+            named = node.args[1] if len(node.args) > 1 else None
+            if not (isinstance(named, ast.Constant) and isinstance(named.value, str)) or (
+                named.value in apis | CLIENT_ENTRY_NAMES
+            ):
+                found.append(f"line {node.lineno}: {node.func.id}()")
+    return found
+
+
+def _client_handoffs(source: str, *, local: frozenset[str]) -> set[str]:
+    """Every function outside ``local`` that ``source`` hands an estate client to."""
+
+    found = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = ast.unparse(node.func)
+        if callee.rsplit(".", 1)[-1] in local:
+            continue
+        if any(_client_rooted(value, ESTATE_CLIENT_NAMES) for value in (*node.args, *(k.value for k in node.keywords))):
+            found.add(callee)
+    return found
+
+
+def _estate_helper_violations(module_text: str) -> list[str]:
+    """Anything ``authoritative_workspace_id`` does with the owner client beyond reading its workspace id."""
+
+    (node,) = [n for n in ast.parse(module_text).body if getattr(n, "name", None) == ESTATE_CLIENT_HELPER[1]]
+    source = ast.unparse(node)
+    calls = [item for item in ast.walk(node) if isinstance(item, ast.Call)]
+    methods = {item.func.attr for item in calls if isinstance(item.func, ast.Attribute)}
+    reflected = {
+        str(getattr(item.args[1], "value", ""))
+        for item in calls
+        if isinstance(item.func, ast.Name) and item.func.id in REFLECTION and len(item.args) > 1
+    }
+    found = [f"calls {pair}" for _node, pair in _calls_in(source)] + _api_escapes(source)
+    found += [f"calls .{name}()" for name in sorted(methods - ESTATE_HELPER_METHODS)]
+    found += [f"reflects {name}" for name in sorted(reflected - ESTATE_HELPER_REFLECTED)]
+    return found
 
 
 def _forbidden_in(source: str) -> list[str]:
@@ -526,18 +600,89 @@ def test_the_bootstrap_calls_only_the_reviewed_sdk_surface() -> None:
     assert not [pair for pair in ALLOWED_CALLS if pair[0] == "service_principals" and pair[1] in {"patch", "update"}]
 
 
-def test_the_estate_inventory_reads_only_the_reviewed_surface() -> None:
-    """The collector's calls are exactly the reviewed reads; the CLI makes none of its own."""
+def _estate_functions(sources: dict[str, str]) -> frozenset[str]:
+    """The functions the estate scan reads: a client handed to one stays in view."""
 
-    source = ESTATE_COLLECTOR.read_text(encoding="utf-8")
-    assert _aliases_in(source) == [] and _dynamic_in(source) == [] and _forbidden_in(source) == []
-    assert {pair for _node, pair in _calls_in(source)} == ESTATE_INVENTORY_READS
+    return frozenset(
+        node.name for text in sources.values() for node in ast.walk(ast.parse(text)) if isinstance(node, ast.FunctionDef)
+    )
+
+
+def _estate_violations(sources: dict[str, str]) -> list[str]:
+    """What the estate scan refuses in ``sources`` (the collector and the CLI)."""
+
+    local = _estate_functions(sources)
+    found = []
+    for name, source in sources.items():
+        found += [f"{name}: alias at line {line}" for line in _aliases_in(source, ESTATE_CLIENT_NAMES)]
+        found += [f"{name}: {line}" for line in _dynamic_in(source, ESTATE_CLIENT_NAMES) + _api_escapes(source)]
+        found += [f"{name}: {line}" for line in _forbidden_in(source)]
+        handoffs = _client_handoffs(source, local=local) - {ESTATE_CLIENT_HELPER[1]}
+        found += [f"{name}: hands a client to {callee}" for callee in sorted(handoffs)]
+    return found
+
+
+def _estate_sources() -> dict[str, str]:
+    return {path.name: path.read_text(encoding="utf-8") for path in ESTATE_SOURCES}
+
+
+def test_the_estate_inventory_reads_only_the_reviewed_surface() -> None:
+    """The collector's calls are exactly the reviewed reads; the CLI makes none; no client escapes the scan."""
+
+    sources = _estate_sources()
+    collector, cli = sources[ESTATE_COLLECTOR.name], sources[ESTATE_CLI_MODULE]
+    assert _estate_violations(sources) == []
+    assert {pair for _node, pair in _calls_in(collector)} == ESTATE_INVENTORY_READS
     assert {method for _api, method in ESTATE_INVENTORY_READS} <= ESTATE_READ_METHODS
     assert not ESTATE_READ_METHODS & (DESTRUCTIVE_METHODS | {"update", "create", "patch", "get_effective"})
-    assert [pair for _node, pair in _calls_in(_sources()[ESTATE_CLI_MODULE])] == []
-    # A write planted where no test path reaches it is still seen.
-    planted = source + "\n\ndef _planted(workspace):\n    workspace.catalogs.update('x', owner='y')\n"
-    assert {pair for _node, pair in _calls_in(planted)} - ESTATE_INVENTORY_READS == {("catalogs", "update")}
+    assert [pair for _node, pair in _calls_in(cli)] == []
+    # The only function outside the scan that is handed an owner client reads its workspace id, nothing else.
+    local = _estate_functions(sources)
+    assert set().union(*(_client_handoffs(text, local=local) for text in sources.values())) == {ESTATE_CLIENT_HELPER[1]}
+    assert _estate_helper_violations(ESTATE_CLIENT_HELPER[0].read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    ("module", "planted", "expected"),
+    [
+        # A write planted where no test path reaches it is still seen.
+        ("collect.py", "def _p(workspace):\n    workspace.catalogs.update('x', owner='y')\n", "sets owner"),
+        # The bound reader is a session client: an alias or a reflective lookup on it refuses.
+        ("collect.py", "def _p(reader):\n    api = reader.catalogs\n    api.update('x', owner='y')\n", "alias at line"),
+        ("collect.py", "def _p(reader):\n    getattr(reader, 'catalogs').update('x', owner='y')\n", "getattr()"),
+        ("estate_inventory.py", "def _p(readers, o):\n    api = readers[o].grants\n    api.update('c', 'x')\n", "alias"),
+        # Under a name the scan does not know, an alias, a pass-along or a reflective lookup still refuses.
+        ("collect.py", "def _p(reader):\n    r = reader\n    api = r.catalogs\n    api.update('x')\n", "uncalled"),
+        ("collect.py", "def _p(r):\n    _helper(r.grants)\n", "grants uncalled"),
+        ("collect.py", "def _p(r, name):\n    getattr(r, name).update('x')\n", "getattr()"),
+        # A client handed to a function the scan does not read refuses.
+        ("estate_inventory.py", "def _p(workspace):\n    rewrite_owners(workspace)\n", "hands a client to rewrite_owners"),
+        ("collect.py", "def _p(readers, o):\n    partial(_drop, readers[o])\n", "hands a client to partial"),
+    ],
+)
+def test_the_estate_scan_sees_a_write_behind_any_client_name(module: str, planted: str, expected: str) -> None:
+    sources = _estate_sources()
+    sources[module] += "\n\n" + planted
+
+    assert any(expected in line for line in _estate_violations(sources)), _estate_violations(sources)
+
+
+@pytest.mark.parametrize(
+    ("planted", "expected"),
+    [
+        ('    workspace.catalogs.update("x", owner="attacker")\n', "calls ('catalogs', 'update')"),
+        ('    api = workspace.grants\n    api.update("catalog", "x")\n', "grants uncalled"),
+        ('    getattr(workspace, "catalogs").update("x")\n', "reflects catalogs"),
+        ("    workspace.config.authenticate()\n", "calls .authenticate()"),
+    ],
+)
+def test_the_estate_helper_pin_sees_a_write_in_the_helper_handed_the_owner_client(planted: str, expected: str) -> None:
+    text = ESTATE_CLIENT_HELPER[0].read_text(encoding="utf-8")
+    anchor = '    workspace_id = str(workspace.get_workspace_id() or "").strip()\n'
+    assert text.count(anchor) == 1
+
+    found = _estate_helper_violations(text.replace(anchor, planted + anchor))
+    assert any(expected in line for line in found), found
 
 
 def _handover_owner_updates(source: str) -> list[str]:
