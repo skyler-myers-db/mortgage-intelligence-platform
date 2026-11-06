@@ -525,12 +525,17 @@ and lifts it with `thaw --marker-id <id>`; both write a signed, create-only
 marker in the lease root and nothing is deleted. A freeze is signed before
 the root is touched, so a refused one (no signing key, a bad `--until`)
 changes nothing. Neither ever sets a permission: a missing lease root is
-created bare (the first governed lease converges its ACL), and an existing
-one is checked read-only, exactly protected for the App lease's own holder
-and writer or, while the App has no lease record, held by no accessor but
-admins and the freezing identity (`freeze_root_unprotected` otherwise), so a
+created bare (the first governed lease converges its ACL) and judged at once
+like a root with no lease record, and an existing one is checked read-only,
+exactly protected for the App lease's own holder and writer or, while the
+App has no lease record, held by no accessor but admins and the freezing
+identity (`freeze_root_unprotected` otherwise; a refusal over a root the
+freeze just created leaves that root bare and empty, never deleted), so a
 freeze from the owner's shell never takes the root's MANAGE from the
-deployer and nobody else can delete its marker. `app_release_source publish`
+deployer and nobody else can delete its marker, the first one included.
+Whether a new root's inherited ACL passes in a given workspace is not yet
+probed live: if it carries any accessor but admins and the freezing
+identity, the first freeze refuses instead of writing. `app_release_source publish`
 reads every marker after its local checks and before any upload, and
 refuses with exit 2 while one is frozen. A marker reads as thawed or
 expired only when its signature verifies, so a shell

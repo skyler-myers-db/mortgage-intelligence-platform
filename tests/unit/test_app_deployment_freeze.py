@@ -320,17 +320,15 @@ def test_an_unsigned_freeze_refuses_before_it_creates_the_root(
 
 
 _ADMINS = _entry("CAN_MANAGE", group="admins")
-
-
-@pytest.mark.parametrize(
-    ("acl", "allowed"),
-    (
-        ([_entry("CAN_MANAGE", group="users")], False),
-        ([_ADMINS, _entry("CAN_EDIT", user="peer@lender.example")], False),
-        ([_entry("CAN_READ", user="owner@lender.example")], False),
-        ([_ADMINS, _entry("CAN_MANAGE", user="owner@lender.example")], True),
-    ),
+_NO_RECORD_ACLS = (
+    ([_entry("CAN_MANAGE", group="users")], False),
+    ([_ADMINS, _entry("CAN_EDIT", user="peer@lender.example")], False),
+    ([_entry("CAN_READ", user="owner@lender.example")], False),
+    ([_ADMINS, _entry("CAN_MANAGE", user="owner@lender.example")], True),
 )
+
+
+@pytest.mark.parametrize(("acl", "allowed"), _NO_RECORD_ACLS)
 def test_an_existing_root_with_no_lease_record_is_still_judged_read_only(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -350,6 +348,30 @@ def test_an_existing_root_with_no_lease_record_is_still_judged_read_only(
         return
     assert code == 2 and "REFUSED freeze_root_unprotected" in capsys.readouterr().err
     assert freezer.judge_markers(workspace) == [], "nothing was written"
+
+
+@pytest.mark.parametrize(("acl", "allowed"), _NO_RECORD_ACLS)
+def test_a_root_the_freeze_creates_is_judged_before_its_first_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    acl: list[SimpleNamespace],
+    allowed: bool,
+) -> None:
+    """The creating freeze judges the new root exactly as the next freeze over it would."""
+
+    workspace = _acl_workspace("owner@lender.example")
+    workspace.workspace.acl = list(acl)  # what the root reads once mkdirs creates it
+
+    code = _freeze_cli(workspace, monkeypatch, record=None)
+    assert workspace.workspace.ops("mkdirs") == [freezer.LEASE_ROOT]
+    assert workspace.workspace.set_permissions_calls == 0 and workspace.workspace.acl == acl
+    if allowed:
+        assert code == 0 and [m.app_name for m in freezer.judge_markers(workspace)] == [rr.APP_NAME]
+        return
+    err = capsys.readouterr().err
+    assert code == 2 and "REFUSED freeze_root_unprotected" in err
+    assert "created is left bare and empty" in err, "the refusal names what it left"
+    assert workspace.workspace.ops("upload") == [] and freezer.judge_markers(workspace) == []
 
 
 def test_a_lease_root_that_cannot_be_listed_refuses() -> None:

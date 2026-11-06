@@ -14,14 +14,17 @@ with the deploy's proof-signing key, verified by the lease's own key registry:
   marker id, the freezing identity, ``created_at`` and ``until`` (epoch
   seconds, in the future and at most MAX_FREEZE_SECONDS ahead). It refuses
   while a marker for the App is still frozen, and it is signed before the root
-  is touched, so a refused freeze changes nothing. It never sets a permission
-  (``prepare_root``): the owner runs it from their own shell, and converging
-  the root's ACL for them would remove the deployer's MANAGE and break a run
-  that holds the lease. A missing root is created bare (the first lease
-  acquisition converges it). An existing one is checked read-only: exactly
-  protected for the App lease's own holder and writer, or, when the App has
-  no lease record yet, held by no accessor but admins and the freezing
-  identity (``freeze_root_unprotected`` otherwise).
+  is touched, so a refused freeze changes nothing (save a root it created: a
+  root refusal leaves that one bare and empty, never deleted). It never sets
+  a permission (``prepare_root``): the owner runs it from their own shell,
+  and converging the root's ACL for them would remove the deployer's MANAGE
+  and break a run that holds the lease. A missing root is created bare (the
+  first lease acquisition converges it) and judged at once as a root with no
+  lease record. An existing one is checked read-only: exactly protected for
+  the App lease's own holder and writer, or, when the App has no lease
+  record yet, held by no accessor but admins and the freezing identity
+  (``freeze_root_unprotected`` otherwise), so no marker, the first included,
+  sits in a root anyone else can delete it from.
 * ``thaw`` writes ``<app>.freeze-<marker id>.thaw.json`` create-only, bound
   to the freeze marker's sha256. Nothing is ever overwritten or deleted.
 
@@ -288,6 +291,19 @@ def _assert_bare_root(workspace: Any, *, lease: Any, holder: str, object_id: str
             )
 
 
+def _unprotected(exc: RuntimeError, *, created: bool) -> FreezeRefused:
+    left = (
+        "the root this freeze created is left bare and empty, no marker was written"
+        if created
+        else "nothing was written"
+    )
+    return FreezeRefused(
+        "freeze_root_unprotected",
+        f"the lease root is not exactly protected for the App's lease holder ({exc}); "
+        f"{left} and no permission was changed",
+    )
+
+
 def prepare_root(workspace: Any, *, app_name: str, lease: Any, holder: str) -> None:
     """The lease root for a marker, without ever setting a permission (see the module doc)."""
 
@@ -295,6 +311,13 @@ def prepare_root(workspace: Any, *, app_name: str, lease: Any, holder: str) -> N
         workspace.workspace.get_status(LEASE_ROOT)
     except NotFound:
         workspace.workspace.mkdirs(LEASE_ROOT)  # bare: the first lease acquisition converges it
+        try:
+            # Judged at once, as the next freeze over it would judge it: the first
+            # marker is protected exactly like every later one.
+            object_id = lease._root_object_id(workspace)
+            _assert_bare_root(workspace, lease=lease, holder=holder, object_id=object_id)
+        except RuntimeError as exc:
+            raise _unprotected(exc, created=True) from exc
         return
     try:
         record = lease._download(workspace, app_name=_app(app_name))
@@ -311,11 +334,7 @@ def prepare_root(workspace: Any, *, app_name: str, lease: Any, holder: str) -> N
             object_id=object_id,
         )
     except RuntimeError as exc:
-        raise FreezeRefused(
-            "freeze_root_unprotected",
-            f"the lease root is not exactly protected for the App's lease holder ({exc}); "
-            "nothing was written and no permission was changed",
-        ) from exc
+        raise _unprotected(exc, created=False) from exc
 
 
 def override_plan(*, marker_id: str, release_path: str) -> dict[str, str]:
