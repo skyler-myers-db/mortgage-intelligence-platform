@@ -468,9 +468,10 @@ catalog or owner that view sees and the inventory lacks, or a binding-denied
 catalog or model that becomes visible to it, refuses rather than being
 suppressed. Two things are not judged live (docs/deployment.md, "Estate
 inventory"). A catalog's bound workspace ids, and so the binding of an
-accepted-exposure entry, come from the inventory, because only a metastore
-admin or the catalog's owner can read them; owner, type and isolation mode
-are re-read live. A grant in a catalog the runtime cannot see is not read at
+accepted-exposure entry, come from the inventory (at most 30 days old: the
+pre-lease check admits at most 29 days, so it cannot expire during the run),
+because only a metastore admin or the catalog's owner can read them; owner,
+type and isolation mode are re-read live. A grant in a catalog the runtime cannot see is not read at
 all: it is inert without `USE_CATALOG` there, and it is refused at the first
 agentic deploy after it becomes visible. The retired
 `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` refuses when set. The sealed proof

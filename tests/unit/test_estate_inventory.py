@@ -172,6 +172,11 @@ def test_expiry_is_at_most_thirty_days_and_never_in_the_future() -> None:
     near = at(NOW - estate.MAX_AGE + timedelta(hours=12))
     assert _load(near)
     assert "at the end of this run's margin" in _refusal(near, margin=estate.RUN_MARGIN)
+    # So the pre-lease check admits at most 29 days, and no later audit sees one older than 30.
+    oldest = NOW - estate.MAX_AGE + estate.RUN_MARGIN
+    assert _load(at(oldest), margin=estate.RUN_MARGIN)
+    assert "older than 30 days" in _refusal(at(oldest - timedelta(seconds=1)), margin=estate.RUN_MARGIN)
+    assert timedelta(days=29) == estate.MAX_AGE - estate.RUN_MARGIN
     assert estate.RUN_MARGIN == prestop_accepted_exposure.RUN_MARGIN
 
 

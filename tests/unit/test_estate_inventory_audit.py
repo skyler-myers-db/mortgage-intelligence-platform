@@ -28,18 +28,25 @@ from tools.databricks.estate.inventory_check import prelease_refusals
 
 NOW = harness.NOW
 HIDDEN = "hidden-team-catalog"
+# A synthetic id: a second workspace the catalog is rebound to after the inventory.
+THIRD_WORKSPACE_ID = "1000000000000003"
 RUNTIME_ALIASES = (harness.APPLICATION_ID, "runtime-scim-id", harness.ACCOUNT_SCIM_ID, "runtime-workspace")
 
 
-def _hidden_world(*, schema_owner: str = harness.FOREIGN_OWNER) -> tuple[Any, dict[str, Any]]:
+def _hidden_world(
+    *,
+    schema_owner: str = harness.FOREIGN_OWNER,
+    bound_to: str = harness.OTHER_WORKSPACE_ID,
+    isolation_mode: str = "ISOLATED",
+) -> tuple[Any, dict[str, Any]]:
     """A catalog bound only to another workspace, readable through the owner's bound reader."""
 
     workspace = harness._workspace(
-        extra_catalogs=[SimpleNamespace(name=HIDDEN, isolation_mode="ISOLATED", owner=harness.FOREIGN_OWNER)]
+        extra_catalogs=[SimpleNamespace(name=HIDDEN, isolation_mode=isolation_mode, owner=harness.FOREIGN_OWNER)]
     )
     original = workspace.workspace_bindings.get_bindings
     workspace.workspace_bindings.get_bindings = lambda kind, name: (
-        iter([SimpleNamespace(workspace_id=harness.OTHER_WORKSPACE_ID, binding_type="BINDING_TYPE_READ_ONLY")])
+        iter([SimpleNamespace(workspace_id=bound_to, binding_type="BINDING_TYPE_READ_ONLY")])
         if name == HIDDEN
         else original(kind, name)
     )
@@ -150,6 +157,28 @@ def test_a_binding_denied_catalog_visible_to_the_self_view_refuses() -> None:
 
     with pytest.raises(RuntimeError, match="binding-denied foreign catalogs became visible"):
         harness._audit(workspace, inventory=inventory, self_view=sees_all)
+
+
+def test_bindings_are_judged_as_of_the_inventory_and_isolation_and_visibility_live() -> None:
+    """docs/deployment.md, "What is judged as of the inventory": the declared binding-drift behaviour."""
+
+    taken, readers = _hidden_world()
+    inventory = harness._inventory(taken, bound_readers=readers)
+    rebound, _readers = _hidden_world(bound_to=THIRD_WORKSPACE_ID)
+    opened, _readers = _hidden_world(isolation_mode="OPEN")
+    into_view, _readers = _hidden_world(bound_to=harness.WORKSPACE_ID)
+
+    # Rebound to a second workspace while it stays ISOLATED and unseen: passes on the old inventory,
+    # and the proof and an exposure entry's binding carry the inventory's bindings, not the live ones.
+    (evidence,) = harness._audit(rebound, inventory=inventory).binding_denied_catalogs
+    assert (evidence.catalog, evidence.bindings) == (HIDDEN, ((harness.OTHER_WORKSPACE_ID, "BINDING_TYPE_READ_ONLY"),))
+    assert inventory.binding(HIDDEN) == ("ISOLATED", (harness.OTHER_WORKSPACE_ID,))
+    # Its isolation mode changed: the inventory is stale.
+    with pytest.raises(RuntimeError, match="0 listed catalogs are missing from it and 1 changed owner, type or isolation"):
+        harness._audit(opened, inventory=inventory)
+    # Rebound into the install workspace, so the identity sees it: refused.
+    with pytest.raises(RuntimeError, match="1 binding-denied foreign catalogs became visible"):
+        harness._audit(into_view, inventory=inventory)
 
 
 def test_an_inventory_gap_refuses_the_audit() -> None:
