@@ -89,6 +89,8 @@ function genieConversationQuery(param: string | undefined) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false,
+    // One audit-free GET: "Connection lost" clearing may complete it (connectionState).
+    meta: { oneAuditFreeRead: true },
   });
 }
 

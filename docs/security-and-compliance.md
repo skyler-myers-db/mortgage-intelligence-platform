@@ -242,7 +242,7 @@ the pull request that ships the behaviour, never earlier.
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`); never on a reconnect or a recovery (the draft query sets `refetchOnReconnect: false`) | committed in the same transaction as the draft row, fail-closed |
 | Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
 | Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke; a rationale the governed text screen refuses writes `GOVERNED_TEXT_REFUSED` (surface `revoke`) instead, and a refused revoke (409 with its `reason`) writes nothing | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
-| Lead Queue revoke panel lifecycle read (`GET /borrowers/{id}/lifecycle`, W5e) | none | only on an explicit open of 'Revoke' from an Approved row (never on hover, focus, prefetch or poll), to name the approval to revoke; the queue receipt's Revoke already knows it and reads nothing | audit-free (`require_active_team_member`, Lakebase workflow state) |
+| Lead Queue revoke panel lifecycle read (`GET /borrowers/{id}/lifecycle`, W5e) | none | only on an explicit open of 'Revoke' from an Approved row (never on hover, focus, prefetch or poll), to name the approval to revoke; while the panel is open, a "Connection lost" recovery completes that read when the network lost it (one audit-free read, see Reconnect and connection recovery below); the queue receipt's Revoke already knows it and reads nothing | audit-free (`require_active_team_member`, Lakebase workflow state) |
 | Assignment release, the Undo (`sales.release_lead_assignment`, `sales.release_distribution`) | `LEAD_UNASSIGN` (borrower entity; `borrower_id`, `assignment_id`, `assigned_to_email`, then `restored_assignment_id` + `restored_to_email` or a closed `restore_skipped_reason`) | once per released borrower; a replayed request id writes nothing and returns the original audit id | committed in the release transaction, fail-closed; the released row is kept (`released_at`), never deleted |
 | Distribution Board dry run (`POST /sales/distribute` with `dry_run`) | none | when the Board opens, or re-plans after a 409 | audit-free: writes no Lakebase row and no audit row; returns per-officer aggregates and a plan fingerprint, never a borrower id |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
@@ -258,7 +258,7 @@ the pull request that ships the behaviour, never earlier.
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
-| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | once per Lead Queue mount once the session is ready (approvers `open`, everyone else `mine`; the keep-alive slot keeps the mount), and an active refetch after a decision, a create or a withdraw (W5d); never polled, never on focus or reconnect | audit-free (Lakebase workflow state, no borrower attribute) |
+| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | once per Lead Queue mount once the session is ready (approvers `open`, everyone else `mine`; the keep-alive slot keeps the mount), and an active refetch after a decision, a create or a withdraw (W5d); never polled, never on focus or reconnect; a "Connection lost" recovery completes a read the network lost (one audit-free read, see Reconnect and connection recovery below) | audit-free (Lakebase workflow state, no borrower attribute) |
 | Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
 | Governed-text refusal (approve, reject, approval-request create, revoke; `governed_text_refusal.refuse_ungoverned_text_audited`) | `GOVERNED_TEXT_REFUSED` | once per attempt whose rationale the governed text screen refuses (owner ruling O1, W5d), before any read; metadata `surface`, `screen` (`pii` / `fair_lending` / `other`) and `item_count` only: no text, no borrower or request id, no pattern | its own Lakebase transaction, fail-closed: the route answers the unchanged 422, or 503 when the row cannot be written (a refusal that was not recorded never answers as recorded) |
 | Follow-ups summary poll (`sales_followups.followups_summary`, W5d) | none | once a minute while the tab is visible, for a session that names an actor; Lakebase only (no warehouse statement), never resolves the audit store or bumps the identity-fallback counter | audit-free |
@@ -287,7 +287,9 @@ after the response is sent, so a second read would add a row with no act
 behind it. The client's one rule (`connectionState.refetchableAfterNetworkLoss`,
 used by both) never re-reads a query whose every served page writes a row
 (`meta.auditedPages`) or one an observer opted out of the reconnect refetch
-(`refetchOnReconnect: false`). Otherwise it completes a read only when:
+(`refetchOnReconnect: false`), unless that query is declared one reviewed
+audit-free read (`meta.oneAuditFreeRead`, below). Otherwise it completes a
+read only when:
 
 - its last attempt never got an HTTP status (`fetch()` rejected, offline or
   unreachable): the request never reached the server and wrote no row; or
@@ -329,18 +331,26 @@ A query is judged by the request that failed. A query that fans out to
 several requests, one of them audited, therefore opts out of both
 recoveries: the Offer detail's snapshot reads `GET /borrowers/{id}`
 (`VIEW_BORROWER`) beside `POST /offers/recommend`, and the borrower read can
-be answered while the recommend never is.
+be answered while the recommend never is. A query that opted out but sends
+one request, to a route on the list, may declare `meta.oneAuditFreeRead`:
+the approval-request list, Genie history and its deep link, and the revoke
+panel's lifecycle read. A reconnect still honours its opt-out; the
+"Connection lost" recovery completes its read when the network lost it, as
+it did before PR #326. The declaration counts only while the request
+that failed is on the list, and `connectionState.test.ts` pins the files
+that make it, so a query that fans out never declares it unreviewed.
 
 So a panel that writes no audit row, and whose query keeps the reconnect
 default, loads by itself once the network returns. That includes the
 Console's "My recent activity", the Admin operations panel, Home's KPI row
 and contactable preview, and the Portfolio builder's preview and campaign
-recommendation. An audited read whose answer lost its body (`VIEW_LEADS`,
-`VIEW_BORROWER`, `VIEW_AUDIT_LEDGER`) has written its row, and it stays in
-its error state until the reader retries or reopens the route; so does a
-query that opted out (the Offer detail, the proof, Genie history, the
-approval-request list, the audit facets, the revoke panel's lifecycle
-read), whose read runs only on an act. A server error (a 500, a warming 503
+recommendation. The opted-out single audit-free reads (above) load by
+themselves once "Connection lost" clears. An audited read whose answer lost
+its body (`VIEW_LEADS`, `VIEW_BORROWER`, `VIEW_AUDIT_LEDGER`) has written
+its row, and it stays in its error state until the reader retries or
+reopens the route; so does any other query that opted out (the Offer
+detail, the proof, the audit facets, the refusal reports), whose read runs
+only on an act. A server error (a 500, a warming 503
 past its retry budget, an unreadable body) is not a network loss, so neither
 recovery retries it; the dependency recovery (`healthRecovery.ts`) still
 re-reads a warming 503 when its dependency comes back. A query that waited

@@ -214,6 +214,8 @@ function GenieHistoryRows({
     retry: false,
     networkMode: 'always',
     refetchOnReconnect: false,
+    // One audit-free GET: "Connection lost" clearing may complete it (connectionState).
+    meta: { oneAuditFreeRead: true },
   });
   // A settled error only: while a reopen's read runs, the rows cached from an
   // earlier open stay on screen instead of the previous open's error.

@@ -167,6 +167,11 @@ describe('refetchOnReconnectAfterNetworkLoss', () => {
     expect(
       refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE }), undefined, optedOut)),
     ).toBe(false);
+    // Unless it is one reviewed audit-free read (meta.oneAuditFreeRead, connectionState.test.ts):
+    // then only "Connection lost" calls this for it, and its failed request must be on the list.
+    const declared = { oneAuditFreeRead: true };
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { path: AUDIT_FREE }), declared, optedOut))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable'), declared, optedOut))).toBe(false);
   });
 });
 

@@ -1,13 +1,22 @@
-import { QueryClient, QueryObserver, type Query } from '@tanstack/react-query';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads source text under Vitest only.
+import { readdirSync, readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
+import { onlineManager, QueryClient, QueryObserver, type Query } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError } from '../lib/apiTransport';
+import { ApiError, getJson } from '../lib/apiTransport';
+import { createMipQueryClient } from '../lib/queryClient';
 import {
   answeredAuditFreeLoss,
   hasAuditedPages,
+  isOneAuditFreeRead,
   neverAnswered,
   optedOutOfReconnect,
   refetchUnreachableQueries,
 } from './connectionState';
+
+declare const process: { cwd(): string };
 
 /**
  * The ONE audited-pages exclusion (W5c, D-audit-reads-a; integrator C16): a
@@ -100,6 +109,135 @@ describe('refetchUnreachableQueries', () => {
     await vi.waitFor(() => expect(plain).toHaveBeenCalledTimes(2));
     expect(snapshot).toHaveBeenCalledTimes(1);
     expect(optedOutAuditFree).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes an opted-out query declared one audit-free read, and only while its failed request is on the list', async () => {
+    // The approval-request list, Genie history and its deep link, and the
+    // revoke panel's lifecycle read opt out of the reconnect refetch but are
+    // one audit-free GET each (meta.oneAuditFreeRead), so "Connection lost"
+    // clearing completes them, as it did before PR #326.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const failing = (path: string, method: string, status: number | null = null) => () =>
+      Promise.reject(new ApiError('unreachable', { path, method, reason: 'unreachable', status }));
+    const listNeverReached = vi.fn(failing('/api/v1/outreach/approval-requests?scope=mine', 'GET'));
+    const historyBodyLost = vi.fn(failing('/api/v1/genie/sessions', 'GET', 200));
+    // Declared, but the request that failed is audited: the declaration is wrong, so it is ignored.
+    const declaredAudited = vi.fn(failing('/api/v1/borrowers/B-P5YP9ESW32R7Z/proof', 'GET'));
+    // The Offer snapshot fans out and declares nothing: still never re-read.
+    const snapshot = vi.fn(failing('/api/v1/offers/recommend', 'POST'));
+    const declared = { meta: { oneAuditFreeRead: true }, refetchOnReconnect: false } as const;
+    for (const observer of [
+      new QueryObserver(client, { queryKey: ['approval-requests'], queryFn: listNeverReached, ...declared }),
+      new QueryObserver(client, { queryKey: ['genie-sessions'], queryFn: historyBodyLost, ...declared }),
+      new QueryObserver(client, { queryKey: ['declared-audited'], queryFn: declaredAudited, ...declared }),
+      new QueryObserver(client, { queryKey: ['snapshot'], queryFn: snapshot, refetchOnReconnect: false }),
+    ]) {
+      cleanups.push(observer.subscribe(() => undefined));
+    }
+    cleanups.push(() => client.clear());
+    await vi.waitFor(() => {
+      for (const key of ['approval-requests', 'genie-sessions', 'declared-audited', 'snapshot']) {
+        expect(client.getQueryState([key])?.status).toBe('error');
+      }
+    });
+
+    refetchUnreachableQueries(client);
+    await vi.waitFor(() => expect(listNeverReached).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(historyBodyLost).toHaveBeenCalledTimes(2));
+    expect(declaredAudited).toHaveBeenCalledTimes(1);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('through the real transport: the approval-request list that never reached the server waits out a reconnect, then "Connection lost" completes it', async () => {
+    let attempts = 0;
+    const fetchMock = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError('Failed to fetch');
+      return new Response(JSON.stringify({ batches: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const list = new QueryObserver(client, {
+      queryKey: ['mip', 'approval-requests', 'mine', 'never-reached'],
+      queryFn: ({ signal }) => getJson('/api/outreach/approval-requests?scope=mine', signal),
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: false,
+      meta: { oneAuditFreeRead: true },
+    });
+    cleanups.push(list.subscribe(() => undefined));
+    cleanups.push(() => {
+      client.unmount();
+      client.clear();
+      onlineManager.setOnline(true);
+      vi.unstubAllGlobals();
+    });
+    await vi.waitFor(() => expect(list.getCurrentResult().status).toBe('error'));
+    const error = list.getCurrentResult().error as ApiError;
+    expect([error.status, error.method]).toEqual([null, 'GET']);
+
+    // A reconnect is not an open: TanStack honours the observer's opt-out.
+    onlineManager.setOnline(false);
+    onlineManager.setOnline(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    refetchUnreachableQueries(client);
+    await vi.waitFor(() => expect(list.getCurrentResult().status).toBe('success'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('isOneAuditFreeRead', () => {
+  const inState = (error: unknown, meta?: Record<string, unknown>) =>
+    ({ state: { error }, meta }) as unknown as Pick<Query, 'state' | 'meta'>;
+  const lost = (path: string, method: string | null = 'GET', status: number | null = null, reason = 'unreachable') =>
+    new ApiError('failed', { path, method, reason, status });
+  const declared = { oneAuditFreeRead: true };
+
+  it('holds only for a declared query whose network-lost request is a reviewed audit-free read', () => {
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/outreach/approval-requests?scope=open'), declared))).toBe(true);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/genie/sessions/conv-1', 'GET', 200), declared))).toBe(true);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/borrowers/B-1/lifecycle', 'GET', null, 'offline'), declared))).toBe(true);
+    // Undeclared, or declared with anything but true.
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/outreach/approval-requests')))).toBe(false);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/outreach/approval-requests'), { oneAuditFreeRead: 'yes' }))).toBe(false);
+    // The failed request is audited, unreviewed, the wrong method, or names no method (fail-closed).
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/borrowers/B-1/proof'), declared))).toBe(false);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/leads?limit=5'), declared))).toBe(false);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/never-reviewed'), declared))).toBe(false);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/outreach/approval-requests', 'POST'), declared))).toBe(false);
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/outreach/approval-requests', null), declared))).toBe(false);
+    // Not a network loss: the recoveries never take it.
+    expect(isOneAuditFreeRead(inState(lost('/api/v1/genie/sessions', 'GET', 503, 'warming_up'), declared))).toBe(false);
+    expect(isOneAuditFreeRead(inState(null, declared))).toBe(false);
+  });
+
+  it('is declared only by the reviewed single audit-free reads', () => {
+    // A query that declares it must send ONE request, to a route on
+    // lib/auditFreeReads: a query that fans out (the Offer snapshot) may have
+    // had an audited request answered beside the one that failed. Adding a
+    // declaration is a review: list the file here.
+    const src = join(process.cwd(), 'src');
+    const declaring = (readdirSync(src, { recursive: true }) as string[])
+      .map((entry) => entry.split('\\').join('/'))
+      .filter((entry) => /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry) && !entry.startsWith('test/'))
+      .filter((entry) => (readFileSync(join(src, entry), 'utf8') as string).includes('oneAuditFreeRead'))
+      .sort();
+    expect(declaring).toEqual([
+      'components/connectionState.ts',
+      'components/mortgage/GenieHistoryMenu.tsx',
+      'components/mortgage/RevokeApprovalPanel.tsx',
+      'routes/ask-genie.deep-link.tsx',
+      'routes/lead-queue.approvalRequests.ts',
+    ]);
+    for (const entry of declaring.filter((path) => path !== 'components/connectionState.ts')) {
+      const text = readFileSync(join(src, entry), 'utf8') as string;
+      expect(text.split('meta: { oneAuditFreeRead: true }').length - 1, entry).toBe(1);
+      expect(text.split('oneAuditFreeRead').length - 1, entry).toBe(1);
+    }
   });
 });
 
