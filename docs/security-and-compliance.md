@@ -237,16 +237,16 @@ the pull request that ships the behaviour, never earlier.
 | Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}`; a reconnect or a "Connection lost" recovery completes it only when its last attempt was never answered (no row yet), never once the server answered it (see Reconnect and connection recovery below) | background, fail-open |
 | Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof`; never on a reconnect or a recovery, answered or not (`useBorrowerProof`: `staleTime: 'static'`, `refetchOnReconnect: false`) | background, fail-open |
 | Proof drawer Math tab: margins and "Crossed the line" (W5c) | none | the margins render from the proof already loaded; the chart reads the Borrower360 from the client cache only (never `GET /borrowers/{id}`, so no extra `VIEW_BORROWER`) and the audit-free `GET /analytics/rate-window` only while the drawer is open for a fixed-rate borrower; nothing is prefetched or read on hover | audit-free |
-| Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry) | background, fail-open |
-| Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
-| Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
+| Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry); never on a reconnect or a "Connection lost" recovery, answered or not: the snapshot reads it beside `POST /offers/recommend`, so this row can be written while the snapshot fails on the recommend that never got an answer, and the snapshot's `refetchOnReconnect: false` keeps it out of both recoveries (see Reconnect and connection recovery below) | background, fail-open |
+| Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP; never on a reconnect or a recovery (the snapshot, above) | synchronous, fail-closed (503) |
+| Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`); never on a reconnect or a recovery (the draft query sets `refetchOnReconnect: false`) | committed in the same transaction as the draft row, fail-closed |
 | Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
 | Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke; a rationale the governed text screen refuses writes `GOVERNED_TEXT_REFUSED` (surface `revoke`) instead, and a refused revoke (409 with its `reason`) writes nothing | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
 | Lead Queue revoke panel lifecycle read (`GET /borrowers/{id}/lifecycle`, W5e) | none | only on an explicit open of 'Revoke' from an Approved row (never on hover, focus, prefetch or poll), to name the approval to revoke; the queue receipt's Revoke already knows it and reads nothing | audit-free (`require_active_team_member`, Lakebase workflow state) |
 | Assignment release, the Undo (`sales.release_lead_assignment`, `sales.release_distribution`) | `LEAD_UNASSIGN` (borrower entity; `borrower_id`, `assignment_id`, `assigned_to_email`, then `restored_assignment_id` + `restored_to_email` or a closed `restore_skipped_reason`) | once per released borrower; a replayed request id writes nothing and returns the original audit id | committed in the release transaction, fail-closed; the released row is kept (`released_at`), never deleted |
 | Distribution Board dry run (`POST /sales/distribute` with `dry_run`) | none | when the Board opens, or re-plans after a 409 | audit-free: writes no Lakebase row and no audit row; returns per-officer aggregates and a plan fingerprint, never a borrower id |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
-| Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
+| Console "My recent activity" (`audit.list_my_events`) | none | every read; a recovery completes a read whose answer lost its body (it is on the reviewed audit-free list) | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
 | Borrower decision history (`borrower_decisions.list_borrower_decisions`) | none | on a Borrower 360 or Offer mount; never polled or prefetched | audit-free |
 | Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor; the explorer reads its facets only on an explicit Action / Event type menu open (W5d), never on load, hover or focus; with 'Exclude my ledger reads' the read still writes its own row | background, fail-open (`audit.dropped`) |
@@ -285,30 +285,55 @@ never re-read data already on screen, and never re-read an audited read the
 server answered: the backend writes its VIEW_* row in a background task
 after the response is sent, so a second read would add a row with no act
 behind it. The client's one rule (`connectionState.refetchableAfterNetworkLoss`,
-used by both) completes a read only when:
+used by both) never re-reads a query whose every served page writes a row
+(`meta.auditedPages`) or one an observer opted out of the reconnect refetch
+(`refetchOnReconnect: false`). Otherwise it completes a read only when:
 
 - its last attempt never got an HTTP status (`fetch()` rejected, offline or
   unreachable): the request never reached the server and wrote no row; or
 - the server answered and the network then lost the body (a 200 whose
   connection dropped mid-transfer fails offline or unreachable but keeps its
-  status), and the path is a reviewed audit-free GET
-  (`frontend/src/lib/auditFreeReads.ts`). A path not on that list counts as
-  audited. `tests/unit/test_audit_free_reads_registry.py` pins every entry
-  as a mounted GET route whose dependencies take neither the audit store
-  nor a background task, and checks that no audited GET route matches one.
+  status), and the method and path name a reviewed audit-free read
+  (`frontend/src/lib/auditFreeReads.ts`: GET routes, and POST reads such as
+  Ask Genie's starters, `POST /genie/start`). Any other method and path count
+  as audited, and so does an error that records no method.
+  `tests/unit/test_audit_free_reads_registry.py` pins every entry by calling
+  it on the mounted app with the audit store and the Lakebase client
+  recording, through their dependency overrides and their factory
+  singletons: the call must answer 2xx and write no audit row (no store
+  write, no `INSERT INTO mip_app.action_audit` statement) and queue no
+  background task. Its controls show each channel is seen (`GET /leads`, the
+  raw-SQL `POST /workspace/saved-views`, and body-level factory writes). It
+  also checks that no route outside the list serves a path an entry matches,
+  by unifying route templates segment by segment per method, and keeps the
+  dependency walk: no entry takes a background task, and only the reviewed
+  ledger reads (`/audit/my-events`, `/admin/operations`, which list the
+  ledger and write nothing) take the audit store. The warehouse
+  repositories run as the suite's in-process fakes there, so a write added
+  inside a production repository on a read path is left to the walk and
+  review.
+
+A query is judged by the request that failed. A query that fans out to
+several requests, one of them audited, therefore opts out of both
+recoveries: the Offer detail's snapshot reads `GET /borrowers/{id}`
+(`VIEW_BORROWER`) beside `POST /offers/recommend`, and the borrower read can
+be answered while the recommend never is.
 
 So a panel that writes no audit row loads by itself once the network
-returns. An audited read whose answer lost its body (`VIEW_LEADS`,
+returns, the Console's "My recent activity" and the Admin operations panel
+included. An audited read whose answer lost its body (`VIEW_LEADS`,
 `VIEW_BORROWER`, `VIEW_AUDIT_LEDGER`) has written its row, and it stays in
-its error state until the reader retries or reopens the route. A server
-error (a 500, a warming 503 past its retry budget, an unreadable body) is
-not a network loss, so neither recovery retries it; the dependency recovery
-(`healthRecovery.ts`) still re-reads a warming 503 when its dependency comes
-back. The Lead Queue paged view (`meta.auditedPages`) and the proof are
-never re-read by either. A query that waited offline (paused) resumes on its
-own. One residual, as on main: a request that reached the server and lost
-its connection before any response header arrived looks to the client like
-one that was never sent, so a recovery completes it.
+its error state until the reader retries or reopens the route; so does a
+query that opted out (the Offer detail, the proof, Genie history, the
+approval-request list, the audit facets, the revoke panel's lifecycle
+read), whose read runs only on an act. A server error (a 500, a warming 503
+past its retry budget, an unreadable body) is not a network loss, so neither
+recovery retries it; the dependency recovery (`healthRecovery.ts`) still
+re-reads a warming 503 when its dependency comes back. A query that waited
+offline (paused) resumes on its own. One residual, as on main: a request
+that reached the server and lost its connection before any response header
+arrived looks to the client like one that was never sent, so a recovery
+completes it.
 
 Governed-text refusals (owner ruling O1, built in W5d `w5-lq-requests-binding`).
 A rationale or justification the governed text screen (PII or fair-lending)
