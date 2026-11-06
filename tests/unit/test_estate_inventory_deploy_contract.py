@@ -130,15 +130,18 @@ def test_the_inventory_check_runs_before_the_lease_and_the_plan_exit() -> None:
 
 def test_every_audit_call_is_agentic_only_and_carries_the_self_view_credential() -> None:
     script = deploy_contract_text()
-    boundary = script.index("# >>> core tier: activation boundary >>>")
+    # M2-PR7b's tier split: deploy.sh sources the agentic provisioning slice in
+    # the agentic branch only; the core tier takes the core activation slice.
+    split = script.index("# Steps 10b-11 by tier (M2-PR7b).")
+    core = script.index("# >>> core tier: activation and capture >>>")
     calls = [match.start() for match in re.finditer(re.escape(AUDIT), script)]
 
     assert len(calls) == 2
     early, provisioning = calls
-    # Before the lease boundary only inside the agentic branch; the other after the core stop.
+    # Before the lease only inside the agentic branch; the other in the agentic branch of the tier split.
     branch = script.rindex("if tier_is_agentic; then", 0, early)
     assert script.index("core tier: no agent-runtime UC audit", branch) > early
-    assert boundary < provisioning
+    assert script.index("if tier_is_agentic; then", split) < provisioning < core
     for start in calls:
         invocation = script[script.rindex("run_with_account_identity", 0, start) : script.index("\n", start)]
         assert "run_with_agent_runtime_credentials" in invocation
@@ -148,7 +151,9 @@ def test_every_audit_call_is_agentic_only_and_carries_the_self_view_credential()
 def test_a_core_dry_run_plans_no_inventory_and_no_audit(tmp_path: Path) -> None:
     code, out, err = _plan(tmp_path, core_tier_profile())
 
-    assert code == 2, out[-2000:] + err[-2000:]
+    # M2-PR7b lifted the core release refusals: a core dry run plans to the end.
+    assert code == 0, out[-2000:] + err[-2000:]
+    assert "core tier: skip the agentic provisioning" in out, "it reached the core activation slice"
     for absent in ("estate inventory", "inventory_check", "audit_agent_runtime_foreign_uc_access", "retired:"):
         assert absent not in out + err, absent
 
