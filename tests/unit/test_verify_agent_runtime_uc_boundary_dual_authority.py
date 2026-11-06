@@ -12,6 +12,10 @@ from tools.databricks.agent_runtime_uc_baseline import (
 )
 
 APPLICATION_ID = "runtime-client"
+# The owner's estate inventory and the runtime's self-view client (M4-PR1),
+# loaded by the CLI right before each control-plane audit.
+INVENTORY = SimpleNamespace(name="estate-inventory")
+SELF_VIEW = SimpleNamespace(name="runtime-self-view")
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +38,20 @@ def _lifecycle_proof(**changes: object) -> SimpleNamespace:
     }
     values.update(changes)
     return SimpleNamespace(**values)
+
+
+@pytest.fixture(autouse=True)
+def _stub_estate_inputs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    loads: list[str] = []
+    monkeypatch.setattr(
+        dual,
+        "load_audit_inputs",
+        lambda _workspace, **kwargs: loads.append(kwargs["identity"]) or (INVENTORY, SELF_VIEW),
+    )
+    monkeypatch.setattr(
+        dual, "load_audit_inventory", lambda _workspace, **_kwargs: loads.append("reload") or INVENTORY
+    )
+    return loads
 
 
 @pytest.fixture(autouse=True)
@@ -111,12 +129,13 @@ def _proof() -> ControlPlaneForeignCatalogProof:
 
 def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
     monkeypatch: pytest.MonkeyPatch,
+    _stub_estate_inputs: list[str],
 ) -> None:
     admin = SimpleNamespace(config=SimpleNamespace(host="https://workspace.example.invalid"))
     runtime = SimpleNamespace(name="runtime")
     clients = iter([admin, runtime])
     events: list[tuple[str, object]] = []
-    policies: list[str] = []
+    inputs: list[tuple[object, object]] = []
     lifecycle_calls: list[dict[str, object]] = []
     lifecycle_proof = _lifecycle_proof()
     monkeypatch.setattr(dual, "WorkspaceClient", lambda: next(clients))
@@ -126,7 +145,7 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
         dual,
         "audit_foreign_uc_access",
         lambda workspace, **kwargs: (
-            policies.append(kwargs["foreign_catalog_binding_policy"])
+            inputs.append((kwargs["inventory"], kwargs["self_view"]))
             or events.append(("control", (workspace, kwargs["account_factory"]())))
             or _proof()
         ),
@@ -163,10 +182,6 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
     monkeypatch.setenv("DATABRICKS_TOKEN", "deployer-token")
     monkeypatch.setenv("DATABRICKS_ACCOUNT_CLIENT_ID", "account-client")
     monkeypatch.setenv("DATABRICKS_ACCOUNT_CLIENT_SECRET", "account-secret")
-    monkeypatch.setenv(
-        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY",
-        '{"version":1,"catalogs":{}}',
-    )
 
     assert dual.main(_args()) == 0
 
@@ -193,10 +208,9 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
     assert "DATABRICKS_TOKEN" not in dual.os.environ
     assert dual.os.environ["DATABRICKS_CLIENT_ID"] == APPLICATION_ID
     assert dual.os.environ["DATABRICKS_AUTH_TYPE"] == "oauth-m2m"
-    assert policies == [
-        '{"version":1,"catalogs":{}}',
-        '{"version":1,"catalogs":{}}',
-    ]
+    # Both audits rely on the inventory, recomputed before each, and the one runtime self-view.
+    assert inputs == [(INVENTORY, SELF_VIEW), (INVENTORY, SELF_VIEW)]
+    assert _stub_estate_inputs == ["runtime", "reload"]
 
 
 def test_dual_authority_cli_never_binds_runtime_when_control_plane_fails(

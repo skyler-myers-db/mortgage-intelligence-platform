@@ -2505,6 +2505,166 @@ MIP_UC_METASTORE_OWNER=
 MIP_ACCEPTED_EXPOSURE_JSON=
 ```
 
+### Estate inventory (agentic tier, M4-PR1)
+
+The agentic tier's foreign UC audit
+(`tools/databricks/audit_agent_runtime_foreign_uc_access.py`) no longer needs
+the deployer to own the metastore. What only a metastore owner can read comes
+from the **estate inventory**, which the owner takes, and the agent identity's
+own view of Unity Catalog checks it. The core tier runs no foreign UC audit and
+needs no inventory: a core run reads none of the names below and its dry-run
+transcript is byte-identical to the one before this change.
+
+**Taking it (the owner, as the metastore's direct owner, read-only).** At most
+29 days before the agentic run that relies on it (the inventory expires at 30
+days, and the run's pre-lease check allows for the run's own 24 h):
+
+```bash
+python -m tools.clients.estate_inventory --out ~/mip-estate/<client>.json \
+  [--catalog mip] [--bound-workspace-profile <cli-profile> ...]
+```
+
+The install workspace is the ambient Databricks auth, as the owner
+(`DATABRICKS_CONFIG_PROFILE=<the owner's profile on the install workspace>`, or
+`DATABRICKS_HOST` and its credentials); the tool refuses unless that caller
+owns the metastore directly. It lists every catalog with `include_unbound`,
+binding-denied ones included,
+with its type, isolation mode, owner and workspace bindings, and below each
+foreign catalog the owner of every schema, table, function, volume and
+registered model (`information_schema` apart). A catalog bound only to other
+workspaces is read only through a `--bound-workspace-profile` on one of them,
+as the same owner: what the install workspace answers for it is never trusted,
+because an empty answer there could be the binding itself. With no such
+profile, or when a read is refused, the catalog is recorded as a gap. The
+account plane (the deploy's `DATABRICKS_ACCOUNT_*` credential, exported for
+the run) classifies every workspace assigned to the metastore, and a deleted
+one is recorded with the exact sha256 of what its assignment listing returns
+(or that it no longer lists). The document is validated by the deploy's own
+parser before it is written, so a refused one never is; the file is written
+mode 0600, atomically and never through a symlink. The tool prints counts, gap
+counts and the `estate` digest, never a catalog, owner or id: a refusal of its
+own prints its line, and any other error (a Databricks API, HTTP or file
+error) only its class and its error code (an OS error's errno name, never its
+free-text `strerror`), because its text can name another team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
+calls are pinned to a reviewed set of gets and lists, statically
+(`tests/unit/test_bootstrap_account_safety.py`) and by a run-time spy on every
+test path (`tests/unit/test_estate_inventory.py`). The static scan reads the
+collector and the CLI under every name they give an owner client: an SDK API
+is called where it is reached, never aliased, passed on or looked up by
+reflection, and the one function outside them that is handed a client
+(`authoritative_workspace_id`) may only read the workspace id. It is a review
+gate on those files, not a sandbox. Exit 0: written, no gap; 3:
+written with gaps (the deploy refuses it); 4: written, but printing its
+summary failed (a closed stdout, as under `| head`): run `--summarize` on it;
+2: refused, nothing written.
+
+**Giving it to a run.** The inventory names other teams' catalogs and
+principals, so it is identifying: store the file's content as the client's
+`MIP_ESTATE_INVENTORY_JSON` GitHub Environment **secret** (GitHub's limit is
+48 KB; the tool warns past it), or point `MIP_ESTATE_INVENTORY_FILE` at a
+regular file the caller owns, mode 0600. Exactly one of the two, from the
+process environment only, never `.env.local`. The owner hardware-key `estate`
+attestation (plan 4.2) is deferred (M1-PR5), so the run must be handed the
+exact digest instead, as a one-run shell export (or, in CI, a workflow input
+mapped to it), never a `.env.local` line:
+
+```bash
+MIP_ESTATE_INVENTORY_FILE=~/mip-estate/<client>.json \
+MIP_ACK_ESTATE_INVENTORY=<the estate sha256 the tool printed> \
+  ./scripts/deploy.sh -t client
+```
+
+The digest covers the domain-separated canonical document, which names its
+purpose (`estate`), so no other ack (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`, the
+quiesce window, a handover plan) can satisfy it. A digest is not a signature:
+it proves the operator acknowledged this exact inventory, not who took it, and
+no check here pretends to verify a hardware-key signature or a trust root
+(deferred, M1-PR5). The deploy-dev workflow is parked; the per-client
+environment (M1-PR7) maps the secret into the deploy step's environment and
+the ack from a dispatch input.
+
+**What refuses.** In the agentic tier, before the lease and the `--phase plan`
+exit, `tools/databricks/estate/inventory_check.py` loads the inventory exactly
+as every audit will, judging its age at the end of the run's 24 h margin (so
+it admits an inventory at most 29 days old, which cannot expire before the
+run's last audit), and
+prints its counts and digest. Every audit recomputes the digest right before it
+relies on the inventory. Any of these refuses:
+
+- the retired `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` is set (below);
+- no inventory, both sources, or a file that is not a private regular file;
+- no ack, a malformed one, or one that is not this inventory's estate digest;
+- `issued_at` in the future, or more than 30 days before the check (the
+  pre-lease check judges at the end of the run's margin, so it refuses one more
+  than 29 days old);
+- another metastore, install workspace or install catalog;
+- any gap;
+- a catalog the deployer or the agent identity can see that the inventory
+  lacks, or lists with another owner, type or isolation mode (it is stale:
+  take it again); a binding-denied catalog the identity can see;
+- an object the identity can see whose owner the inventory does not list;
+- foreign ownership, which is never acceptable: any owner of a binding-denied
+  catalog or anything below it that is the runtime or proxy, one of their
+  groups or `account users`, and any owner of an accessible foreign catalog or
+  anything below it that `ApprovedOwnerPolicy` refuses for the identity;
+- a workspace assigned to the metastore that the account plane no longer has,
+  unless the inventory's exact defunct entry matches what its assignment
+  listing returns now; whatever it still lists gets the same assignment audit
+  as a live workspace, so an entry never admits the identity there;
+- any API refusal, which is never read as absent (the account plane's
+  `workspaces.get`, the identity's catalog, model or effective-permission
+  reads).
+
+**What is judged as of the inventory.** Only a metastore admin or a catalog's
+owner can read its workspace bindings, and neither the deployer nor the agent
+identity is either, so a catalog's bound workspace ids come from the
+inventory, at most 30 days old (the pre-lease check admits at most 29 days,
+so it cannot expire during the run); its owner, type and isolation mode are
+re-read live and compared. Two things follow. The `binding` field of an
+accepted-exposure entry (plan 4.12) is matched against the inventory's
+bindings, so a catalog rebound while it stays `ISOLATED` still matches until
+the inventory is taken again; and the proof's binding-denial evidence carries
+the inventory's bindings. A catalog whose isolation mode changes refuses (the
+inventory is stale). A catalog that is rebound into the install workspace and
+becomes visible to the identity still refuses, and the identity's workspace
+assignments, read live on the account plane, still confine it to the install
+workspace. `tests/unit/test_estate_inventory_audit.py` pins all three.
+
+**The self-view.** The audit reads the runtime's (or the proxy's) effective
+privileges as that identity, with its own OAuth credential, on every catalog it
+can browse and everything below each foreign one, through its accepted-exposure
+matcher. Spikes owed: S0(a), whether an identity's own `get_effective` is
+answered (a refusal refuses, so the agentic tier stays off until it is), and
+S0(c), whether an identity sees what it owns without `USE_CATALOG`. The design
+assumes the worst case, which is why ownership comes from the inventory: a
+runtime-owned table behind a revoked `USE_CATALOG` is still refused. A grant
+(not ownership) on an object whose catalog the identity cannot see is neither
+in the inventory nor read by the audit: it is inert without `USE_CATALOG` on
+that catalog. If another team later grants `USE_CATALOG` there (to the
+identity, one of its groups or `account users`), the grant can become usable
+in the running App with no deploy, and it is refused only at the next agentic
+deploy, when the self-view can see it. The metastore-owner audit refused such a
+grant while it was still inert; it accepted the same residual for
+binding-denied catalogs, whose grants it never read.
+
+**The retired binding policy.** `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` was an
+exact contract on the binding-denied catalogs; the inventory now carries them,
+taken by the owner at most 30 days before the run and acknowledged by its
+exact `estate` digest on each run. Set to anything non-blank, it refuses in the
+agentic tier (it could only have made the audit stricter than the inventory)
+and is one notice in the core tier, which never audited with it. It is never
+exported to a tool again, and the loader refuses it too. The binding
+remediation tooling that also read it stays until M4-PR2 removes it; nothing
+new depends on it.
+
+**Owner patch: `.env.example`.** Agents cannot edit the template. Remove this
+line (the inventory, its file path and its ack are environment-only and add no
+line):
+
+```diff
+-MIP_UC_FOREIGN_CATALOG_BINDING_POLICY=
+```
+
 ### Bundle plan gate (read-only, before the lease)
 
 `./scripts/deploy.sh` renders the SQL and validates the bundle right after the
@@ -4133,14 +4293,15 @@ would cut the live App off, or fail closed:
 | `reconcile_historical_agent_endpoints cleanup` (step 10b, "attest and retire every unrelated historical runtime endpoint") | every serving endpoint and Supervisor agent the agent-runtime identity created | deletes each one outside the preserved pins, with its query groups, but only after attesting the whole inventory. An endpoint whose signed Gateway contract names another catalog or Genie space fails that attestation (`signed identity or scope drifted`), so a runtime shared with the live install fails closed here before any delete |
 | `audit_global_m2m_access --genie-space-id` (`agent_runtime_access.audit_global_genie_access`, the runtime's re-audits) | every Genie space in the workspace, read-only | fails closed unless the agent runtime holds `CAN_RUN` on exactly this install's space and nothing else; a runtime shared with the live install holds the live space |
 | `assert_lakebase_role_scope`, `assert_no_warehouse_access`, the other global M2M audits | the whole workspace, read-only | fail closed if a shared identity holds access elsewhere |
-| `audit_agent_runtime_foreign_uc_access` (step 4 before the Lakebase bootstrap, step 10b before runtime-owned UC mutations, and after any foreign-catalog remediation) | every catalog in the metastore except this install's, read-only | fails closed on any agent-runtime privilege there (a runtime shared with the live install holds the live catalog's grants) and on any foreign catalog granting to `account users` (owner step 7) |
+| `audit_agent_runtime_foreign_uc_access` (agentic tier only: step 4 before the Lakebase bootstrap, step 10b before runtime-owned UC mutations) | every catalog in the metastore except this install's, read-only: the owner's estate inventory plus the runtime's own view ("Estate inventory") | fails closed on any agent-runtime privilege there (a runtime shared with the live install holds the live catalog's grants), on any foreign catalog granting to `account users` the profile does not accept (owner step 7), and on any foreign ownership |
 
 So each install needs its own seven identities (owner step 1), and a second
 install in the live install's metastore still meets the metastore-wide UC
 audit: every `OPEN` catalog, the live install's included, must grant the
 runtime nothing, and every catalog `ISOLATED` away from the install's
-workspace must match `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` exactly (owner
-step 7).
+workspace must be in the owner's estate inventory, with no runtime, proxy,
+group or `account users` ownership below it (owner step 7; "Estate
+inventory").
 
 **The App release folder on a CI install.** The release lives at
 `/Workspace/Users/<deployer-application-id>/.bundle/mortgage-intelligence-platform/<target>/app-src/<release id>`
@@ -4365,12 +4526,13 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
                   | [$c, $o, (.privileges | join(","))] | @tsv'
          done
      ```
-   - **Binding policy (a GitHub-settings action, no UC change).** The audit
+   - **Estate inventory (an owner action, no UC change).** The audit
      accepts a catalog `ISOLATED` away from the CI install's workspace only
-     if it matches the CI environment's `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY`
-     exactly (owner, catalog type, isolation mode, bound workspace ids,
-     binding types). Set the policy from a read-only inventory of their
-     current state, never the other way round.
+     as the owner's estate inventory records it (owner, catalog type,
+     isolation mode, bound workspace ids, binding types, and who owns what
+     below it), taken read-only as the metastore owner at most 30 days
+     before the run ("Estate inventory"). The retired
+     `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` refuses when set.
    - **Workspace-scoped, in the CI install's workspace only:** Genie spaces
      that grant a group the CI identities belong to, such as workspace
      `users` (the runtime, verifier and App Genie audits fail on any group
