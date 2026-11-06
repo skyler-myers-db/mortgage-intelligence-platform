@@ -15,10 +15,12 @@
  *   stale before it compares time, and shouldFetchOptionally then refetches
  *   on an enabled false -> true flip or a key change regardless of
  *   refetchOnMount (queryObserver.js).
- * - refetchOnMount / refetchOnReconnect / refetchOnWindowFocus false: the
- *   global client's reconnect default (refetchOnReconnectIfNeverServed)
- *   still completes a read that never reached the server, and a proof read
- *   that failed must wait for an explicit act too.
+ * - refetchOnMount / refetchOnReconnect / refetchOnWindowFocus false: say
+ *   the same explicitly. 'static' alone already keeps the query out of every
+ *   mount, reconnect and focus refetch (shouldFetchOn), with data or with an
+ *   error; the global reconnect default (refetchOnReconnectIfNeverServed)
+ *   would otherwise complete a proof read that was never answered, and that
+ *   must wait for an explicit act too.
  * - Retries stay at the client default: a warming 503 writes no audit row.
  *
  * A cache read is this hook with `enabled` false: it observes the cached
