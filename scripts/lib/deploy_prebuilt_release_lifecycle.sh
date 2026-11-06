@@ -11,7 +11,8 @@
 # Each check also re-derives the staged App source from this checkout's own
 # commit (git blobs, byte for byte) and reviews the dist again: the build job
 # runs npm, so only the dist's bytes are taken from it.
-# A tenant build input vite bakes into the dist refuses (see below).
+# A tenant build input vite bakes into the dist refuses (see below), before
+# any Databricks call and again in step 1.
 # Sourced by scripts/deploy.sh; this file must not change shell options or traps.
 
 PREBUILT_RELEASE_REQUIREMENTS="requirements-deploy.hashes.txt"
@@ -23,6 +24,20 @@ PREBUILT_RELEASE_REQUIREMENTS="requirements-deploy.hashes.txt"
 # configured mark, or another theme or accent, refuses and builds locally.
 PREBUILT_RELEASE_DEFAULT_THEME="dark"
 PREBUILT_RELEASE_DEFAULT_ACCENT="bright"
+
+# $1 the lender mark (its file before the preflight, its sha256 after), $2
+# the theme and $3 the accent (empty is the default), $4 what was changed.
+refuse_prebuilt_tenant_build_inputs() {
+  if [[ -n "$1" ]]; then
+    echo "${RED}[deploy] a lender mark is configured, and a prebuilt release carries none (the mark is a local file); build this release locally. $4${RST}" >&2
+    exit 2
+  fi
+  if [[ "${2:-$PREBUILT_RELEASE_DEFAULT_THEME}" != "$PREBUILT_RELEASE_DEFAULT_THEME" || \
+        "${3:-$PREBUILT_RELEASE_DEFAULT_ACCENT}" != "$PREBUILT_RELEASE_DEFAULT_ACCENT" ]]; then
+    echo "${RED}[deploy] a tenant default theme or accent is configured, and a prebuilt release wears the product defaults (vite bakes both into the dist; the build job sets neither); build this release locally. $4${RST}" >&2
+    exit 2
+  fi
+}
 
 prebuilt_release_args() {
   printf '%s\n' --root "${PREBUILT_RELEASE_DIR:-}" --git-sha "$SOURCE_GIT_SHA" \
@@ -37,6 +52,11 @@ verify_prebuilt_release() {
     echo "${RED}[deploy] --prebuilt-release needs MIP_PREBUILT_RELEASE_SHA256, the 64-hex sha256 of its manifest that the build job printed; refusing before any Databricks call.${RST}" >&2
     exit 2
   fi
+  # The preflight's own reads of the three inputs: a live run must not reach
+  # the lease, the rollback scope or the runtime secrets first.
+  refuse_prebuilt_tenant_build_inputs "$(deployment_control_value MIP_LENDER_MARK_FILE)" \
+    "$(deployment_control_value MIP_DEFAULT_THEME)" "$(deployment_control_value MIP_DEFAULT_ACCENT)" \
+    "Refusing before any Databricks call; nothing was changed."
   mapfile -t args < <(prebuilt_release_args)
   echo "${DIM}\$ $PYTHON -m tools.databricks.prebuilt_release verify --root <prebuilt release> --git-sha ${SOURCE_GIT_SHA} ...${RST}"
   if ! "$PYTHON" -m tools.databricks.prebuilt_release verify "${args[@]}"; then
@@ -49,15 +69,9 @@ verify_prebuilt_release() {
 # release again, then copy its dist and staged closure where both would land.
 install_prebuilt_release() {
   local -a args=()
-  if [[ -n "${MIP_LENDER_MARK_SHA256:-}" ]]; then
-    echo "${RED}[deploy] a lender mark is configured, and a prebuilt release carries none (the mark is a local file); build this release locally. Nothing more was changed.${RST}" >&2
-    exit 2
-  fi
-  if [[ "${MIP_DEFAULT_THEME:-$PREBUILT_RELEASE_DEFAULT_THEME}" != "$PREBUILT_RELEASE_DEFAULT_THEME" || \
-        "${MIP_DEFAULT_ACCENT:-$PREBUILT_RELEASE_DEFAULT_ACCENT}" != "$PREBUILT_RELEASE_DEFAULT_ACCENT" ]]; then
-    echo "${RED}[deploy] a tenant default theme or accent is configured, and a prebuilt release wears the product defaults (vite bakes both into the dist; the build job sets neither); build this release locally. Nothing more was changed.${RST}" >&2
-    exit 2
-  fi
+  # Defence in depth: the values the preflight resolved and exported.
+  refuse_prebuilt_tenant_build_inputs "${MIP_LENDER_MARK_SHA256:-}" "${MIP_DEFAULT_THEME:-}" "${MIP_DEFAULT_ACCENT:-}" \
+    "Nothing more was changed."
   mapfile -t args < <(prebuilt_release_args)
   echo "${DIM}\$ $PYTHON -m tools.databricks.prebuilt_release install --root <prebuilt release> --git-sha ${SOURCE_GIT_SHA} ... --dist-out frontend/dist --stage-out ${APP_RELEASE_STAGE_ROOT}${RST}"
   if [[ "$DRY_RUN" -eq 1 ]]; then

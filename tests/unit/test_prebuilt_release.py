@@ -378,6 +378,34 @@ def test_a_prebuilt_release_that_differs_refuses_before_any_databricks_call(tmp_
     assert not log.exists() or log.read_text(encoding="utf-8") == "", "refused before any Databricks call"
 
 
+@pytest.mark.parametrize(
+    ("source", "name", "value", "refusal"),
+    (
+        ("shell", "MIP_DEFAULT_ACCENT", "navy", "a tenant default theme or accent is configured"),
+        (".env.local", "MIP_DEFAULT_THEME", "light", "a tenant default theme or accent is configured"),
+        ("shell", "MIP_LENDER_MARK_FILE", "/nonexistent/lender-mark.svg", "a lender mark is configured"),
+    ),
+)
+def test_a_tenant_build_input_refuses_a_prebuilt_release_before_any_databricks_call(
+    tmp_path: Path, source: str, name: str, value: str, refusal: str
+) -> None:
+    """Read as the preflight reads it, next to the re-hash: a live run never reaches the lease, the scope or the secrets."""
+
+    checkout, env, log, root, digest = _sandbox_release(tmp_path)
+    tenant = {name: value} if source == "shell" else {}
+    if source == ".env.local":
+        with (checkout / ".env.local").open("a", encoding="utf-8") as dotenv:
+            dotenv.write(f"{name}={value}\n")
+
+    result = _deploy(checkout, {**env, **tenant, "MIP_PREBUILT_RELEASE_SHA256": digest}, "--prebuilt-release", str(root))
+
+    assert result.returncode == 2, result.stdout[-2000:] + result.stderr[-2000:]
+    assert f"{refusal}" in result.stderr and "Refusing before any Databricks call; nothing was changed." in result.stderr
+    out = ANSI.sub("", result.stdout)
+    assert "profile resolved" not in out and "[prebuilt-release] verified" not in out, "before the preflight's first step"
+    assert not log.exists() or log.read_text(encoding="utf-8") == "", "not even the CLI version check"
+
+
 def _step_one(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """install_prebuilt_release, sourced alone, as step 1 runs it in a dry run."""
 

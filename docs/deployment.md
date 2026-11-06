@@ -316,11 +316,16 @@ the staged closure with its manifest. `deploy-dev.yml` uses it so that its
 - Step 1 re-hashes it again, replaces `frontend/dist` and
   `.databricks/app-release` whole with copies, re-hashes the copies and reads
   the release id from the staged manifest as usual (`app_release_contract
-  release-id --expected-commit`). No npm runs, the frontend dependency check
-  is skipped, and every tenant build input vite bakes into the dist refuses:
-  a configured lender mark (a local file the build job cannot see) and a
-  `MIP_DEFAULT_THEME` or `MIP_DEFAULT_ACCENT` other than the product default
-  (`dark`, `bright`), which the build job never sets. Such a release builds
+  release-id --expected-commit`). No npm runs, and the frontend dependency
+  check is skipped.
+- Every tenant build input vite bakes into the dist refuses a prebuilt
+  release: a configured lender mark (`MIP_LENDER_MARK_FILE`, a local file the
+  build job cannot see) and a `MIP_DEFAULT_THEME` or `MIP_DEFAULT_ACCENT`
+  other than the product default (`dark`, `bright`), which the build job
+  never sets. The first re-hash reads all three as the preflight does (shell,
+  then `.env.local`) and refuses before any Databricks call, so a live run
+  never reaches the lease, the rollback scope or the runtime secrets; step 1
+  checks the preflight's resolved values again. Such a release builds
   locally.
 
 ## Emergency recovery: a slim per-release App source folder
