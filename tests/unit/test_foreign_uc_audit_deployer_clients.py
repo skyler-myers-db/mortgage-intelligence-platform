@@ -35,6 +35,9 @@ from tools.databricks import verify_agent_runtime_uc_boundary_dual_authority as 
 from tools.databricks.github_oidc_auth import CachedGitHubOidcCredentials
 
 _REQUESTS_PER_AUDIT = 32
+_AUDIT_ARGS = [
+    "--application-id", "runtime", "--expected-inventory-principal", "p", "--exposure-identity", "runtime",
+]  # fmt: skip
 _DEPLOYER_PROFILE_BUILD = {
     "profile": "DEFAULT",
     "host": WORKSPACE_HOST,
@@ -80,8 +83,10 @@ def test_audit_cli_makes_one_exchange_for_every_worker_request(
 
     monkeypatch.setattr(auditor, "install_probe_deadlines", lambda **_kwargs: None)
     monkeypatch.setattr(auditor, "audit_foreign_uc_access", audit)
+    monkeypatch.setattr(auditor, "load_audit_inputs", lambda *_args, **_kwargs: (object(), object()))
+    monkeypatch.setattr(auditor, "identity_matcher", lambda _identity: None)
 
-    assert auditor.main(["--application-id", "runtime", "--expected-inventory-principal", "p"]) == 0
+    assert auditor.main(_AUDIT_ARGS) == 0
 
     (workspace,) = audited
     assert workspace.config.auth_type == "github-oidc"
@@ -103,8 +108,10 @@ def test_audit_cli_keeps_the_pat_binding_and_its_read_timeout(
     monkeypatch.setattr(
         auditor, "audit_foreign_uc_access", lambda workspace, **_kwargs: audited.append(workspace)
     )
+    monkeypatch.setattr(auditor, "load_audit_inputs", lambda *_args, **_kwargs: (object(), object()))
+    monkeypatch.setattr(auditor, "identity_matcher", lambda _identity: None)
 
-    assert auditor.main(["--application-id", "runtime", "--expected-inventory-principal", "p"]) == 0
+    assert auditor.main(_AUDIT_ARGS) == 0
 
     (workspace,) = audited
     assert (workspace.config.auth_type, workspace.config.token) == ("pat", "operator-pat")
@@ -137,6 +144,8 @@ def test_proxy_dual_authority_admin_makes_one_exchange_across_both_audits(
         return proxy_tests._proof()
 
     monkeypatch.setattr(proxy_dual, "audit_foreign_uc_access", audit)
+    monkeypatch.setattr(proxy_dual, "load_audit_inputs", lambda *_args, **_kwargs: (object(), object()))
+    monkeypatch.setattr(proxy_dual, "load_audit_inventory", lambda *_args, **_kwargs: object())
     verified: list[Any] = []
     monkeypatch.setattr(
         proxy_dual,
@@ -187,6 +196,8 @@ def test_runtime_dual_authority_admin_makes_one_exchange_across_both_audits(
         return runtime_tests._proof()
 
     monkeypatch.setattr(runtime_dual, "audit_foreign_uc_access", audit)
+    monkeypatch.setattr(runtime_dual, "load_audit_inputs", lambda *_args, **_kwargs: (object(), object()))
+    monkeypatch.setattr(runtime_dual, "load_audit_inventory", lambda *_args, **_kwargs: object())
     verified: list[Any] = []
     monkeypatch.setattr(
         runtime_dual,

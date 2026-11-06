@@ -45,6 +45,9 @@ DEPLOY_SLICED_LIBRARIES = (
     _LIB / "deploy_reviewed_function_grants_lifecycle.sh",
     # The governed phases (M1-PR6): budgets, the release admission, the data phase.
     _LIB / "deploy_governed_phases_lifecycle.sh",
+    # The estate inventory (M4-PR1): the retired binding policy and the
+    # agentic tier's pre-lease inventory check.
+    _LIB / "deploy_estate_inventory_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (

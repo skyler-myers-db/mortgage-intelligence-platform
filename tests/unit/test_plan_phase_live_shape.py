@@ -25,6 +25,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 AUTOMATION_STEP = REPO / "scripts" / "lib" / "deploy_step_automation_identities.sh"
 PHASES = REPO / "scripts" / "lib" / "deploy_governed_phases_lifecycle.sh"
+# The agentic tier's read-only estate inventory check (M4-PR1) runs before the plan exit.
+ESTATE = REPO / "scripts" / "lib" / "deploy_estate_inventory_lifecycle.sh"
 # Every command a live --phase plan runs in this step file, in order: local
 # parses and renders, the read-only bundle validate and plan gate, the probes
 # without their Genie turn, the pii-salt listing and each phase's budget.
@@ -37,6 +39,7 @@ PLAN_CALLS = (
     "- ",  # a local heredoc: the admin-scope identities
     "tools.databricks.deploy_prestop_probes --app-name mip-app",
     "tools.databricks.pii_salt_scope check",
+    "tools.databricks.estate.inventory_check --catalog mip",  # the owner's inventory, read-only
     "run_bundle_plan_gate pre-lease",
     "tools.databricks.phase_budget describe --phase plan",
     "tools.databricks.phase_budget describe --phase release",
@@ -53,7 +56,7 @@ def _drive(tmp_path: Path, phase: str) -> tuple[subprocess.CompletedProcess[str]
         'case "$*" in\n'
         "  *'agent_proxy_credential_bundle all-fields'*)\n"
         "    printf 'proxy-client\\tproxy-credential\\tproxy-secret\\n'; exit 0 ;;\n"
-        "  *deploy_prestop_probes*|*pii_salt_scope*|*phase_budget*) exit 0 ;;\n"
+        "  *deploy_prestop_probes*|*pii_salt_scope*|*phase_budget*|*estate.inventory_check*) exit 0 ;;\n"
         "esac\n"
         "cat >/dev/null\n"
         "printf 'admin-client,release-probe-client\\n'\n",
@@ -107,6 +110,7 @@ DATABRICKS_ACCOUNT_ID=account
 DATABRICKS_ACCOUNT_CLIENT_ID=account-client DATABRICKS_ACCOUNT_CLIENT_SECRET=s6
 databricks() {{ printf 'databricks %s\\n' "$*" >> {shlex.quote(str(calls))}; return 97; }}
 source {shlex.quote(str(PHASES))}
+source {shlex.quote(str(ESTATE))}
 source {shlex.quote(str(AUTOMATION_STEP))}
 echo PAST-THE-STEP-FILE
 """,

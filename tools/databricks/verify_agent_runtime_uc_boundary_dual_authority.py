@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify runtime UC access with metastore-owner and runtime authority in one process."""
+"""Verify runtime UC access with the estate inventory, deployer and runtime authority in one process."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from databricks.sdk import WorkspaceClient
 from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     audit_foreign_uc_access,
+    load_audit_inputs,
+    load_audit_inventory,
 )
 from tools.databricks.estate.accepted_exposure import identity_matcher
 from tools.databricks.gateway_model_archival import (
@@ -98,10 +100,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rollback-scope", required=True)
     parser.add_argument("--lakebase-instance", required=True)
     parser.add_argument("--warehouse-id", required=True)
-    parser.add_argument(
-        "--foreign-catalog-binding-policy-json",
-        default=os.environ.get("MIP_UC_FOREIGN_CATALOG_BINDING_POLICY", ""),
-    )
     args = parser.parse_args(argv)
 
     # The deployer binding caches a github-oidc token across both foreign-UC audits
@@ -110,12 +108,17 @@ def main(argv: list[str] | None = None) -> int:
     account_client = account_client_from_env()
     # The runtime identity's accepted UC exposure, the same for both proofs (M2-PR4).
     exposure = identity_matcher("runtime")
+    # The owner's estate inventory, recomputed and acknowledged before each audit (M4-PR1).
+    inventory, self_view = load_audit_inputs(
+        admin_workspace, identity="runtime", application_id=args.application_id, catalog=args.catalog
+    )
     proof = audit_foreign_uc_access(
         admin_workspace,
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
-        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
+        inventory=inventory,
+        self_view=self_view,
         account_factory=lambda: account_client,
         exposure=exposure,
     )
@@ -181,12 +184,14 @@ def main(argv: list[str] | None = None) -> int:
         proxy_caller_credential_id=args.proxy_caller_credential_id,
         proxy_caller_secret_reference=args.proxy_caller_secret_reference,
     )
+    inventory = load_audit_inventory(admin_workspace, catalog=args.catalog)
     post_runtime_proof = audit_foreign_uc_access(
         admin_workspace,
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
-        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
+        inventory=inventory,
+        self_view=self_view,
         account_factory=lambda: account_client,
         exposure=exposure,
     )

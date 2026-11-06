@@ -13,6 +13,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
 from databricks.sdk.service.apps import ComputeState
 
+from tests.fixtures.env_isolation import EXACT_M2M_BINDING_ENV, restore_on_teardown
 from tests.fixtures.github_oidc import (
     DEPLOYER_CLIENT_ID,
     actions_keys,
@@ -50,6 +51,13 @@ PROXY_QUERY_GROUP = managed_query_group_name(
     application_id=PROXY_ID,
 )
 PROXY_QUERY_V2_EXTERNAL_ID = f"mip:sq:v2:{'a' * 52}"
+
+
+@pytest.fixture(autouse=True)
+def _restore_exact_m2m_binding_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """boundary.main binds the exact M2M identity by writing os.environ directly."""
+
+    restore_on_teardown(monkeypatch, EXACT_M2M_BINDING_ENV)
 
 
 def _proxy_main_args(

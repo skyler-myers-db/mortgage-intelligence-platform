@@ -14,6 +14,23 @@
    the loading stage on. */
 .map-levels:has(> .map-zcta, > .map-stage--zcta) { animation: none; }
 
+/* deviation:zcta-legend-flat. Over the ZIP areas the overlay legend is a solid
+   --bg-1 panel with no backdrop-filter (the prototype's .map-legend, Module 0
+   Prototype.html:882-889, is 80% --bg-1 over blur(8px); the panel is the
+   prefers-reduced-transparency legend of 33-contrast-modes.css). The blur
+   made the legend its own compositor surface, and Chromium keeps a surface's
+   raster when the legend only moves by a fraction of a pixel: the drill
+   re-reads the ranked table above the map, which moves the map by 293.5px
+   and flips the legend's sub-pixel phase, so the class bar kept the old
+   phase's edge row (CI's pinned container drew it 7px tall instead of 8,
+   the dark zcta-drill capture, twice). Painted with the page, the legend
+   re-rasters like everything else. From the loading stage on, so the panel
+   does not change look when the polygons arrive. */
+.map-wrap:has(.map-zcta, .map-stage--zcta) .map-legend {
+  background: var(--bg-1);
+  backdrop-filter: none;
+}
+
 /* The tiles' status line when they stand in for the ZCTA polygons. */
 .zip-tiles__status {
   margin: 0;

@@ -212,7 +212,7 @@ def uc_candidates(workspace: Any, *, catalog: str, runtime_application_id: str) 
             continue
         bound = sorted(_catalog_bindings(workspace, catalog=name)) if mode.upper() == "ISOLATED" else []
         if mode.upper() == "ISOLATED" and workspace_id not in bound:
-            continue  # binding-denied: the reviewed binding policy owns it
+            continue  # binding-denied: the owner's estate inventory covers it
         held: dict[str, set[str]] = {}
         for privilege, sources in _effective_privilege_sources(
             workspace, securable_type="catalog", full_name=name, principal=runtime_application_id
