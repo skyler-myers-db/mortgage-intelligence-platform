@@ -523,16 +523,20 @@ cross-plane and cross-type ambiguity without assigning unrelated owners to
 MIP. The account-plane target service-principal ID is resolved in the same
 snapshot and remains forbidden; group owners still require the frozen
 target-credential membership proof. Ambiguous, noncanonical, inactive, or
-unresolved account owners fail closed. For an exactly policy-matched catalog whose
-bindings deny MIP, the
-pass does not require an unrelated owner to exist in MIP workspace SCIM;
+unresolved account owners fail closed. For a catalog the estate inventory
+records as binding-denied (`ISOLATED`, with no binding to the MIP workspace),
+the pass does not require an unrelated owner to exist in MIP workspace SCIM;
 instead, it excludes the runtime application ID, both immutable SCIM IDs,
 observed runtime display aliases, every frozen group ID and name, and implicit
-`account users` from the catalog and registered-model owner fields. Direct or
-group-derived runtime ownership therefore fails without weakening the workspace
-binding proof. Unknown isolation modes, incomplete or duplicate identity
-evidence, unsupported binding types, policy drift, account-group drift,
-workspace-assignment drift, and binding-read errors fail closed. Ownership
+`account users` from every owner the inventory records in that catalog: the
+catalog's own and those of its schemas, tables, functions, volumes, registered
+models and `information_schema`. Direct or group-derived runtime ownership
+therefore fails without weakening the workspace binding proof. Unknown
+isolation modes, incomplete or duplicate identity evidence, unsupported binding
+types, inventory drift (a catalog the deployer lists, other than MIP's own,
+that is missing from the inventory or has changed owner, type or isolation
+since it was taken), account-group drift, workspace-assignment drift, and
+binding-read errors fail closed. Ownership
 cannot masquerade as an empty grants response. The exact `__databricks_internal`
 catalog is excluded only when its SDK identity remains `INTERNAL_CATALOG`,
 `System user`-owned, and `OPEN`; lookalike names or source drift fail.

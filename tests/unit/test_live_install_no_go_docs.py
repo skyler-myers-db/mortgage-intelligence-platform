@@ -382,7 +382,16 @@ def test_grants_records_the_foreign_catalog_remediation_as_deleted() -> None:
         "workspaces, never the MIP workspace, and a workspace that no longer exists passes only with its exact "
         "defunct entry in the inventory."
     ) in grants
-    assert "foreign-catalog policy" not in grants
+    assert (
+        "For a catalog the estate inventory records as binding-denied (`ISOLATED`, with no binding to the MIP "
+        "workspace), the pass does not require an unrelated owner to exist in MIP workspace SCIM"
+    ) in grants
+    assert (
+        "inventory drift (a catalog the deployer lists, other than MIP's own, that is missing from the inventory "
+        "or has changed owner, type or isolation since it was taken)"
+    ) in grants
+    for retired_policy in ("foreign-catalog policy", "policy-matched", "policy drift"):
+        assert retired_policy not in grants, retired_policy
     for retired in (
         "The command of record is the manual `deploy-dev` workflow",
         "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh",
