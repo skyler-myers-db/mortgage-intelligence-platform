@@ -496,6 +496,11 @@ HISTORICAL_CUTOVER_GATEWAY_PRESENT=0
 AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
+# The core tier (M2-PR7b): blue's rebuilt restore payload argument for the
+# pre-activation proof, set only when the rebuild reproduces blue's env set,
+# and its temp file (operator values; removed once recorded, or on exit).
+CORE_BLUE_RESTORE_PAYLOAD_ARGS=()
+CORE_BLUE_RESTORE_PAYLOAD_FILE=""
 APP_ACCESS_QUARANTINED=0
 REVIEWED_FUNCTION_GRANTS_PROVEN=0
 # Process-local state is never durable proof across deployment retries. Every
@@ -642,6 +647,11 @@ unset _REMEDIATE_FOREIGN_CATALOG_BINDINGS
 # shellcheck source=scripts/lib/deploy_step_app_promotion_and_refresh.sh
 . "$REPO_ROOT/scripts/lib/deploy_step_app_promotion_and_refresh.sh"
 
+# Steps 10b-11 by tier (M2-PR7b). The agentic tier provisions, cuts over to
+# and evaluates the agentic runtime; the core tier (MIP_AGENTIC_TIER=off)
+# sources none of those agentic-only files: it activates once, smokes and
+# signs a v7 core capture, or restores its core blue.
+if tier_is_agentic; then
 # -----------------------------------------------------------------------------
 # Step 10b: provision MIP-owned agentic resources after gold/Genie assets exist
 # -----------------------------------------------------------------------------
@@ -655,6 +665,20 @@ unset _REMEDIATE_FOREIGN_CATALOG_BINDINGS
 # -----------------------------------------------------------------------------
 # shellcheck source=scripts/lib/deploy_step_agent_eval_and_smoke.sh
 . "$REPO_ROOT/scripts/lib/deploy_step_agent_eval_and_smoke.sh"
+
+# -----------------------------------------------------------------------------
+# Steps 10b-11 (core tier): one activation, the live smoke, a signed core capture
+# -----------------------------------------------------------------------------
+else
+# shellcheck source=scripts/lib/deploy_step_core_activation.sh
+. "$REPO_ROOT/scripts/lib/deploy_step_core_activation.sh"
+fi
+
+# -----------------------------------------------------------------------------
+# Step 11b: prune App release folders after a green capture (best effort)
+# -----------------------------------------------------------------------------
+# shellcheck source=scripts/lib/deploy_step_release_prune.sh
+. "$REPO_ROOT/scripts/lib/deploy_step_release_prune.sh"
 
 # -----------------------------------------------------------------------------
 # Done

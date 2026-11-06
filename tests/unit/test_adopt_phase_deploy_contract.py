@@ -118,12 +118,15 @@ def test_the_lexical_contract_sees_each_primitive_in_each_file(path: Path, carri
 def test_the_slice_calls_only_the_adopt_tools() -> None:
     text = SLICE.read_text(encoding="utf-8")
 
-    # The bind, adopt-live, and the adopted blue's pre-activation proof (M2-PR7).
+    # The bind, adopt-live, and the adopted blue's pre-activation proof (M2-PR7),
+    # with the core tier's read-only rebuild of blue's restore payload (M2-PR7b).
     assert set(re.findall(r"-m (tools\.[\w.]+)", text)) == {
         "tools.databricks.install_state_adopt",
         "tools.databricks.adopt_live",
         "tools.databricks.blue_restore_proof",
+        "tools.databricks.app_core_rollback",
     }
+    assert re.findall(r"-m tools\.databricks\.app_core_rollback (\S+)", text) == ["restore-payload"]
     assert "databricks " not in text.replace("tools.databricks", "")
     for line in text.splitlines():
         assert not line.startswith(("set ", "trap ", "exit ")), line
