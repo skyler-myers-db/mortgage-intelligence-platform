@@ -56,7 +56,7 @@ CONFIG = ProbeSuiteConfig(
 
 
 def _suite(
-    monkeypatch: pytest.MonkeyPatch, estate: dict[str, Any], *, app: bool = True
+    monkeypatch: pytest.MonkeyPatch, estate: dict[str, Any], *, app: bool = True, config: ProbeSuiteConfig = CONFIG
 ) -> tuple[list[str], list[str], list[str]]:
     asked: list[str] = []
     record = estate["record"]
@@ -75,7 +75,7 @@ def _suite(
     workspace = FakeWorkspace(estate)
     refusals, notes = suite_refusals(
         workspace,
-        config=CONFIG,
+        config=config,
         app_client_id=APP_CLIENT if app else "",
         app_scim_id=APP_SCIM if app else "",
         app_groups=frozenset({"users"}),
@@ -94,6 +94,15 @@ def test_a_clean_install_passes_every_suite_probe(monkeypatch: pytest.MonkeyPatc
     assert found == []
     assert asked == [GOVERNED_SPACE], "the Genie turn asks the record-pinned space"
     assert len(notes) == 5
+
+
+def test_the_plan_phase_asks_no_genie_turn_and_every_other_probe_still_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # --phase plan writes nothing (M1-PR6): the turn would open a conversation.
+    from dataclasses import replace
+
+    found, notes, asked = _suite(monkeypatch, clean_estate(), config=replace(CONFIG, genie_turn=False))
+    assert found == [] and asked == []
+    assert notes[-1].startswith("Genie budget: no turn in --phase plan") and len(notes) == 5
 
 
 def test_a_record_whose_space_was_retired_yields_to_the_provisioners_resolution(

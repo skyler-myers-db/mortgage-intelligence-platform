@@ -144,11 +144,16 @@ def release(
     smoke: bool = False,
     fail: dict[str, int] | None = None,
     agentic_env_cache: str | None = None,
+    flags: tuple[str, ...] | None = None,
+    env: dict[str, str] | None = None,
 ) -> Release:
-    """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``.
+    """``scripts/deploy.sh -t client --no-confirm`` with DRY_RUN=0, in the sandbox, with only ``client_ids``.
 
     ``agentic_env_cache`` is a ``.databricks/mip-agentic.env`` an earlier
     agentic run left in the checkout (gitignored, so the tree stays clean).
+    ``flags`` replaces the default ``--skip-silver`` (and ``--skip-smoke``
+    unless ``smoke``), and ``env`` adds names after the profile's are stripped
+    (``GITHUB_ACTIONS=true`` for a live ``--phase``, which is CI-only).
     """
 
     checkout, base_env, cli_log = sandbox(tmp_path)
@@ -197,11 +202,13 @@ def release(
             "MLFLOW_DISABLE_AGENT_HINT": "1",
             "MIP_TEST_DEPLOYER_JSON": json.dumps(SANDBOX_DEPLOYER),
             **client_ids,
+            **(env or {}),
         }
     )
-    flags = ["--no-confirm", "--skip-silver", *([] if smoke else ["--skip-smoke"])]
+    default = ("--skip-silver", *(() if smoke else ("--skip-smoke",)))
+    argv = ["--no-confirm", *(default if flags is None else flags)]
     result = subprocess.run(
-        ["bash", "scripts/deploy.sh", "-t", "client", *flags],
+        ["bash", "scripts/deploy.sh", "-t", "client", *argv],
         cwd=checkout,
         env=run_env,
         text=True,

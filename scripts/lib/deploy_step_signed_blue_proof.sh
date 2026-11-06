@@ -47,7 +47,15 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       echo "${RED}[deploy] signed first-install journal names an App absent from inventory.${RST}" >&2
       exit 4
     fi
-    recover_interrupted_first_install_app
+    # >>> first install: resume after the owner bootstrap >>>
+    # A --phase release that stopped for the owner bootstrap (exit 3, M1-PR6)
+    # resumes its kept App; any other interrupted first install is deleted.
+    if first_install_awaits_owner_bootstrap; then
+      resume_first_install_after_owner_bootstrap
+    else
+      recover_interrupted_first_install_app
+    fi
+    # <<< first install: resume after the owner bootstrap <<<
   elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "unclaimed" ]]; then
     APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
     step "bind interrupted first-install App to its authoritative create audit event"
@@ -68,7 +76,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     echo "${RED}[deploy] unrecognized first-install journal state.${RST}" >&2
     exit 4
   fi
-  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+  # A resumed first install (M1-PR6) takes the first-install branch below.
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" && "${FIRST_INSTALL_RESUMED:-0}" -ne 1 ]]; then
     APP_UPGRADE_STATE="unverified_existing"
     _EXISTING_APP_URL="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
 import json, os, sys

@@ -61,6 +61,8 @@ class ProbeSuiteConfig:
     metastore_owner: str = ""
     # MIP_GENIE_PIN_ACK: the sha256 of the read-only pin plan the preflight printed.
     genie_pin_ack: str = ""
+    # False only for --phase plan (M1-PR6): the one Genie turn opens a conversation.
+    genie_turn: bool = True
     # --phase adopt|unadopt (M2-PR7): the record is judged as adopt-live will judge it.
     adopt_phase: bool = False
     # --agentic-tier (M2-PR7b): off judges the record as the core step 0a will.
@@ -237,6 +239,9 @@ def suite_refusals(
     refusals.extend(found)
     notes.extend(said)
 
+    if not config.genie_turn:
+        notes.append("Genie budget: no turn in --phase plan (it would open a conversation); the release asks it")
+        return refusals, notes
     budget_kwargs: dict[str, Any] = {}
     if genie_client_factory is not None:
         budget_kwargs["client_factory"] = genie_client_factory

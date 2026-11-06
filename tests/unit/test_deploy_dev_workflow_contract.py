@@ -4361,14 +4361,21 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     )
     initial_proof = script.index("REVIEWED_FUNCTION_GRANTS_PROVEN=0")
     lakebase_migration = script.index("databricks bundle run mip_lakebase_migrate")
-    function_postflight = script.index(
-        "tools.databricks.verify_reviewed_function_execute_grants",
-        lakebase_migration,
+    # The reconcile lives in a function-only library since M1-PR6 (the data
+    # phase runs it too): only its own body proves the grants, after its
+    # read-only verify, and no step reaches it before the migration.
+    library = script.index("\nreconcile_reviewed_function_execute_grants() {\n")
+    assert helper.index("tools.databricks.verify_reviewed_function_execute_grants") < helper.index(
+        "REVIEWED_FUNCTION_GRANTS_PROVEN=1"
     )
-    first_proven = script.index("REVIEWED_FUNCTION_GRANTS_PROVEN=1", function_postflight)
-
-    assert initial_proof < lakebase_migration < function_postflight < first_proven
-    assert "REVIEWED_FUNCTION_GRANTS_PROVEN=1" not in script[initial_proof:function_postflight]
+    assert script.count("REVIEWED_FUNCTION_GRANTS_PROVEN=1") == 1
+    assert initial_proof < library < script.index("REVIEWED_FUNCTION_GRANTS_PROVEN=1") < lakebase_migration
+    steps = script.index('step "preflight — check .env.local, databricks CLI, venv"')
+    calls = [
+        match.start()
+        for match in re.finditer(r"\breconcile_reviewed_function_execute_grants\b(?!\(\))", script[steps:])
+    ]
+    assert calls and all(lakebase_migration < steps + call for call in calls)
     # Run unless the live-state skip rule (M0-PR8, attack O12) proves the
     # catalog already equals the bootstrap; then only the grants are reconciled.
     assert script.count("\n  initialize_uc_targets_and_reconcile_function_grants\n") == 1
