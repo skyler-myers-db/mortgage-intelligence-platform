@@ -308,6 +308,21 @@ class FakeApps:
 
 
 @dataclass
+class FakeSecrets:
+    """Secret values by (scope, key); an absent one raises ResourceDoesNotExist, as the SDK does."""
+
+    values: dict[tuple[str, str], str] = field(default_factory=dict)
+
+    def get_secret(self, scope: str, key: str) -> SimpleNamespace:
+        import base64
+
+        if (scope, key) not in self.values:
+            raise ResourceDoesNotExist(f"secret {key} does not exist")
+        return SimpleNamespace(value=base64.b64encode(self.values[(scope, key)].encode()).decode())
+
+
+@dataclass
 class FakeWorkspaceClient:
     workspace: FakeTree = field(default_factory=FakeTree)
     apps: FakeApps = field(default_factory=FakeApps)
+    secrets: FakeSecrets = field(default_factory=FakeSecrets)

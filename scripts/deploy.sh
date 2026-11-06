@@ -455,6 +455,8 @@ QUIESCE_WINDOW_TREE_SHA256=""
 QUIESCE_WINDOW_DEADMAN_RUN_ID=""
 # The restorable window's deadline watchdog (M0-PR9), disarmed on the close.
 QUIESCE_WINDOW_WATCHDOG_PID=""
+# The pre-activation rollback proof ran (attack O2, M2-PR7); never inherited.
+BLUE_RESTORE_PROVEN=0
 APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
 MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 MIP_APP_ROLLBACK_RECORD_VERSION=""
