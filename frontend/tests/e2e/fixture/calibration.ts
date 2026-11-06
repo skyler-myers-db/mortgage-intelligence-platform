@@ -18,7 +18,10 @@ export interface CalibrationRun {
   runId: string | null;
   runAttempt: string | null;
   runnerOs: string | null;
+  /** The runner VM's image (ImageOS); a container job is not given it. */
   imageOs: string | null;
+  /** The container image the job runs inside (MIP_CI_IMAGE, set by e2e-fixture-perf). */
+  image: string | null;
 }
 
 export interface Calibration {
@@ -41,6 +44,7 @@ export function calibrationRun(env: NodeJS.ProcessEnv = process.env): Calibratio
     runAttempt: read('GITHUB_RUN_ATTEMPT'),
     runnerOs: read('RUNNER_OS'),
     imageOs: read('ImageOS'),
+    image: read('MIP_CI_IMAGE'),
   };
 }
 
