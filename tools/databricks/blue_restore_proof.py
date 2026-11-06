@@ -12,8 +12,8 @@ Restore tiers (plan §4.7):
   added file refuses), requires the payload a release proved before activation,
   and refuses an ``unverified`` frontend without the
   ``restore_unverified_frontend`` ack. The deploy call itself is the core
-  release path's (M2-PR7b); this module never stops, starts, deploys or
-  updates an App.
+  release path's (tools/databricks/core_blue_restore.py, M2-PR7b); this
+  module never stops, starts, deploys or updates an App.
 
 **The pre-activation proof (attack O2).** Before a green activation over a
 signed blue, ``prepare_activation`` requires blue's tier-b restore payload:
@@ -30,10 +30,21 @@ signed blue, ``prepare_activation`` requires blue's tier-b restore payload:
   covers exactly this blue and this green: sha256(blue's deployment id), the
   release's source commit and its release id. The refusal prints that digest,
   so an ack exported in a long-lived shell never carries to another release.
+* blue's ``frontend/dist`` unverified (M2-PR7b): its tier-b restore needs the
+  ``restore_unverified_frontend`` ack, so a payload counts as restorable only
+  when that exact ack is given now (``MIP_ACK_RESTORE_UNVERIFIED_FRONTEND``,
+  over the payload's own digest); without it, activation refuses
+  (``unverified_frontend_unacked``, printing both digests) unless the
+  ``no_rollback_for`` ack is given, and nothing is recorded. The ack covers
+  this blue, this payload and the commit of the run that gives it: the
+  activation gate and the same run's tier-b restore ask for one digest, and a
+  later run (another commit) needs its own, which the refusal prints.
 
-No record, or a retired tombstone, has no blue to protect. A v7 blue's tier
-must be the profile's (``MIP_AGENTIC_TIER``): a core blue never protects an
-agentic release, nor an agentic blue a core one (``blue_tier_mismatch``).
+No record, or a retired tombstone, has no blue to protect. Blue's tier must
+be the profile's (``MIP_AGENTIC_TIER``; tools/databricks/blue_tier_gate.py): a
+v5 or v6 record is agentic, so it never protects a core release, nor a core
+blue an agentic one, unless that one is given the exact ``tier_transition``
+ack (``blue_tier_mismatch``).
 
 ``inspect_v7`` is the ``app_deployment_rollback inspect`` reader for a v7
 record: the signature and exact schema, the App's service-principal identity,
@@ -70,6 +81,7 @@ from tools.databricks.app_rollback_record_v7 import (
 )
 from tools.databricks.app_rollback_resource_contract import app_resource_contract
 from tools.databricks.app_start_deployment import last_deployment_is, tree_digest
+from tools.databricks.blue_tier_gate import BlueTierRefused, assert_blue_tier
 from tools.databricks.operation_ack import AckRefused, ack_digest, require_ack
 
 _PREFIX = "[mip-blue-restore]"
@@ -139,11 +151,20 @@ def no_rollback_plan(
     }
 
 
-def unverified_frontend_plan(*, app_name: str, record: Mapping[str, Any]) -> dict[str, str]:
+def unverified_frontend_plan(
+    *, app_name: str, record: Mapping[str, Any], run_git_sha: str
+) -> dict[str, str]:
+    """The canonical plan a ``restore_unverified_frontend`` ack covers: this blue and payload, this run."""
+
+    try:
+        commit = release_contract.check_commit(run_git_sha)
+    except release_contract.ReleaseContractError as exc:
+        raise RestoreProofRefused("run_commit_invalid", f"the run's commit is invalid: {exc}") from exc
     return {
         "app_name": app_name,
         "restore_to": sha256_text(str(record["deployment_id"])),
         "restore_payload_sha256": str(record["restore_payload_sha256"]),
+        "run_git_sha": commit,
     }
 
 
@@ -155,8 +176,13 @@ def tier_b_payload(
     agentic_tier: str,
     unverified_frontend_ack: str | None = None,
     tree: Callable[[Any, str], str] = tree_digest,
+    run_git_sha: str = "",
 ) -> dict[str, object]:
-    """Blue's tier-b restore payload, re-proven now; the caller deploys it (M2-PR7b)."""
+    """Blue's tier-b restore payload, re-proven now; the caller deploys it (M2-PR7b).
+
+    ``run_git_sha`` is the restoring run's commit, which an unverified
+    frontend's ack covers; a verified frontend never reads it.
+    """
 
     if record.get("version") != V7_RECORD_VERSION:
         raise RestoreProofRefused(
@@ -175,15 +201,15 @@ def tier_b_payload(
     if _payload_digest(payload) != record["restore_payload_sha256"]:
         raise RestoreProofRefused("payload_digest", "the restore payload digest does not match")
     if record["frontend_provenance"] != "verified":
+        plan = unverified_frontend_plan(app_name=app_name, record=record, run_git_sha=run_git_sha)
         try:
-            require_ack(
-                "restore_unverified_frontend",
-                unverified_frontend_plan(app_name=app_name, record=record),
-                unverified_frontend_ack,
-            )
+            require_ack("restore_unverified_frontend", plan, unverified_frontend_ack)
         except AckRefused as exc:
             raise RestoreProofRefused(
-                exc.code, f"blue's frontend/dist is unverified: {exc}"
+                exc.code,
+                f"blue's frontend/dist is unverified: {exc}. To restore it, export "
+                f"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND={ack_digest('restore_unverified_frontend', plan)} "
+                "for this run",
             ) from exc
     return dict(payload)
 
@@ -201,6 +227,8 @@ def prepare_activation(
     restore_payload: Mapping[str, object] | None = None,
     no_rollback_ack: str | None = None,
     tree: Callable[[Any, str], str] = tree_digest,
+    tier_transition_ack: str | None = None,
+    unverified_frontend_ack: str | None = None,
 ) -> str:
     """The pre-activation rollback proof; returns a note or raises RestoreProofRefused."""
 
@@ -211,45 +239,46 @@ def prepare_activation(
     )
     if record is None:
         return "no signed blue record: there is no blue to protect"
+    try:
+        assert_blue_tier(
+            record,
+            app_name=app_name,
+            agentic_tier=agentic_tier,
+            tier_transition_ack=tier_transition_ack,
+        )
+    except BlueTierRefused as exc:
+        raise RestoreProofRefused(exc.code, str(exc)) from exc
     if record["version"] != V7_RECORD_VERSION:
         return "the signed v5/v6 record's own payload is blue's tier-b restore payload"
-    try:
-        assert_record_tier(record, agentic_tier=agentic_tier)
-    except V7RecordError as exc:
-        raise RestoreProofRefused("blue_tier_mismatch", str(exc)) from exc
     if active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:
         raise RestoreProofRefused(
             "blue_not_active",
             "blue is not the active deployment: the proof must precede activation",
         )
-    if record["restore_payload_sha256"] is not None:
+    candidate: dict[str, Any] | None = None
+    digest = record["restore_payload_sha256"]
+    if digest is None and restore_payload is not None:
         _rehash(workspace, record, tree)
-        return "blue's tier-b restore payload was proven before activation and re-proven now"
-    if restore_payload is not None:
+        candidate = _candidate(record, restore_payload, app_name, lakebase_instance)
+        digest = candidate["restore_payload_sha256"]
+    elif digest is not None:
         _rehash(workspace, record, tree)
-        try:
-            candidate = validated_v7_record(
-                {
-                    **unsigned(record),
-                    "restore_payload": dict(restore_payload),
-                    "restore_payload_sha256": _payload_digest(dict(restore_payload)),
-                },
-                app_name=app_name,
-                expected_lakebase_instance=lakebase_instance,
-            )
-        except (V7RecordError, RuntimeError) as exc:
-            raise RestoreProofRefused(
-                "payload_invalid", f"blue's restore payload refuses: {exc}"
-            ) from exc
+    # An unverified frontend is restorable only with its own ack (M2-PR7b), so a
+    # green is activated over it only when that ack is already given.
+    frontend_ack = (
+        None
+        if digest is None
+        else _unacked_frontend(app_name, record, str(digest), unverified_frontend_ack, green_git_sha)
+    )
+    if digest is not None and frontend_ack is None:
+        if candidate is None:
+            return "blue's tier-b restore payload was proven before activation and re-proven now"
         lease()
         save_versioned_record(workspace, scope=scope, record=unsigned(candidate))
         persisted = load_signed_record(
             workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
         )
-        if (
-            persisted is None
-            or persisted["restore_payload_sha256"] != candidate["restore_payload_sha256"]
-        ):
+        if persisted is None or persisted["restore_payload_sha256"] != digest:
             raise RestoreProofRefused(
                 "payload_unrecorded", "the restore payload record did not read back exactly"
             )
@@ -263,13 +292,64 @@ def prepare_activation(
     try:
         require_ack("no_rollback_for", plan, no_rollback_ack)
     except AckRefused as exc:
+        no_rollback = f"export MIP_ACK_NO_ROLLBACK_FOR={ack_digest('no_rollback_for', plan)}"
+        if frontend_ack is not None:
+            raise RestoreProofRefused(
+                "unverified_frontend_unacked",
+                "green activation refuses: blue's frontend/dist is unverified, so its tier-b "
+                "restore needs the restore_unverified_frontend ack, which this run was not given "
+                f"({exc.code}). Export MIP_ACK_RESTORE_UNVERIFIED_FRONTEND={frontend_ack} for this "
+                f"run, or, to activate with no rollback for blue, {no_rollback}",
+            ) from exc
         raise RestoreProofRefused(
             "no_rollback_proof",
             "green activation refuses: blue's tier-b restore payload is not recorded, and once green "
             f"is active only tier b restores blue ({exc.code}). To activate with no rollback for "
-            f"blue, export MIP_ACK_NO_ROLLBACK_FOR={ack_digest('no_rollback_for', plan)}",
+            f"blue, {no_rollback}",
         ) from exc
     return "activating with NO rollback for blue: the exact no_rollback_for ack was given"
+
+
+def _candidate(
+    record: Mapping[str, Any],
+    restore_payload: Mapping[str, object],
+    app_name: str,
+    lakebase_instance: str,
+) -> dict[str, Any]:
+    try:
+        return validated_v7_record(
+            {
+                **unsigned(record),
+                "restore_payload": dict(restore_payload),
+                "restore_payload_sha256": _payload_digest(dict(restore_payload)),
+            },
+            app_name=app_name,
+            expected_lakebase_instance=lakebase_instance,
+        )
+    except (V7RecordError, RuntimeError) as exc:
+        raise RestoreProofRefused(
+            "payload_invalid", f"blue's restore payload refuses: {exc}"
+        ) from exc
+
+
+def _unacked_frontend(
+    app_name: str, record: Mapping[str, Any], digest: str, ack: str | None, run_git_sha: str
+) -> str | None:
+    """None when blue's frontend is verified or its exact ack is given, else the ack to give.
+
+    This run's commit: the same digest is the one its own tier-b restore asks for.
+    """
+
+    if record["frontend_provenance"] == "verified":
+        return None
+    plan = unverified_frontend_plan(
+        app_name=app_name, record={**record, "restore_payload_sha256": digest}, run_git_sha=run_git_sha
+    )
+    try:
+        require_ack("restore_unverified_frontend", plan, ack)
+    except AckRefused:
+        return ack_digest("restore_unverified_frontend", plan)
+    return None
 
 
 def verify_tier_proof(
@@ -355,6 +435,10 @@ def main(
     parser.add_argument("--agentic-tier", choices=("off", "on"), default="on")
     parser.add_argument("--restore-payload", type=Path, default=None)
     parser.add_argument("--no-rollback-ack", default="")
+    # A release over the other tier's blue (blue_tier_gate.py): no shell passes it yet.
+    parser.add_argument("--tier-transition-ack", default="")
+    # MIP_ACK_RESTORE_UNVERIFIED_FRONTEND: an unverified blue is restorable only with it.
+    parser.add_argument("--restore-unverified-frontend-ack", default="")
     args = parser.parse_args(argv)
     if workspace_factory is None:
         from tools.databricks.workspace_auth import deployment_workspace_client
@@ -383,6 +467,8 @@ def main(
             green_release_id=args.release_id,
             restore_payload=payload,
             no_rollback_ack=args.no_rollback_ack,
+            tier_transition_ack=args.tier_transition_ack,
+            unverified_frontend_ack=args.restore_unverified_frontend_ack,
         )
     except RestoreProofRefused as exc:
         print(f"{_PREFIX} REFUSED {exc.code}: {exc}", file=sys.stderr)

@@ -9,10 +9,10 @@
   hashes equal; see the PR), so a site that stops planning its agentic
   identity fails here. No core-only line appears.
 * **core tier**: the plan names no verifier, runtime or proxy and needs no
-  model-attestation key; after the read-only checks it refuses with exit 2
-  before the lease, as a live run does (the core tier cannot release yet).
-  The sites past the lease run for real in
-  tests/unit/test_core_tier_release_sandbox.py, with that refusal excised.
+  model-attestation key, and it runs to the end (M2-PR7b): the one
+  activation, the core capture and the prune, with every agentic step a
+  named core skip. tests/unit/test_core_tier_release_sandbox.py runs it for
+  real past the lease.
 """
 
 from __future__ import annotations
@@ -76,18 +76,24 @@ def test_the_agentic_tier_plans_every_site_as_before(tmp_path: Path) -> None:
         assert marker not in out, marker
 
 
-def test_the_core_tier_plans_no_agentic_identity_and_refuses_before_the_lease(tmp_path: Path) -> None:
+def test_the_core_tier_plans_no_agentic_identity_and_runs_to_its_core_capture(tmp_path: Path) -> None:
     code, out, err = _plan(tmp_path, core_tier_profile())
-    assert code == 2, out[-3000:] + err[-3000:]
-    assert "the core tier (MIP_AGENTIC_TIER=off) cannot release yet" in err
+    assert code == 0, out[-3000:] + err[-3000:]
+    assert "cannot release yet" not in err and "activation boundary" not in err
     assert "agentic tier: off (core: the normal, operator2, admin and release-probe identities only)" in out
     # The core profile holds no model-attestation key, and none is required.
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is required" not in err
     assert "Gateway model attestation:" not in out
-    # Every read-only step was planned, then nothing past the lease.
-    assert "would probe read-only:" in out
-    assert "tools.databricks.bundle_plan_gate" in out
-    assert "acquire signed workspace lease" not in out
+    for planned in (
+        "would probe read-only:",
+        "tools.databricks.bundle_plan_gate",
+        "tools.databricks.app_release_source publish",
+        "core tier: skip the agentic provisioning, cutover and Agent Evaluation",
+        "tools.databricks.app_core_rollback capture --agentic-tier off",
+        "tools.databricks.app_release_prune",
+        "[deploy] complete.",
+    ):
+        assert planned in out, planned
     for absent in (
         "--identity-role verifier",
         "--identity-role agent_runtime",
@@ -95,6 +101,9 @@ def test_the_core_tier_plans_no_agentic_identity_and_refuses_before_the_lease(tm
         "--role-contract verifier",
         "--agent-runtime-application-id",
         "CREATE MODEL",
+        "provision_agentic_resources",
+        "run_agent_eval",
+        "app_deployment_rollback capture",
         RUNTIME,
     ):
         assert absent not in out, absent

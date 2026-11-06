@@ -17,9 +17,14 @@ journal). Nothing can reach Databricks.
 
 ``excise`` removes one marked block (``# >>> name >>>`` to ``# <<< name <<<``)
 from the clone's deploy scripts and commits that, to run the steps a refusal
-stands in front of: the core tier's sites past the lease, which its release
-refusal keeps unreachable until the core activation path exists. The block
-must exist exactly once; the real checkout is never touched.
+stands in front of. The block must exist exactly once; the real checkout is
+never touched.
+
+``smoke`` runs the live smoke step against a committed stand-in for
+``scripts/smoke_live.sh`` that passes and records the expectations it was
+handed (M2-PR7b): without a passing smoke a release never signs a capture.
+Without it the run passes ``--skip-smoke``. ``fail`` injects one failure:
+``{"smoke": 1}`` fails the smoke, ``{"capture": 2}`` the core capture.
 """
 
 from __future__ import annotations
@@ -35,6 +40,16 @@ from typing import Any
 from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text
 from tests.fixtures.deploy_sandbox import INHERITED_PREFIXES, sandbox
 from tests.fixtures.prestop_estate import DEPLOYER, clean_estate, write_estate
+
+# The deploy's identity is the client profile's deployer, as in a real install:
+# the workspace's current user (the inventory principal), the bundle's
+# current user and the App release principal are one service principal.
+SANDBOX_DEPLOYER = IDENTITY_IDS["deployer"]
+
+
+def _as_profile_deployer(estate: dict[str, Any]) -> dict[str, Any]:
+    swapped: dict[str, Any] = json.loads(json.dumps(estate).replace(json.dumps(DEPLOYER), json.dumps(SANDBOX_DEPLOYER)))
+    return swapped
 
 
 def first_install_estate() -> dict[str, Any]:
@@ -87,6 +102,27 @@ def _lines(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+SMOKE_STUB = """#!/usr/bin/env bash
+printf '%s\\n' "agentic=${MIP_EXPECT_AGENTIC_CAPABILITIES:-} gateway=${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-} sha=${MIP_EXPECT_GIT_SHA:-}" >> "$SANDBOX_SMOKE_LOG"
+exit "${SANDBOX_SMOKE_EXIT:-0}"
+"""
+
+
+def _commit(checkout: Path, message: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=Sandbox", "-c", "user.email=sandbox@example.invalid", "commit", "-qam", message],
+        cwd=checkout,
+        check=True,
+    )
+
+
+def _stub_smoke(checkout: Path) -> None:
+    smoke = checkout / "scripts" / "smoke_live.sh"
+    smoke.write_text(SMOKE_STUB, encoding="utf-8")
+    smoke.chmod(0o755)
+    _commit(checkout, "stand-in smoke")
+
+
 def _excise(checkout: Path, marker: str) -> None:
     start, end = f"# >>> {marker} >>>\n", f"# <<< {marker} <<<\n"
     hits = [path for path in sorted((checkout / "scripts").rglob("*.sh")) if start in path.read_text(encoding="utf-8")]
@@ -95,11 +131,7 @@ def _excise(checkout: Path, marker: str) -> None:
     assert text.count(start) == 1 and text.count(end) == 1, marker
     head, rest = text.split(start)
     hits[0].write_text(head + rest.split(end)[1], encoding="utf-8")
-    subprocess.run(
-        ["git", "-c", "user.name=Sandbox", "-c", "user.email=sandbox@example.invalid", "commit", "-qam", f"excise {marker}"],
-        cwd=checkout,
-        check=True,
-    )
+    _commit(checkout, f"excise {marker}")
 
 
 def release(
@@ -109,15 +141,27 @@ def release(
     *,
     client_ids: dict[str, str],
     excise: str | None = None,
+    smoke: bool = False,
+    fail: dict[str, int] | None = None,
+    agentic_env_cache: str | None = None,
 ) -> Release:
-    """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``."""
+    """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``.
+
+    ``agentic_env_cache`` is a ``.databricks/mip-agentic.env`` an earlier
+    agentic run left in the checkout (gitignored, so the tree stays clean).
+    """
 
     checkout, base_env, cli_log = sandbox(tmp_path)
     if excise is not None:
         _excise(checkout, excise)
+    if agentic_env_cache is not None:
+        (checkout / ".databricks").mkdir(exist_ok=True)
+        (checkout / ".databricks" / "mip-agentic.env").write_text(agentic_env_cache, encoding="utf-8")
+    if smoke:
+        _stub_smoke(checkout)
     # As in the refusal matrix: the fake estate's metastore is the deployer's,
     # and it accepts no shared-estate exposure (M2-PR4).
-    estate_facts = {"MIP_UC_METASTORE_OWNER": DEPLOYER, "MIP_ACCEPTED_EXPOSURE_JSON": "[]"}
+    estate_facts = {"MIP_UC_METASTORE_OWNER": SANDBOX_DEPLOYER, "MIP_ACCEPTED_EXPOSURE_JSON": "[]"}
     (checkout / ".env.local").write_text(
         env_file_text({**profile, **estate_facts, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}),
         encoding="utf-8",
@@ -129,7 +173,7 @@ def release(
     (bin_dir / "npm").chmod(0o755)
     deploy_python = _wrapper(tmp_path / "deploy-python.sh", fixtures / "release_sandbox_python.py", checkout)
     estate["deployer"] = DEPLOYER
-    estate_path = write_estate(tmp_path / "estate.json", estate)
+    estate_path = write_estate(tmp_path / "estate.json", _as_profile_deployer(estate))
     state_path, py_log = tmp_path / "sandbox-state.json", tmp_path / "python.log"
     # Also the profile names a shell value would set over .env.local.
     stripped = (*INHERITED_PREFIXES, "LAKEBASE_", "APP_ENV")
@@ -146,12 +190,18 @@ def release(
             "MIP_TEST_PRESTOP_ESTATE": str(estate_path),
             "SANDBOX_STATE": str(state_path),
             "SANDBOX_PY_LOG": str(py_log),
+            "SANDBOX_SMOKE_LOG": str(tmp_path / "smoke.log"),
+            # A failure to inject: the smoke's exit, or a scripted tool's (``fail``).
+            "SANDBOX_SMOKE_EXIT": str((fail or {}).get("smoke", 0)),
+            "SANDBOX_FAIL_JSON": json.dumps(fail or {}),
             "MLFLOW_DISABLE_AGENT_HINT": "1",
+            "MIP_TEST_DEPLOYER_JSON": json.dumps(SANDBOX_DEPLOYER),
             **client_ids,
         }
     )
+    flags = ["--no-confirm", "--skip-silver", *([] if smoke else ["--skip-smoke"])]
     result = subprocess.run(
-        ["bash", "scripts/deploy.sh", "-t", "client", "--no-confirm", "--skip-silver", "--skip-smoke"],
+        ["bash", "scripts/deploy.sh", "-t", "client", *flags],
         cwd=checkout,
         env=run_env,
         text=True,
@@ -161,6 +211,9 @@ def release(
         timeout=900,
     )
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    smoke_log = tmp_path / "smoke.log"
+    if smoke_log.exists():
+        state["smoke"] = smoke_log.read_text(encoding="utf-8").splitlines()
     return Release(result, _lines(py_log), _lines(cli_log), state)
 
 

@@ -9,7 +9,9 @@ algorithm name. Its fields:
   (``MIP_AGENTIC_TIER`` off or on). Enforced today: adopt-live signs the core
   tier only; the pre-activation proof and the tier-b restore payload refuse a
   record of the other tier (``blue_tier_mismatch``,
-  tools/databricks/blue_restore_proof.py); ``inspect`` re-proves the record's
+  tools/databricks/blue_restore_proof.py; a core blue under an agentic
+  profile passes the proof's tier gate with the exact ``tier_transition``
+  ack, tools/databricks/blue_tier_gate.py); ``inspect`` re-proves the record's
   own tier. The capture writer and the restore deploy, with its own resource
   proof, are the core release path's (M2-PR7b).
   - **core**: the resource proof is exactly the core App bindings the profile
@@ -453,7 +455,7 @@ def unsigned(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def assert_record_tier(record: Mapping[str, Any], *, agentic_tier: str) -> None:
-    """A record's tier must equal the profile's (the pre-activation proof and tier b today)."""
+    """A record's tier must equal the profile's (``tier_b_payload`` today)."""
 
     if record.get("tier") != tier_of_profile(agentic_tier):
         raise V7RecordError(

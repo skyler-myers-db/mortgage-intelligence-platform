@@ -132,7 +132,12 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
       step "prove or reconcile the signed last-good App before non-App mutations"
       APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
-      prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"
+      if tier_is_agentic; then
+        prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"
+      else
+        # The core tier stands on a v7 core record and its core resource proof (M2-PR7b).
+        prove_or_restore_core_blue "$APP_ROLLBACK_BINDING_ENV"
+      fi
       set -a
       # shellcheck disable=SC1090
       . "$APP_ROLLBACK_BINDING_ENV"
