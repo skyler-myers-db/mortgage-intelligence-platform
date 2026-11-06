@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_shaped_profile
-from tools.clients import schema as profile_schema
+from tools.clients.environment import KNOWN_NAMES
 
 REPO = Path(__file__).resolve().parents[2]
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -38,24 +38,19 @@ STUB = (
 INHERITED_PREFIXES = ("COV_CORE", "COVERAGE", "GITHUB_", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_")
 
 
-def _profile_env_names() -> frozenset[str]:
-    names = set(profile_schema.FIELD_CLASS) | set(profile_schema.IDENTITY_ALIASES)
-    for canonical, aliases in profile_schema.ALIASES.items():
-        names.update((canonical, *aliases))
-    return frozenset(names)
-
-
-# Every client-profile field and alias, whatever its prefix. A shell value wins
-# over .env.local, and some names carry none of the prefixes above
-# (LAKEBASE_DATABASE, LAKEBASE_INSTANCE_NAME, APP_ENV). Tests whose code under
-# test writes them into os.environ leak them to the next module on the same
-# xdist worker, where the dry run then refused the profile ("must agree"):
-# a CI-only, order-dependent failure (PR #321, 2026-11-05).
-PROFILE_ENV_NAMES = _profile_env_names()
+# Every client-profile field and alias, whatever its prefix: the names the
+# profile reader itself accepts (tools/clients/environment.py). A shell value
+# wins over .env.local, and some names carry none of the prefixes above
+# (LAKEBASE_DATABASE, LAKEBASE_INSTANCE_NAME, APP_ENV). A test whose code under
+# test wrote one into os.environ leaked it to the next module on the same xdist
+# worker, where the dry run then refused the profile ("must agree"): a CI-only,
+# order-dependent failure (PR #321, 2026-11-05). tests/fixtures/env_isolation.py
+# stops the leaks; this strip keeps a dry run safe from any that remain.
+PROFILE_ENV_NAMES = KNOWN_NAMES
 
 
 def inherited(name: str) -> bool:
-    """True for an ambient name the sandbox strips before any dry run."""
+    """True for an ambient name a dry run or an in-process profile read must not inherit."""
 
     return name.startswith(INHERITED_PREFIXES) or name in PROFILE_ENV_NAMES
 

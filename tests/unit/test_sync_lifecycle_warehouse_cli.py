@@ -13,6 +13,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import SecretStr
 
+from tests.fixtures.env_isolation import LAKEBASE_CONNECTION_ENV, restore_on_teardown
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "tools" / "sync_lifecycle_warehouse.py"
 SPEC = importlib.util.spec_from_file_location("mip_sync_lifecycle_warehouse_cli", MODULE_PATH)
@@ -114,6 +116,8 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
         lakebase_password=SecretStr("hostile-password"),
         lakebase_sslmode="disable",
     )
+    # _set_lakebase_auth writes all twelve names straight into os.environ.
+    restore_on_teardown(monkeypatch, LAKEBASE_CONNECTION_ENV)
     for name, value in {
         "LAKEBASE_HOST": "hostile-ambient-lakebase.example",
         "LAKEBASE_PASSWORD": "hostile-ambient-password",
@@ -121,10 +125,6 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
         "PGPASSWORD": "hostile-pg-password",
     }.items():
         monkeypatch.setenv(name, value)
-    # Written by _ensure_lakebase_env too; registered so monkeypatch restores
-    # them and no later test on this worker inherits a profile name.
-    for name in ("LAKEBASE_USER", "PGUSER", "LAKEBASE_DATABASE", "PGDATABASE"):
-        monkeypatch.delenv(name, raising=False)
 
     MODULE._ensure_lakebase_env(
         settings,
@@ -167,14 +167,17 @@ def test_lifecycle_loader_does_not_rehydrate_dotenv_auth_when_deployer_bound(
     monkeypatch.setattr(MODULE, "REPO_ROOT", tmp_path)
     monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", "REVIEWED")
     monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "REVIEWED")
-    for name in (
+    dotenv_names = (
         "DATABRICKS_HOST",
         "DATABRICKS_TOKEN",
         "DATABRICKS_AUTH_TYPE",
         "DATABRICKS_CLIENT_ID",
         "DATABRICKS_CLIENT_SECRET",
         "DATABRICKS_WAREHOUSE_ID",
-    ):
+    )
+    # _load_local_env copies .env.local's names straight into os.environ.
+    restore_on_teardown(monkeypatch, dotenv_names)
+    for name in dotenv_names:
         monkeypatch.delenv(name, raising=False)
 
     MODULE._load_local_env()

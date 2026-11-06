@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from tests.fixtures.client_profiles import env_file_text, paychex_shaped_profile
+from tests.fixtures.deploy_sandbox import inherited
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools import render_sql
 from tools.databricks import bundle_env
@@ -93,7 +94,7 @@ def test_bundle_env_renders_the_profiles_root(monkeypatch: pytest.MonkeyPatch, t
     env_local.write_text(env_file_text(paychex_shaped_profile(MIP_UC_CATALOG_STORAGE_ROOT=ROOT)), encoding="utf-8")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path)
-    for name in [name for name in os.environ if name.startswith(("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_"))]:
+    for name in [name for name in os.environ if inherited(name)]:
         monkeypatch.delenv(name)
     renders: list[dict[str, Any]] = []
     monkeypatch.setattr(bundle_env.render_sql, "render", lambda **kwargs: renders.append(kwargs) or (1, 0, 0))

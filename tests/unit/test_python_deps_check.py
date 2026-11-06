@@ -23,6 +23,7 @@ import pytest
 from packaging.markers import default_environment
 
 from tests.fixtures.client_profiles import env_file_text, paychex_shaped_profile
+from tests.fixtures.deploy_sandbox import inherited
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
     DEPLOY_SOURCED_SCRIPTS,
@@ -477,11 +478,7 @@ def test_a_real_deploy_with_a_drifted_override_stops_at_step_0_before_any_worksp
         bin_dir / "databricks",
         f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> {shlex.quote(str(log))}\necho "Databricks CLI v-test"\n',
     )
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(("DATABRICKS_", "MIP_", "COV_CORE", "COVERAGE"))
-    }
+    env = {name: value for name, value in os.environ.items() if not inherited(name)}
     env.update(
         {
             "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
