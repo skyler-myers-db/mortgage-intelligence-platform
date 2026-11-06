@@ -2371,7 +2371,9 @@ is called where it is reached, never aliased, passed on or looked up by
 reflection, and the one function outside them that is handed a client
 (`authoritative_workspace_id`) may only read the workspace id. It is a review
 gate on those files, not a sandbox. Exit 0: written, no gap; 3:
-written with gaps (the deploy refuses it); 2: refused, nothing written.
+written with gaps (the deploy refuses it); 4: written, but printing its
+summary failed (a closed stdout, as under `| head`): run `--summarize` on it;
+2: refused, nothing written.
 
 **Giving it to a run.** The inventory names other teams' catalogs and
 principals, so it is identifying: store the file's content as the client's

@@ -11,9 +11,13 @@ gapped inventory with lines that carry no name.
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import io
 import json
 import os
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -32,6 +36,7 @@ from tools.databricks.estate.accepted_exposure import canonical_plan
 
 NOW = harness.NOW
 HIDDEN = "hidden-team-catalog"
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _document(**changes: Any) -> dict[str, Any]:
@@ -521,3 +526,64 @@ def test_a_document_the_parser_refuses_is_never_written(tmp_path: Path, capsys: 
     err = capsys.readouterr().err
     assert code == 2 and "needs a canonical type" in err and "nothing was written" in err
     assert list(tmp_path.iterdir()) == []  # neither the file nor a temporary one
+
+
+class _ClosedStdout(io.StringIO):
+    """A stdout whose reader is gone, as under ``| head -0``."""
+
+    def write(self, _text: str) -> int:
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+
+def test_a_failure_after_the_write_exits_four_so_two_always_means_nothing_was_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    out = tmp_path / "estate.json"
+    terminal = sys.stdout
+    monkeypatch.setattr(sys, "stdout", _ClosedStdout())
+
+    written = estate_inventory.main(
+        ["--out", str(out)], workspace_factory=harness._workspace, account_factory=harness._account, now=NOW
+    )
+    after_write = capsys.readouterr().err
+    summarized = estate_inventory.main(["--summarize", str(out)], now=NOW)
+    summary_only = capsys.readouterr().err
+
+    assert written == 4 and out.exists(), after_write
+    assert "the file was written, but its summary failed: BrokenPipeError (EPIPE)" in after_write
+    assert "run --summarize on it" in after_write and "REFUSED" not in after_write
+    # --summarize writes nothing, so its failure is a plain refusal.
+    assert summarized == 2 and "REFUSED: BrokenPipeError (EPIPE)" in summary_only
+    assert "nothing was written" in summary_only
+    monkeypatch.setattr(sys, "stdout", terminal)
+    assert estate_inventory.main(["--summarize", str(out)], now=NOW) == 0  # the file is the inventory
+
+
+_MAIN_WITH_FAKES = (
+    "import sys\n"
+    "from tests.unit import test_audit_agent_runtime_foreign_uc_access as harness\n"
+    "from tools.clients import estate_inventory\n"
+    "raise SystemExit(estate_inventory.main(sys.argv[1:], workspace_factory=harness._workspace,"
+    " account_factory=harness._account, now=harness.NOW))\n"
+)
+
+
+def test_a_closed_stdout_pipe_exits_four_not_the_interpreters_120(tmp_path: Path) -> None:
+    """``estate_inventory --out F | head -0``: the summary fails inside main, and the exit flush cannot override 4."""
+
+    out = tmp_path / "estate.json"
+    reader, writer = os.pipe()
+    os.close(reader)
+    env = {name: value for name, value in os.environ.items() if name != "GITHUB_ACTIONS"}
+    env["PYTHONPATH"] = str(ROOT)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", _MAIN_WITH_FAKES, "--out", str(out)],
+            stdout=writer, stderr=subprocess.PIPE, text=True, cwd=ROOT, env=env, timeout=300, check=False,
+        )  # fmt: skip
+    finally:
+        os.close(writer)
+
+    assert result.returncode == 4 and out.exists(), result.stderr[-2000:]
+    assert "run --summarize on it" in result.stderr and "Exception ignored" not in result.stderr

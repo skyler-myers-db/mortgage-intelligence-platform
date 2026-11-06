@@ -34,13 +34,15 @@ included, can name another team's catalog. Export that digest as
 store the file's content as the client's ``MIP_ESTATE_INVENTORY_JSON`` GitHub
 Environment secret (at most 48 KB) or point ``MIP_ESTATE_INVENTORY_FILE`` at
 it. ``--summarize`` recomputes both from a written file. Exit 0: written, no
-gap; 3: written with gaps; 2: refused (nothing written).
+gap; 3: written with gaps; 4: written, but its summary failed (a closed
+stdout, say): run ``--summarize`` on it; 2: refused, nothing written.
 """
 
 from __future__ import annotations
 
 import argparse
 import errno
+import os
 import re
 import sys
 from collections.abc import Callable
@@ -95,10 +97,25 @@ def _print_summary(parsed: estate.EstateInventory, *, now: datetime, size: int) 
     if size > estate.SECRET_LIMIT_BYTES:
         print(f"{_PREFIX} {size} bytes: over the 48 KB secret limit; use {estate.INVENTORY_FILE_ENV}")
     print(f"{_PREFIX} export {estate.ACK_ENV}=<the sha256 above> for each agentic run that relies on it")
-    if parsed.gap_count():
+    gapped = bool(parsed.gap_count())
+    if gapped:
         print(f"{_PREFIX} the deploy refuses an inventory with any gap; fix each read and take it again")
-        return 3
-    return 0
+    sys.stdout.flush()  # a closed stdout fails here, inside main, not at the interpreter's exit
+    return 3 if gapped else 0
+
+
+def _release_closed_stdout(exc: BaseException) -> None:
+    """After a broken pipe, point stdout at /dev/null, so the exit flush cannot replace the code with 120."""
+
+    if not isinstance(exc, BrokenPipeError):
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, sys.stdout.fileno())
+    except (OSError, ValueError):  # a stdout with no descriptor holds nothing to flush
+        pass
+    finally:
+        os.close(devnull)
 
 
 def main(
@@ -142,9 +159,13 @@ def main(
         written = True
         return _print_summary(parsed, now=moment, size=args.out.stat().st_size)
     except Exception as exc:  # noqa: BLE001 - every refusal prints a vetted line, never a traceback
+        _release_closed_stdout(exc)
+        if written:
+            print(f"{_PREFIX} the file was written, but its summary failed: {_refusal_line(exc)}", file=sys.stderr)
+            print(f"{_PREFIX} run --summarize on it", file=sys.stderr)
+            return 4
         print(f"{_PREFIX} REFUSED: {_refusal_line(exc)}", file=sys.stderr)
-        print(f"{_PREFIX} {'the file was written; run --summarize on it' if written else 'nothing was written'}",
-              file=sys.stderr)  # fmt: skip
+        print(f"{_PREFIX} nothing was written", file=sys.stderr)
         return 2
 
 
