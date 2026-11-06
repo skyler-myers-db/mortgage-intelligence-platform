@@ -36,8 +36,15 @@ def resolve_stored_gateway_resource_proof(
     assert_function_set: Callable[..., None],
     assert_legacy_resources: Callable[..., dict[str, str]],
     resolve_exact_resource_proof: Callable[..., ExactGatewayRuntimeProof],
+    require_immutable_payload_source: bool = True,
 ) -> ExactGatewayRuntimeProof:
-    """Validate every supported signed-record generation without widening it."""
+    """Validate every supported signed-record generation without widening it.
+
+    ``require_immutable_payload_source`` is False only for a v7 agentic record,
+    whose restore payload deploys from its immutable release copy rather than
+    a ``/src/`` snapshot (tools/databricks/app_deployment_rollback_cli.py); the
+    payload is read for its reviewed-function owner alone, exactly as for v6.
+    """
 
     if record.get("version", RECORD_VERSION) == LEGACY_RECORD_VERSION:
         if candidate_reviewed_function_owner is not None:
@@ -72,7 +79,9 @@ def resolve_stored_gateway_resource_proof(
             )
         owner = authenticated_owner
     else:
-        payload = _validated_payload(record.get("payload"))
+        payload = _validated_payload(
+            record.get("payload"), require_immutable_source=require_immutable_payload_source
+        )
         owner = _payload_environment(payload).get("MIP_REVIEWED_FUNCTION_OWNER", "")
         legacy_function_contract = not owner
     if legacy_function_contract:

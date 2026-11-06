@@ -9,6 +9,8 @@
   exit 2
 }
 
+# Agentic-only (M2-PR7b): deploy.sh sources this in the agentic tier only; the core tier refuses.
+tier_is_agentic || { echo "${RED}[deploy] ${BASH_SOURCE[0]##*/} is agentic-only and refuses the core tier (MIP_AGENTIC_TIER=off).${RST}" >&2; exit 2; }
 step "prove agentic Lakebase Sync under deployer authority"
 AGENTIC_ENV_FILE="$(mktemp -t mip-agentic.XXXXXX.env)"
 run "$PYTHON" -m tools.databricks.provision_agentic_resources \

@@ -1303,7 +1303,7 @@ TARGET=client
 CLIENT_INSTALL_CLASS=demo
 CLIENT_DEMO_FEEDS=1
 # The profile's agentic tier and its lease writer (resolve_client_profile,
-# M2-PR3): client #1's shape. A core release refuses before the lease.
+# M2-PR3): client #1's shape (the core tier's release path is M2-PR7b's).
 CLIENT_AGENTIC_TIER=on
 CLIENT_LEASE_WRITER_ENV=DATABRICKS_AGENT_RUNTIME_CLIENT_ID
 tier_is_agentic() {{ [[ "$CLIENT_AGENTIC_TIER" == "on" ]]; }}

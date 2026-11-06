@@ -8,6 +8,11 @@ children of the exact ``<bundle root>/app-src`` whose names are release ids
 
 * the current release, which must be the App's active deployment source;
 * the folder of the signed rollback record's deployment, when it is one;
+* every folder any record in the App's rollback scope names (M2-PR7): the
+  current slot and the legacy v5 slot, every version from v5 to v7 and every
+  provenance, a retired tombstone included, read as raw JSON (keeping needs
+  no signature) through every source and restore path it carries; a slot
+  that cannot be read skips the run;
 * the folder the App's ``default_source_code_path`` names, if any;
 * the KEEP_PREVIOUS newest other release folders the App's deployments
   reference (every page of ``list_deployments``, newest ``create_time``
@@ -49,6 +54,7 @@ reconciled; 2 bad arguments.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from collections.abc import Callable
@@ -168,6 +174,33 @@ def _named_release_ids(source: object) -> set[str]:
     Only for keeping: matching more than the canonical path can only keep more.
     """
     return {part for part in _text(source).casefold().split("/") if contract.RELEASE_ID_RE.fullmatch(part)}
+
+
+def _record_release_ids(workspace: Any, app_name: str) -> set[str]:
+    """Every release id any rollback record names, in either slot; unreadable skips the run."""
+    from tools.databricks.app_rollback_record_contract import (
+        _legacy_record_key,
+        _record_key,
+        _secret_value,
+    )
+    from tools.databricks.app_rollback_secret_scope import expected_app_rollback_scope
+
+    scope = expected_app_rollback_scope(app_name)
+    kept: set[str] = set()
+    for key in (_record_key(app_name), _legacy_record_key(app_name)):
+        try:
+            raw = _secret_value(workspace, scope=scope, key=key)
+            record = json.loads(raw) if raw is not None else {}
+        except Exception as exc:  # noqa: BLE001 - an unread record may name a folder
+            raise Skip(f"a rollback record could not be read ({type(exc).__name__})") from exc
+        if not isinstance(record, dict):
+            raise Skip("a rollback record is not an object")
+        payloads = [record.get("payload"), record.get("restore_payload")]
+        paths = [record.get("source_code_path"), record.get("restore_source_path")]
+        paths += [item.get("source_code_path") for item in payloads if isinstance(item, dict)]
+        for path in paths:
+            kept |= _named_release_ids(path)
+    return kept
 
 
 def _current_app(workspace: Any, target: Target) -> object:
@@ -332,6 +365,8 @@ def prune(
         app = _current_app(workspace, target)
         active_id = _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
         report.kept, snapshots = _retained(workspace, target, active_id)
+        for name in sorted(_record_release_ids(workspace, target.app_name)):
+            report.kept.setdefault(name, "named by a rollback record")
         for name in sorted(_named_release_ids(getattr(app, "default_source_code_path", None))):
             report.kept.setdefault(name, "App default source")
         candidates = _candidates(workspace, target, report, snapshots)

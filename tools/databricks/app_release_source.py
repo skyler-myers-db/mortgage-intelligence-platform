@@ -40,6 +40,15 @@ at once. Either way a call still throttled is a refusal (exit 2) naming the
 object and the budget spent, with no reconcile; any other error is handled
 exactly as above, on its first occurrence.
 
+Freeze (M2-PR7): after the local checks and before any upload, ``publish``
+refuses with exit 2 while a signed freeze marker holds
+(tools/databricks/app_deployment_freeze.py), unless ``--override-freeze
+<marker id>`` comes with ``--override-freeze-ack``, that marker's exact
+``override_freeze`` digest for this release folder, or the publish proves
+the held signed lease (``--held-lease-app-name`` and ``--held-lease-id``,
+the governed run's own flags). No marker, or a lease root that does not
+exist, changes nothing.
+
 ``verify-deployment`` is read-only, for the live proof (not wired into
 deploy.sh): the deployment (``--deployment-id``, else the App's active one)
 must name ``.../app-src/<id>`` as its source, its
@@ -392,12 +401,43 @@ def _parser() -> argparse.ArgumentParser:
     pub.add_argument("--expected-target", required=True)
     pub.add_argument("--expected-root-leaf", default=None)
     pub.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    pub.add_argument("--override-freeze", default=None, metavar="MARKER_ID")
+    pub.add_argument("--override-freeze-ack", default=None, metavar="SHA256")
+    pub.add_argument("--held-lease-app-name", default=None)
+    pub.add_argument("--held-lease-id", default=None)
     ver = commands.add_parser("verify-deployment", help="read-only: the App runs this release")
     ver.add_argument("--app-name", required=True)
     ver.add_argument("--manifest", type=Path, required=True)
     ver.add_argument("--release-id", required=True)
     ver.add_argument("--deployment-id", default=None)
     return parser
+
+
+def _freeze_gate(workspace: Any, args: argparse.Namespace, plan: PublishPlan) -> list[str]:
+    """The freeze marker's refusal, as a ReleaseContractError (exit 2) before any upload."""
+    from tools.databricks import app_deployment_freeze as freezer
+
+    held = None
+    if args.held_lease_app_name or args.held_lease_id:
+        if not (args.held_lease_app_name and args.held_lease_id):
+            raise ReleaseContractError("--held-lease-app-name and --held-lease-id go together")
+        from tools.databricks import app_deployment_lease
+
+        try:
+            held = app_deployment_lease.held_assertion(
+                workspace, app_name=args.held_lease_app_name, lease_id=args.held_lease_id,
+                source_git_sha=args.expected_commit,
+            )
+        except ValueError as exc:
+            raise ReleaseContractError(f"the held lease flags are invalid: {exc}") from exc
+    try:
+        return freezer.assert_publish_allowed(
+            workspace, release_path=plan.release_path, override_marker_id=args.override_freeze,
+            override_ack=args.override_freeze_ack, held_lease=held,
+            held_lease_app_name=args.held_lease_app_name,
+        )
+    except freezer.FreezeRefused as exc:
+        raise ReleaseContractError(f"{exc.code}: {exc}") from exc
 
 
 def main(
@@ -418,7 +458,10 @@ def main(
                 target=args.expected_target, root_leaf=args.expected_root_leaf,
                 workers=args.workers,
             )
-            report = upload_release(client(), plan, retry=retry)
+            workspace = client()
+            for note in _freeze_gate(workspace, args, plan):
+                print(f"[app-release-source] {note}")
+            report = upload_release(workspace, plan, retry=retry)
             print(
                 f"[app-release-source] {report.release_path}: {report.uploaded} uploaded, "
                 f"{report.reused} already present with equal bytes; listing and sha256 verified"
