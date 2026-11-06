@@ -195,7 +195,7 @@ import { expect, test } from './test';   // never '@playwright/test' directly
 
 test('lead queue shows the ranked borrowers', async ({ app, page }) => {
   await app.setTheme('light');          // app's own mip.theme key + mip.themeChosen + prefers-color-scheme
-  await app.gotoRoute('/lead-queue');   // waits for the URL's route to be painted (data-route-path), h1, no aria-busy in <main>, API quiet, fonts
+  await app.gotoRoute('/lead-queue');   // waits for the URL's route to be painted (data-route-path), h1, no aria-busy in <main> and no API fetch of the page's in flight on two polls in a row, API quiet, fonts
   await expect(page.locator('table.tbl tbody tr').first()).toBeVisible();
 });
 ```
@@ -395,7 +395,7 @@ Every stylesheet sits in a cascade layer (2026-09-21 audit css-05 / stack-v3 / b
 `fixture/visual.ts` also holds two guards the VRT and axe specs apply to every state they enter:
 
 - `expectNoSurfaceOverflow(page, { route, state, theme })`: no `.surface` may have `scrollWidth > clientWidth`. Declared inner scrollers such as `.tbl-wrap` are `overflow: auto` children and do not trip it. Pre-existing overflow sits in the dated, finding-pinned, node-pinned `KNOWN_SURFACE_OVERFLOW` ratchet; stale entries fail. `smoke.fixture.spec.ts` runs it on every route and theme, so it gates every PR, not only the VRT.
-- The audited-read guard (`markNaturalLoad` / `expectNoAuditedReadSince`): reads that write an audit row (`GET /api/v1/leads`, `GET /api/v1/borrowers/:id`, `GET /api/v1/borrowers/:id/proof`, `POST /api/v1/outreach/draft`, `POST /api/v1/offers/recommend`, `POST /api/v1/lookup/property-loan`) may happen only in a route's natural load (the Offer Orchestrator detail route loads recommend and draft by design). No state a spec enters afterwards (a drawer, a scroll, the Console) may call one.
+- The audited-read guard (`markNaturalLoad` / `expectNoAuditedReadSince`): reads that write an audit row (`GET /api/v1/leads`, `GET /api/v1/borrowers/:id`, `GET /api/v1/borrowers/:id/proof`, `POST /api/v1/outreach/draft`, `POST /api/v1/offers/recommend`, `POST /api/v1/lookup/property-loan`) may happen only in a route's natural load (the Offer Orchestrator detail route loads recommend and draft by design). No state a spec enters afterwards (a drawer, a scroll, the Console) may call one. The natural load ends where `settle()` does, so `settle()` counts a read from the page's own `fetch()` call (MockApi's in-page `PAGE_API_PROBE`), not from the moment the engine hands it to the mock's route handler, and wants the route ready on two polls in a row with no fetch started between them: a route that paints its h1 with nothing aria-busy starts its mount-time reads only after that commit, and on a loaded WebKit runner the handover took long enough for those reads to land after the mark (main CI run 41881146873). `settle-natural-load.cross-engine.fixture.spec.ts` pins both gaps: it holds the handover until the mock has been quiet, and it holds the mount reads unfetched until a poll has read the route ready, starting them as the next poll reads the probe, so a one-poll `settle()` fails it.
 
 `safety-net.fixture.spec.ts` proves these helpers, the accent and density seeding, the VRT host guard, and the capture discipline off the pinned host: each held-focus state loses its popover to the plain park and keeps it through `prepareCapture` (the capture's own pre-screenshot path), and each framed state's content is on screen there.
 
