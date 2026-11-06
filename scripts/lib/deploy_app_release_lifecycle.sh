@@ -16,6 +16,13 @@ restore_signed_blue_while_quiesced() {
     echo "${RED}[deploy] a contract migration window is open; refusing to restore signed blue onto the migrated schema.${RST}" >&2
     return 1
   fi
+  # The core tier restores its v7 core blue (M2-PR7b): no Gateway or proxy.
+  # Exactly off (the profile resolver admits only on and off), so a caller
+  # that never resolved a tier keeps the agentic restore.
+  if [[ "${CLIENT_AGENTIC_TIER:-}" == "off" ]]; then
+    restore_core_blue_while_quiesced
+    return $?
+  fi
   local endpoint
   local -a revoke_args=()
   if declare -F mint_m2m_token >/dev/null; then
@@ -55,6 +62,43 @@ restore_signed_blue_while_quiesced() {
   TREATMENT_RUNTIME_QUIESCED=0
   PREACTIVATION_APP_REVOKE_ENDPOINTS=()
   PREACTIVATION_APP_ACL_MUTATED=0
+  APP_UPGRADE_STATE="blue_active"
+}
+
+# The core tier's signed blue (M2-PR7b; tools/databricks/app_core_rollback.py):
+# step 0a (ensure: the tier gate and the core resource proof, or tier b when a
+# killed run left another deployment active) and tier b (restore). An
+# unverified blue frontend restores only with its exact one-run export.
+core_blue_command() {
+  local action="${1:?core blue action is required}" app_name="${2:?App name is required}"
+  local -a frontend_args=()
+  shift 2
+  [[ -z "${MIP_ACK_RESTORE_UNVERIFIED_FRONTEND:-}" ]] || \
+    frontend_args=(--restore-unverified-frontend-ack "$MIP_ACK_RESTORE_UNVERIFIED_FRONTEND")
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_core_rollback "$action" \
+    --app-name "$app_name" --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" --agentic-tier "$CLIENT_AGENTIC_TIER" \
+    --base-url "${MIP_APP_URL:?App URL is required for the core blue proof}" \
+    --token-env MIP_BEARER_TOKEN --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --treatment-catalog "$_GRANTS_CATALOG" "${frontend_args[@]}" "$@"
+}
+
+prove_or_restore_core_blue() {
+  core_blue_command ensure "$_GRANTS_APP_NAME" --out-env "${1:?binding env path is required}"
+}
+
+restore_core_blue_while_quiesced() {
+  if declare -F mint_m2m_token >/dev/null; then
+    mint_signed_app_proof_token || return 1
+  fi
+  core_blue_command restore "$APP_FAIL_CLOSED_NAME" \
+    --expected-rollback-deployment-id "$MIP_APP_ROLLBACK_DEPLOYMENT_ID" || return 1
+  converge_runtime_app_release_access || return 1
+  converge_app_treatment_access runtime || return 1
+  APP_ACCESS_QUARANTINED=0
+  TREATMENT_RUNTIME_QUIESCED=0
   APP_UPGRADE_STATE="blue_active"
 }
 
@@ -346,6 +390,13 @@ stop_app_after_failed_deploy() {
       return 0
       ;;
     green_captured_cleanup_pending)
+      if [[ "${CLIENT_AGENTIC_TIER:-}" == "off" ]]; then
+        # A core green holds no Gateway, Supervisor or proxy access (M2-PR7b).
+        echo "${YLW}[deploy] the core green is signed; converging its runtime operator access after a later failure.${RST}" >&2
+        converge_runtime_app_release_access && return 0
+        stop_and_quiesce_unproven_app || true
+        return 1
+      fi
       echo "${YLW}[deploy] green is signed; preserving every still-live journaled endpoint after cleanup failure.${RST}" >&2
       if converge_green_only_app_access; then
         return 0

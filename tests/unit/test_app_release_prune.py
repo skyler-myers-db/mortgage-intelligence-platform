@@ -449,3 +449,61 @@ def test_the_cli_exits_1_when_a_delete_cannot_be_reconciled(
 def test_the_retention_constants_and_the_typed_listing() -> None:
     assert (prune.KEEP_PREVIOUS, prune.MAX_DELETIONS, prune.TIME_BUDGET_SECONDS) == (2, 20, 600)
     assert FakeWorkspaceClient().workspace.get_status("/").object_type is ObjectType.DIRECTORY
+
+
+# --- folders a rollback record names (M2-PR7) -------------------------------------------
+
+
+def _store(client: FakeWorkspaceClient, key: str, record: object) -> None:
+    import json
+
+    from tools.databricks.app_rollback_secret_scope import expected_app_rollback_scope
+
+    client.secrets.values[(expected_app_rollback_scope("mip-app"), key)] = json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"version": 7, "provenance": "captured", "restore_source_path": "{folder}"},
+        {"version": 7, "provenance": "retired", "restore_source_path": "/x", "restore_payload": {"source_code_path": "{folder}"}},
+        {"version": 5, "payload": {"source_code_path": "{folder}"}},
+        {"version": 7, "provenance": "adopted", "source_code_path": "{folder}", "restore_source_path": "/x"},
+    ],
+    ids=("v7-captured-restore-source", "v7-tombstone-payload", "v5-payload", "v7-adopted-source"),
+)
+def test_a_folder_any_record_names_is_never_deleted(record: dict[str, object]) -> None:
+    import json
+
+    client = _world(old=5)
+    named = json.loads(json.dumps(record).replace("{folder}", path(rid(1))))
+    key = "app-last-good-v5-mip-app" if record["version"] == 5 else "app-last-good-v6-mip-app"
+    _store(client, key, named)
+
+    report = _run(client)
+
+    assert report.kept[rid(1)] == "named by a rollback record"
+    assert rid(1) not in report.deleted and client.workspace.exists(api(rid(1)))
+    assert report.deleted == [rid(2), rid(3)]
+
+
+def test_an_adopted_copy_is_never_a_candidate() -> None:
+    client = _world(old=3)
+    adopted = contract.adopted_folder_path(
+        principal=PRINCIPAL, target="dev", folder=contract.adopted_folder_name(deployment_id="d0", tree_sha256="7" * 64)
+    )
+    client.workspace.add_file(f"{contract.api_path(adopted)}/app.yaml", b"x\n")
+
+    report = _run(client)
+
+    assert client.workspace.exists(contract.api_path(adopted))
+    assert contract.api_path(adopted) in report.ignored
+
+
+def test_a_record_that_cannot_be_read_skips_the_whole_run() -> None:
+    client = _world(old=5)
+    _store(client, "app-last-good-v6-mip-app", "not an object")
+
+    report = _run(client)
+
+    assert report.skipped.startswith("a rollback record is not an object") and report.deleted == []

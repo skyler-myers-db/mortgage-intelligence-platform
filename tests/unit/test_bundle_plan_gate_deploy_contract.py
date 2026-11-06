@@ -156,14 +156,10 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
     assert estate[: estate.index("# >>> estate inventory: pre-lease >>>")].rstrip().endswith(
         "fi"
     ), "outside the dry-run branches"
-    # Only the core tier's release refusal (M2-PR3), also at top level, sits
-    # between the gate and the lease block.
+    # The lease block follows at once: the core tier's release refusal (M2-PR3)
+    # was lifted with the core release path (M2-PR7b).
     after = text[text.index(GATE_END) + len(GATE_END) :]
-    refusal_end = "# <<< core tier: release refusal <<<"
-    assert after.startswith("\n# >>> core tier: release refusal >>>\n")
-    assert after[after.index(refusal_end) + len(refusal_end) :].startswith(
-        '\nif [[ "$DRY_RUN" -eq 0 ]]; then\n'
-    )
+    assert after.startswith('\nif [[ "$DRY_RUN" -eq 0 ]]; then\n')
     code = [line for line in lines if not line.startswith("#")]
     assert code == [
         'if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]]; then',

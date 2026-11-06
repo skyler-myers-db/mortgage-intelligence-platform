@@ -32,6 +32,12 @@ ADOPT_PATH = (
     REPO / "tools" / "databricks" / "adopt_legacy_map.py",
     REPO / "tools" / "databricks" / "bundle_plan_adopt.py",
     REPO / "tools" / "clients" / "archive_legacy_root.py",
+    # adopt-live (M2-PR7): it signs a record and copies a folder, never an App mutation.
+    REPO / "tools" / "databricks" / "adopt_live.py",
+    REPO / "tools" / "databricks" / "adopt_live_facts.py",
+    REPO / "tools" / "databricks" / "adopted_source_copy.py",
+    REPO / "tools" / "databricks" / "app_rollback_record_v7.py",
+    REPO / "tools" / "databricks" / "operation_ack.py",
 )
 PLAN_START, PLAN_END = "# >>> adopt phase: plan >>>", "# <<< adopt phase: plan <<<"
 APPLY_START, APPLY_END = "# >>> adopt phase: apply >>>", "# <<< adopt phase: apply <<<"
@@ -109,10 +115,18 @@ def test_the_lexical_contract_sees_each_primitive_in_each_file(path: Path, carri
     assert violations(path.read_text(encoding="utf-8") + f"\n{carrier}\n"), carrier
 
 
-def test_the_slice_calls_only_the_adopt_tool() -> None:
+def test_the_slice_calls_only_the_adopt_tools() -> None:
     text = SLICE.read_text(encoding="utf-8")
 
-    assert set(re.findall(r"-m (tools\.[\w.]+)", text)) == {"tools.databricks.install_state_adopt"}
+    # The bind, adopt-live, and the adopted blue's pre-activation proof (M2-PR7),
+    # with the core tier's read-only rebuild of blue's restore payload (M2-PR7b).
+    assert set(re.findall(r"-m (tools\.[\w.]+)", text)) == {
+        "tools.databricks.install_state_adopt",
+        "tools.databricks.adopt_live",
+        "tools.databricks.blue_restore_proof",
+        "tools.databricks.app_core_rollback",
+    }
+    assert re.findall(r"-m tools\.databricks\.app_core_rollback (\S+)", text) == ["restore-payload"]
     assert "databricks " not in text.replace("tools.databricks", "")
     for line in text.splitlines():
         assert not line.startswith(("set ", "trap ", "exit ")), line
@@ -211,6 +225,8 @@ def _drive(
         'mktemp() { local f="$TMPDIR/report.$RANDOM"; : > "$f"; printf \'%s\\n\' "$f"; }\n'
         'GRN=""\n'
         'run_with_proof_signing_authority() { "$@"; }\n'
+        # adopt-live's own functions are driven in tests/unit/test_adopt_live_deploy_contract.py.
+        "run_adopt_live_plan() { :; }\nrun_adopt_live_apply() { :; }\n"
         + function(name)
         + f"{name} adopt\n"
     )
@@ -297,16 +313,20 @@ def test_the_adopt_phase_dry_run_plans_in_place_of_the_gate_and_stops_before_the
     checkout, env, log = sandbox(tmp_path)
     _refresh_off(checkout)
 
-    result = _deploy(checkout, {**env, "MIP_ADOPT_PLAN_ACK": ACK}, "-t", "client", "--phase", phase, "--dry-run", "--no-confirm")
+    acks = {"MIP_ADOPT_PLAN_ACK": ACK, "MIP_ACK_ADOPT_LIVE": ACK, "MIP_ACK_UNADOPT": ACK}
+    result = _deploy(checkout, {**env, **acks}, "-t", "client", "--phase", phase, "--dry-run", "--no-confirm")
 
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
     assert log.read_text(encoding="utf-8").splitlines() == ["--version"], "no Databricks call"
     commands = planned_commands(result.stdout)
     assert commands[0] == f".venv/bin/python -m tools.clients.live_checks --phase {phase}"
-    assert commands[-1] == (
+    assert commands[-2] == (
         f".venv/bin/python -m tools.databricks.install_state_adopt plan --phase {phase}"
         f" --report-out /tmp/mip-dry-run-{phase}-plan-report.json --ack-plan {ACK}"
     )
+    # adopt-live's read-only plan follows the bind plan, before the lease (M2-PR7).
+    assert commands[-1].startswith(f".venv/bin/python -m tools.databricks.adopt_live plan --mode {phase} ")
+    assert commands[-1].endswith(f" --ack {ACK}")
     assert not any("bundle_plan_gate" in command or "bundle_env plan" in command for command in commands)
     out = ANSI.sub("", result.stdout)
     assert "would take the signed lease, then:" in out

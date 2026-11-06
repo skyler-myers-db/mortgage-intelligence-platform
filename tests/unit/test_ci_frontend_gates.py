@@ -28,6 +28,16 @@ The parse job (``playwright-offline``) runs the whole route-fulfilled
 layout-stability spec: a ``--grep`` there ran one of its five tests and hid
 two broken ones, and the product layout shift behind one of them, for waves.
 
+Every job that launches a browser (a Playwright command, or a package.json
+script that ends in ``playwright test``) runs inside the image of the pin, and
+no step runs ``playwright install``, an apt command or an apt action: on
+2026-11-05 ``--with-deps`` met an Ubuntu mirror serving ~40 KB/s and two
+jobs timed out inside the install step (runs 42057978132 and 42097023431). The perf job trusts its checkout for git
+as root and installs CPython into a container-local tool cache; the
+cross-engine run step sets ``HOME=/root`` so Firefox starts as root.
+Nothing in ci.yml reads the secrets context, as the workflow's header
+requires, so no container can see a stored secret.
+
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
 """
@@ -38,6 +48,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,6 +89,14 @@ def test_the_perf_budget_step_is_unconditional() -> None:
     assert perf["name"] == "Run the perf and interaction budgets (single worker)"
     assert perf["run"] == PERF_STEP_RUN
     assert "continue-on-error" not in perf, "perf-budget is calibrated on the reference runner and gates"
+
+
+def test_the_perf_calibration_names_the_image_it_ran_in() -> None:
+    """A container step is not given the runner's ImageOS; the record names the image instead."""
+    job = _jobs()[PERF_JOB]
+    assert job["env"]["MIP_CI_IMAGE"] == job["container"]["image"]
+    calibration = (FRONTEND / "tests" / "e2e" / "fixture" / "calibration.ts").read_text(encoding="utf-8")
+    assert "image: read('MIP_CI_IMAGE')," in calibration
 
 
 def test_the_perf_calibration_is_uploaded_after_the_perf_step() -> None:
@@ -178,6 +197,206 @@ def test_the_vrt_container_is_the_image_of_the_playwright_pin() -> None:
         assert lock[f"node_modules/{name}"]["version"] == pin, f"{name} in the lock is not the {pin} pin"
 
 
+# The jobs that launch a browser. A new one joins this set, and the image.
+BROWSER_JOBS = {"playwright-offline", "e2e-fixture-shard", "e2e-fixture-perf", "e2e-visual", "e2e-cross-engine"}
+
+
+def _pin_image() -> str:
+    package = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
+    return f"mcr.microsoft.com/playwright:v{package['devDependencies']['@playwright/test']}-noble"
+
+
+# Playwright CLI commands that launch no browser (the e2e-fixture gate merges reports on the host).
+_PLAYWRIGHT_NO_BROWSER = ("merge-reports", "install", "install-deps", "uninstall", "--version", "-V", "--help")
+# A Playwright CLI call in command position: `npx playwright test`, `npm exec -- playwright
+# screenshot`, `node_modules/.bin/playwright test`; never `playwright-report`.
+_NO_BROWSER_ALTERNATION = "|".join(map(re.escape, _PLAYWRIGHT_NO_BROWSER))
+_PLAYWRIGHT_COMMAND = re.compile(
+    rf"(?:^|[\s;&|(/])playwright\s+(?!(?:{_NO_BROWSER_ALTERNATION})(?![\w-]))\S",
+    re.MULTILINE,
+)
+# `npm [--prefix dir] run[-script] [--flag ...] <script>` and `npm test`.
+_NPM_RUN = re.compile(r"\bnpm\b[^\n;&|]*?\brun(?:-script)?\s+(?:--prefix\s+\S+\s+|--?[\w-]+(?:=\S+)?\s+)*([\w:.-]+)")
+_NPM_TEST = re.compile(r"\bnpm\b[^\n;&|]*?\s(?:test|tst|t)(?=\s|$)", re.MULTILINE)
+
+
+def _npm_scripts(command: str) -> set[str]:
+    return set(_NPM_RUN.findall(command)) | ({"test"} if _NPM_TEST.search(command) else set())
+
+
+def _browser_scripts() -> set[str]:
+    """The frontend npm scripts that end in a browser run, followed through `npm run` chains."""
+    scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]
+    found = {name for name, command in scripts.items() if _PLAYWRIGHT_COMMAND.search(command)}
+    while more := {name for name, command in scripts.items() if _npm_scripts(command) & found} - found:
+        found |= more
+    return found
+
+
+def _runs_a_browser(job: dict[str, Any]) -> bool:
+    scripts = _browser_scripts()
+    runs = [str(step.get("run", "")) for step in job.get("steps", [])]
+    return any(_PLAYWRIGHT_COMMAND.search(run) or _npm_scripts(run) & scripts for run in runs)
+
+
+# A step may never fetch a browser or touch the apt mirror: an apt command in any
+# position (`sudo apt update`, `/usr/bin/apt-get -qq install`, `add-apt-repository`),
+# never a word that merely holds the letters, or an action named for apt.
+_BROWSER_INSTALL = re.compile(r"\bplaywright\s+install\b|\binstall-deps\b")
+_APT_COMMAND = re.compile(r"(?<![\w.-])(?:apt(?:-get)?|aptitude|add-apt-repository)(?=\s|$)", re.MULTILINE)
+
+
+def _forbidden_install(step: dict[str, Any]) -> str | None:
+    """What the step runs or uses that installs a browser or reaches apt, if anything."""
+    run = str(step.get("run", ""))
+    for pattern in (_BROWSER_INSTALL, _APT_COMMAND):
+        if hit := pattern.search(run):
+            return hit.group(0)
+    uses = str(step.get("uses", ""))
+    if "apt" in re.split(r"[/_.-]", uses.split("@", 1)[0].lower()):
+        return uses
+    return None
+
+
+def test_every_browser_job_runs_in_the_pinned_image_and_installs_no_browser() -> None:
+    """2026-11-05: `--with-deps` met a ~40 KB/s apt mirror and two jobs timed out installing.
+
+    The browsers and their system packages come from the image of the pin,
+    so no job's success depends on the runner's apt mirror. The container
+    carries no registry credentials (the image is public, the workflow
+    references no secrets).
+    """
+    jobs = _jobs()
+    assert {name for name, job in jobs.items() if _runs_a_browser(job)} == BROWSER_JOBS
+    expected = _pin_image()
+    for name in sorted(BROWSER_JOBS):
+        container = jobs[name]["container"]
+        assert container["image"] == expected, f"{name} runs outside the image of the pin"
+        assert container["options"] == "--ipc=host", name
+        assert set(container) == {"image", "options"}, f"{name}: the container takes no credentials, env or volumes"
+    for name, job in jobs.items():
+        for step in job.get("steps", []):
+            hit = _forbidden_install(step)
+            assert hit is None, f"{name}: {step.get('name', step)!r} runs or uses {hit!r}"
+
+
+def test_the_browser_scripts_are_the_playwright_test_scripts() -> None:
+    # Not vacuous: the four scripts that run `playwright test` today, and no other.
+    assert _browser_scripts() == {"e2e", "e2e:ci", "e2e:fixture", "e2e:fixture:ci"}
+
+
+@pytest.mark.parametrize(
+    ("run", "launches"),
+    [
+        ("npm --prefix frontend run e2e:ci", True),
+        ("npm run e2e", True),
+        ("npm --prefix frontend run e2e:fixture:ci -- --shard=1/4", True),
+        ("npm run --silent e2e:fixture", True),
+        ("npm run --prefix frontend e2e:ci", True),
+        ("cd frontend\nnpx playwright test tests/e2e/x.spec.ts", True),
+        ("npm exec -- playwright screenshot https://example.test out.png", True),
+        ("./node_modules/.bin/playwright test", True),
+        ("npx playwright merge-reports --reporter=dot,html blob-report", False),
+        ("npx playwright --version", False),
+        ("npm --prefix frontend run build", False),
+        ("npm --prefix frontend run test", False),
+        ("npm --prefix frontend ci", False),
+        ("rm -rf frontend/playwright-report", False),
+    ],
+)
+def test_a_browser_job_is_found_by_the_command_or_script_it_runs(run: str, launches: bool) -> None:
+    assert bool(_runs_a_browser({"steps": [{"run": run}]})) is launches
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"run": "sudo apt update"},
+        {"run": "sudo apt-get install -y fonts-noto"},
+        {"run": "apt install -y jq"},
+        {"run": "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -qq update"},
+        {"run": "set -e\nsudo aptitude install jq"},
+        {"run": "sudo add-apt-repository ppa:x/y"},
+        {"run": "npx playwright install --with-deps chromium"},
+        {"run": "npm exec -- playwright install-deps"},
+        {"uses": "awalsh128/cache-apt-pkgs-action@v1", "with": {"packages": "fonts-noto"}},
+    ],
+)
+def test_the_install_ban_sees_apt_and_browser_installs_in_any_form(step: dict[str, Any]) -> None:
+    assert _forbidden_install(step) is not None, step
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"run": "echo adapt the capture; aptly named"},
+        {"run": "npm --prefix frontend install --no-audit --no-fund"},
+        {"run": "echo never apt."},
+        {"uses": "actions/setup-python@v6"},
+        {"uses": "actions/upload-artifact@v7", "with": {"name": "apt-free"}},
+    ],
+)
+def test_the_install_ban_leaves_ordinary_steps_alone(step: dict[str, Any]) -> None:
+    assert _forbidden_install(step) is None, step
+
+
+# Every expression GitHub evaluates in a workflow value, and the context that holds stored secrets.
+_EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+_SECRETS_CONTEXT = re.compile(r"\bsecrets\b")
+
+
+def _secret_references(node: Any, where: str = "") -> list[str]:
+    """Every place a workflow tree reads the secrets context: an expression, or a `secrets:` key."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{where}.{key}" if where else str(key)
+            if str(key) == "secrets":
+                found.append(here)
+            found += _secret_references(value, here)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found += _secret_references(value, f"{where}[{index}]")
+    elif isinstance(node, str):
+        found += [f"{where}: {expr}" for expr in _EXPRESSION.findall(node) if _SECRETS_CONTEXT.search(expr)]
+    return found
+
+
+def test_the_workflow_references_no_secrets() -> None:
+    """The header's policy, pinned for the whole workflow: nothing in ci.yml reads a secret.
+
+    A fork PR gets the same green bar, and no browser job's container can see a
+    stored secret through a job or step `env:`, a `with:` input, a container
+    field or a script.
+    """
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert _secret_references(workflow) == []
+
+
+@pytest.mark.parametrize(
+    "leak",
+    [
+        {"env": {"LEAK": "${{ secrets.MIP_CI_DEPLOYER_CLIENT_ID }}"}},
+        {"steps": [{"run": "echo ${{ secrets.X }}"}]},
+        {"steps": [{"uses": "actions/x@v1", "with": {"token": "${{ secrets['X'] }}"}}]},
+        {"container": {"image": "i", "credentials": {"username": "u", "password": "${{secrets.P}}"}}},
+        {"steps": [{"run": "echo '${{ toJSON(secrets) }}' > all.json"}]},
+        {"uses": "./.github/workflows/reusable.yml", "secrets": "inherit"},
+    ],
+    ids=["job-env", "inline-run", "with-input", "container-credentials", "all-secrets", "secrets-inherit"],
+)
+def test_the_secret_scan_sees_every_route_into_a_job(leak: dict[str, Any]) -> None:
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    workflow["jobs"]["e2e-fixture-shard"].update(leak)
+    assert _secret_references(workflow), leak
+
+
+def test_the_secret_scan_reads_only_expressions() -> None:
+    # Prose about secrets, a step named for a secret scan and other contexts are not a read.
+    assert _secret_references({"env": {"NODE": "${{ env.NODE_VERSION }}", "NOTE": "no secrets here"}}) == []
+    assert _secret_references({"steps": [{"name": "gitleaks (secret scan)", "run": "gitleaks detect"}]}) == []
+
+
 def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> None:
     """Audit a11y-05 item 2: the jsx-a11y ratchet is a named CI step and part of `npm run lint`."""
     steps = _jobs()["frontend-tests"]["steps"]
@@ -265,6 +484,20 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
 
     assert build < python < install < check
     assert steps[check]["env"]["MIP_REQUIRE_FRONTEND_DIST"] == "1"
+    # Inside the image the job runs as root on a checkout the runner user
+    # owns, and the release stage runs git: the workspace is trusted first.
+    trust = _step_index(steps, 'git config --global --add safe.directory "$GITHUB_WORKSPACE"')
+    assert _step_index(steps, "actions/checkout@") < trust < check
+    # The runner's tool cache, mounted at /__t, holds CPython built for the
+    # runner's Ubuntu whose pip shebang names a host path (spawn ENOENT in
+    # the container); a container-only cache installs the build for the
+    # image's. The runner rewrites its host path /opt/hostedtoolcache to /__t.
+    tool_cache = steps[python]["env"]["AGENT_TOOLSDIRECTORY"]
+    assert tool_cache.startswith("/") and not tool_cache.startswith(("/__", "/opt/hostedtoolcache")), tool_cache
+    # pip as root disables a cache under the runner user's /github/home, and
+    # setup-python's `pip cache dir` then fails: the cache is root's own.
+    assert steps[python]["with"]["cache"] == "pip"
+    assert _jobs()[PERF_JOB]["env"]["PIP_CACHE_DIR"].startswith("/root/")
     # The same required-dist step stages that dist as deploy.sh step 1 does.
     assert (ROOT / RELEASE_STAGE_TEST).is_file()
     assert _step_index(steps, RELEASE_STAGE_TEST) == check
@@ -293,17 +526,20 @@ def _playwright_regex(name: str) -> re.Pattern[str]:
     return re.compile(literal.group(1))
 
 
-def test_the_cross_engine_job_installs_webkit_and_firefox_and_gates() -> None:
+def test_the_cross_engine_job_runs_webkit_and_firefox_from_the_pinned_image_and_gates() -> None:
     job = _jobs()["e2e-cross-engine"]
     assert job["name"] == "e2e (fixture, WebKit + Firefox forced colors)"
     assert job["runs-on"] == "ubuntu-latest"
     assert "continue-on-error" not in job
+    # WebKit and Firefox come from the image (the test above pins it and the
+    # absence of any `playwright install`).
+    assert job["container"]["image"] == _pin_image()
     steps = job["steps"]
-    install = steps[_step_index(steps, "npx playwright install --with-deps webkit firefox")]
-    assert install["working-directory"] == "frontend"
     run = steps[_step_index(steps, "npm --prefix frontend run e2e:fixture:ci")]
     assert run["env"]["MIP_CROSS_ENGINE"] == "1"
     assert run["env"]["E2E_FIXTURE_WORKERS"] == "2"
+    # Firefox will not start as root under the runner user's /github/home.
+    assert run["env"]["HOME"] == "/root"
     assert all("continue-on-error" not in step for step in steps)
     assert "secrets." not in yaml.safe_dump(job), "the cross-engine job is credential-free"
 
