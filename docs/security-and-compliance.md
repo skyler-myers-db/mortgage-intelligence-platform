@@ -319,9 +319,9 @@ recoveries: the Offer detail's snapshot reads `GET /borrowers/{id}`
 (`VIEW_BORROWER`) beside `POST /offers/recommend`, and the borrower read can
 be answered while the recommend never is.
 
-So a panel that writes no audit row loads by itself once the network
-returns, the Console's "My recent activity" and the Admin operations panel
-included. An audited read whose answer lost its body (`VIEW_LEADS`,
+So a panel that writes no audit row, and whose query keeps the reconnect
+default, loads by itself once the network returns, the Console's "My recent
+activity" and the Admin operations panel included. An audited read whose answer lost its body (`VIEW_LEADS`,
 `VIEW_BORROWER`, `VIEW_AUDIT_LEDGER`) has written its row, and it stays in
 its error state until the reader retries or reopens the route; so does a
 query that opted out (the Offer detail, the proof, Genie history, the
