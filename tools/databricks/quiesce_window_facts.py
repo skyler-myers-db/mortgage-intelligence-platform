@@ -9,6 +9,13 @@ Lakebase migration plan (WR3). The two full-tree digests are downloaded only
 when a reason exists. An open window's dead-man marker is read too (M0-PR9):
 a restart it records lets the pre-lease plan through to the recovery under
 the lease, which re-proves it (``repin --from-deadman``).
+
+A v7 core record (M2-PR7b: an adopted blue, or a core release's own capture)
+is read too, its env-name set from the record itself. Only a plan with no
+reason passes over it: the window's start-and-re-pin is written for v5 and v6
+records, and a v7 one waits for spike S7 (how a start snapshots source), so a
+v7 blue that needs a window refuses before the lease (``V7WindowOwed``), with
+the App untouched. A v7 agentic record is refused as before (M4-PR1).
 """
 
 from __future__ import annotations
@@ -18,7 +25,12 @@ from typing import Any
 
 from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_resource_bindings import binding_diff
-from tools.databricks.app_rollback_record_contract import _load_record, _text
+from tools.databricks.app_rollback_record_contract import (
+    V7_RECORD_VERSION,
+    V7_REFUSAL,
+    _load_record,
+    _text,
+)
 from tools.databricks.app_start_deployment import (
     env_names,
     env_names_digest,
@@ -35,6 +47,12 @@ ROLE_STATES = frozenset({"exact", "drift"})
 # recorded absent, which no converge can rotate. The App and the jobs reader
 # always exist.
 VERIFIER_ROLE_STATES = ROLE_STATES | {"absent"}
+
+
+class V7WindowOwed(RuntimeError):
+    """A v7 blue needs a window, whose start-and-re-pin is not written for v7 (M2-PR7b)."""
+
+    code = "window_over_v7_blue"
 
 
 def app_or_none(workspace: Any, *, app_name: str) -> object | None:
@@ -131,12 +149,19 @@ def collect_facts(
         return WindowFacts(applicable=False, not_applicable_reason="no_app")
     try:
         record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            expected_lakebase_instance=lakebase_instance,
+            accept_v7=True,
         )
     except RuntimeError as exc:
         if str(exc).startswith(NOT_FOUND_RECORD):
             return WindowFacts(applicable=False, not_applicable_reason="no_signed_record")
         raise
+    v7 = record["version"] == V7_RECORD_VERSION
+    if v7 and record["tier"] != "core":
+        raise RuntimeError(f"the signed blue is a v7 agentic record; {V7_REFUSAL}")
     if (
         not {role_state, jobs_reader_role_state} <= ROLE_STATES
         or verifier_role_state not in VERIFIER_ROLE_STATES
@@ -169,8 +194,17 @@ def collect_facts(
         blue_current=last_deployment_is(workspace, app_name=app_name, deployment_id=blue_id),
         restore_source=_text(getattr(blue, "source_code_path", None)),
         default_source_code_path=_text(getattr(app, "default_source_code_path", None)),
-        env_names_sha256=env_names_digest(env_names(record["payload"])),
+        env_names_sha256=(
+            str(record["env_names_sha256"])
+            if v7
+            else env_names_digest(env_names(record["payload"]))
+        ),
     )
+    if v7 and facts.reasons():
+        raise V7WindowOwed(
+            f"the plan needs a window ({', '.join(facts.reasons())}) over a v7 core blue, whose "
+            "start-and-re-pin waits for spike S7; nothing was changed and the App keeps serving"
+        )
     if not facts.reasons() or not facts.restore_source:
         return facts
     return WindowFacts(

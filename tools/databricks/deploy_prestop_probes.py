@@ -73,8 +73,10 @@ any refusal, before the signed lease and any App stop.
 The core tier (``--agentic-tier off``, the client profile's
 ``MIP_AGENTIC_TIER``; M2-PR3) deploys no agent runtime, verifier or
 Supervisor: it takes neither application ID, the two Supervisor clauses do not
-apply, and the Genie clause audits the App alone. The agentic tier (the
-default, so today's arguments are unchanged) requires both IDs.
+apply, the Genie clause audits the App alone, and the record clause judges the
+record as the core step 0a will (a core record and its core resource proof,
+M2-PR7b). The agentic tier (the default, so today's arguments are unchanged)
+requires both IDs.
 """
 
 from __future__ import annotations
@@ -602,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--genie-space-name", required=True)
     parser.add_argument("--rebase-unverified-app", choices=("0", "1"), required=True)
+    # --phase adopt|unadopt: the record clause judges what adopt-live will (M2-PR7).
+    parser.add_argument("--phase", choices=("adopt", "unadopt"), default=None)
     args = parser.parse_args(argv)
     identities = (args.runtime_application_id, args.verifier_application_id)
     if args.agentic_tier == "on" and not all(identities):
@@ -644,6 +648,8 @@ def main(argv: list[str] | None = None) -> int:
             metastore_owner=metastore_owner_from_env(),
             # The preflight's own ack (shell only): the same plan digest adopts the same space.
             genie_pin_ack=os.environ.get(GENIE_PIN_ACK_ENV, "").strip(),
+            adopt_phase=args.phase is not None,
+            agentic_tier=args.agentic_tier,
         ),
         runtime_application_id=args.runtime_application_id,
         verifier_application_id=args.verifier_application_id,
