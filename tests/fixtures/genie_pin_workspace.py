@@ -150,7 +150,9 @@ def patch_rollback_scope(monkeypatch: pytest.MonkeyPatch, *, record_space: str |
 
     monkeypatch.setattr(app_rollback_secret_scope, "assert_owned_app_rollback_scope", owned)
 
-    def load(workspace: Any, *, app_name: str, scope: str, expected_lakebase_instance: str) -> dict[str, Any]:
+    def load(
+        workspace: Any, *, app_name: str, scope: str, expected_lakebase_instance: str, accept_v7: bool = False
+    ) -> dict[str, Any]:
         if record_space is None:
             raise AssertionError("no record exists in this fixture")
         return {"genie_space_id": record_space}
