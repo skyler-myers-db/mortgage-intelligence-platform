@@ -1333,8 +1333,9 @@ unreferenced immutable checkpoint, but cannot publish a lease successor or
 alter another holder's map entry; checkpoint history is never deleted. Active
 leases have a six-hour absolute lifetime. Keep every retired
 public key, oldest first, in the public GitHub Actions variable
-`MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`; private keys are still destroyed
-at retirement. Each successor records the public-key epoch and rejects epoch
+`MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (`deploy-dev.yml` does not carry
+it yet: owner step 6 under "CI deploy (deploy-dev.yml)"); private keys are
+still destroyed at retirement. Each successor records the public-key epoch and rejects epoch
 regression. The signed chain retains its original recovery root through every
 release by the same holder. A new holder with no signed history begins a
 separate root, while a returning holder discovers its newest historical root
@@ -4657,8 +4658,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `origin`, or of the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
    names are fixed per role (`IDENTITY_DEFAULTS`). Before M2-PR2 they were
    repository-level, and in this repository they belong to the CI install:
-   `nightly.yml` reads them, and `deploy-dev.yml` reads them wherever its
-   `dev` environment does not shadow them (owner step 3). A live identity bootstrap therefore needs its own reviewed sink: another
+   the parked `nightly.yml` reads them; `deploy-dev.yml` reads none, and its
+   `check-dispatch` refuses every dispatch while one is set (owner step 3). A
+   live identity bootstrap therefore needs its own reviewed sink: another
    repository named by `MIP_M2M_GITHUB_REPOSITORY`, plus a reviewed way to
    hand the values to the operator, who cannot read GitHub secrets back. It
    stays out of scope until that design is reviewed. Never run the bootstrap
@@ -4713,45 +4715,48 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    through CI refuses at the preflight until that field exists (a follow-up).
    (`GENIE_SPACE_ID` is no deploy input since M1-PR3; `nightly.yml` still
    names it for its live checks.)
-5. Point the REPOSITORY-level names `nightly.yml` reads (it has no
-   `environment:`) at the same CI install as the CI environment: the
-   variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
+5. Set no repository-level profile name for `nightly.yml` while
+   `deploy-dev.yml` is in use. Every profile name lives in the client's
+   environment only (`gh variable set --env <client>` for a public field,
+   `gh secret set --env <client>` for an identifying or secret one, as in
+   step 3). `nightly.yml` has no `environment:` and reads repository-level
+   names, but the ones it reads that are profile fields or aliases
+   (`MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
    `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
    `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_AGENT_PROXY_SECRET_SCOPE`,
-   `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX` and
-   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE` (and
-   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or in that install's catalog),
-   and the secrets `DATABRICKS_HOST`, `DATABRICKS_WAREHOUSE_ID` and
-   `GENIE_SPACE_ID`. Only `deploy-dev.yml` (whose dev environment shadows the
-   repository level) and `nightly.yml` read these names. Compare names and
-   `updated_at` in the repository-level listings above against the dev
-   environment's. If the repository-level values must keep naming the live
-   install, nightly cannot certify the CI install: stop and decide before
-   integrator step 5. The repository-level `DATABRICKS_TOKEN` is dead with
-   the deleted CI workspace; do not mint another one. M1-PR8 gives nightly
-   its own validator identity and federation subject. After the first green
-   `deploy-dev.yml` run, set the repository variable
-   `MIP_REVIEWED_FUNCTION_OWNER` to `<deployer-application-id>`, the reviewed
-   functions' new owner, or nightly reports owner drift.
-6. Keep `main` in the dev environment's deployment branch policy. A
-   read-only check on 2026-10-28 found it next to
-   `codex/intelligence-trust-ux`. Then make the AI Gateway proof-key registry
-   verify every signed record on the CI install (the proof-key rotation in
-   "Per-run M2M identities"). The registry
-   (`app_deployment_lease_support.key_registry`) is
-   `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (comma-separated, oldest
+   `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX`,
+   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`, `LAKEBASE_DATABASE`, the secrets
+   `DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_HOST`, `DATABRICKS_ACCOUNT_ID`,
+   `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
+   `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, every `*_CLIENT_SECRET`, and
+   every `*_CLIENT_ID` identity alias) make `check-dispatch` refuse every
+   dispatch (step 3). `nightly.yml` is parked until M1-PR8, which rebuilds
+   it per client environment with its own validator identity and federation
+   subject; its repository-level names wait for that PR. Its other names
+   (such as `DATABRICKS_WAREHOUSE_ID`, `GENIE_SPACE_ID` and
+   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`) are no profile names and are not
+   refused, but nothing reads them while it is parked. The repository-level
+   `DATABRICKS_TOKEN` is dead with the deleted CI workspace; do not mint
+   another one. After the first green `deploy-dev.yml` run, set the
+   repository variable `MIP_REVIEWED_FUNCTION_OWNER` (no profile name) to
+   `<deployer-application-id>`, the reviewed functions' new owner, or the
+   rebuilt nightly reports owner drift.
+6. The AI Gateway proof-key registry (the proof-key rotation in "Per-run M2M
+   identities"). The registry (`app_deployment_lease_support.key_registry`)
+   is `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (comma-separated, oldest
    first), then `MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY`, then the current
    key derived from `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`. It must end at the
    current key, and each signed lease record's `key_epoch` must be its
-   signing key's index, so a retired key can never become current again. If
-   the install's records carry more than one epoch, generate a new Ed25519
-   signing key yourself and store it with `gh secret set
-   MIP_AI_GATEWAY_PROOF_SIGNING_KEY`; never reuse a retired private key.
-   Set the repository variable `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`
-   to every retired public key that signed one of those records, oldest
-   first, and the repository variable `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` to
-   the new public key for nightly. `deploy-dev.yml` passes the historical
-   keys to `scripts/deploy.sh`.
+   signing key's index, so a retired key can never become current again.
+   `deploy-dev.yml` carries only the signing key, a secret of the client's
+   environment (`gh secret set --env <client>
+   MIP_AI_GATEWAY_PROOF_SIGNING_KEY`, never repository level). Neither the
+   historical keys nor the previous key is a client profile field, so it
+   carries neither: its registry is the current key alone, and a lease record
+   signed by a retired key, or under a longer registry (`key_epoch` above 0),
+   fails closed until a reviewed profile field carries the retired public
+   keys (a follow-up). Never reuse a retired private key; a rotation
+   generates a new Ed25519 signing key, and you do it yourself.
 7. Clear the step-4 and step-10b blockers. First confirm the metastore:
    `databricks metastores current` on a credential for the CI install's
    workspace returns that workspace's `workspace_id` and the `metastore_id`
@@ -4819,10 +4824,9 @@ hold for it, never against the live install.
 
 4. After the owner's dispatch and approval (owner step 8), watch
    `deploy-dev.yml` to green.
-5. Confirm owner step 5 (names and `updated_at` only: the repository-level
-   variables and secrets `nightly.yml` reads name the CI install), then
-   dispatch `nightly.yml` on the same sha and watch it. It needs M1-PR8
-   first: until then its `parked` job refuses.
+5. Dispatch `nightly.yml` on the same sha and watch it. It needs M1-PR8
+   first: until then its `parked` job refuses, and its repository-level
+   names stay unset (owner step 5).
 6. Repair stale `frontend/tests/e2e/real_data.spec.ts` assertions in a PR if
    it is red, then repeat 4-5; record the green run URL in the audit
    report; re-dispatch `deploy-prod.yml` and expect PASS.

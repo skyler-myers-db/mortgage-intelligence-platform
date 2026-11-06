@@ -102,10 +102,16 @@ organization-level secret or variable may carry a client profile field name
 (GitHub would merge it into the environment's contexts). The table is the
 parked `nightly.yml`'s until M1-PR8.
 
-All listed below must be set under **Settings → Secrets and variables
-→ Actions → Repository secrets**. Missing any one of them aborts the
-job that needs it with a clear `::error::` pointing at the offending
-var.
+The table lists what the parked `nightly.yml` names under **Settings →
+Secrets and variables → Actions → Repository secrets**; nothing reads them
+while it is parked. Each row that is a profile field or alias name
+(`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_HOST`, every
+`*_CLIENT_ID` and `*_CLIENT_SECRET`,
+`DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
+`MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`) must be deleted at repository
+level before any per-client dispatch, and must not be set again while
+`deploy-dev.yml` is in use: `check-dispatch` refuses every dispatch while one
+is set, and names it (docs/deployment.md, owner steps 3 and 5).
 
 | Secret | What it is | How to obtain |
 |---|---|---|

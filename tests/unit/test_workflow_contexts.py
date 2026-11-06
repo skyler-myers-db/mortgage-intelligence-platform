@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -262,3 +263,23 @@ def test_collect_refuses_a_misfiled_identifying_variable_by_name_never_by_value(
     monkeypatch.setenv(contexts.MISFILED_ENV, "MIP_CLIENT")
     assert contexts.main(["collect", "--vars-out", str(tmp_path / "v.json"), "--secrets-out", str(tmp_path / "s.json")]) == 2
     assert "names that are not identifying or secret profile names" in capsys.readouterr().err
+
+
+def _owner_steps() -> str:
+    text = (REPO / "docs" / "deployment.md").read_text(encoding="utf-8")
+    return text.split("**Owner steps (never agent work).**", 1)[1].split("**Integrator steps.**", 1)[0]
+
+
+def test_the_owner_steps_set_every_profile_name_in_the_client_environment_only() -> None:
+    """check-dispatch refuses a repository-level profile name, so no owner step may tell the owner to set one."""
+
+    steps = _owner_steps()
+    unscoped = re.findall(r"gh\s+(?:secret|variable)\s+set\b(?!\s+--env\b)\s*\S*", steps)
+    assert unscoped == [], "every gh secret/variable set names the client's environment"
+    for name in re.findall(r"repository\s+(?:variable|secret)s?\s+`([A-Z0-9_]+)`", steps):
+        assert name not in contexts.SCOPE_NAMES, f"{name}: a profile name, refused at repository level"
+    assert not re.search(r"environment\s+shadows|dev\s+environment's\s+deployment\s+branch", steps), "no dev environment"
+    carried = "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS" in WORKFLOW.read_text(encoding="utf-8")
+    assert carried == bool(re.search(r"`deploy-dev\.yml`\s+passes\s+the\s+historical", steps)), (
+        "the runbook says deploy-dev.yml passes the historical keys exactly when it does"
+    )
