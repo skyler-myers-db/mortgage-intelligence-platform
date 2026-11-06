@@ -194,7 +194,10 @@ capture (never on the rollback branch) and deletes, as the deploy identity
 through the SDK, only DIRECTORY children of the exact `<bundle root>/app-src`
 whose names are release ids. It keeps the current release (which must be the
 App's active deployment source), the folder of the signed rollback record's
-deployment, the folder the App's `default_source_code_path` names,
+deployment, every folder any record in the App's rollback scope names (both
+slots, every version from v5 to v7 and every provenance, a retired tombstone
+included, read as raw JSON; a slot that cannot be read skips the run; M2-PR7),
+the folder the App's `default_source_code_path` names,
 the two newest other release folders the App's deployments reference (every
 page of the deployment listing, newest first) and any folder a listed deployment's
 `/src/` snapshot lies in. The rollback record's source and the App's default
@@ -514,6 +517,47 @@ MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
   --lakebase-instance <lakebase-instance> > <payload>
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
+
+**The freeze marker (M2-PR7).** During the cutover the owner freezes this
+recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
+<app-name> --until <epoch>` (with the deploy's proof-signing key exported),
+and lifts it with `thaw --marker-id <id>`; both write a signed, create-only
+marker in the lease root and nothing is deleted. A freeze is signed before
+the root is touched, so a refused one (no signing key, a bad `--until`)
+changes nothing. Neither ever sets a permission: a missing lease root is
+created bare (the first governed lease converges its ACL) and judged at once
+like a root with no lease record, and an existing one is checked read-only,
+exactly protected for the App lease's own holder and writer or, while the
+App has no lease record, held by no accessor but admins and the freezing
+identity (`freeze_root_unprotected` otherwise; a refusal over a root the
+freeze just created leaves that root bare and empty, never deleted), so a
+freeze from the owner's shell never takes the root's MANAGE from the
+deployer and nobody else can delete its marker, the first one included.
+Whether a new root's inherited ACL passes in a given workspace is not yet
+probed live: if it carries any accessor but admins and the freezing
+identity, the first freeze refuses instead of writing. `app_release_source publish`
+reads every marker after its local checks and before any upload, and
+refuses with exit 2 while one is frozen. A marker reads as thawed or
+expired only when its signature verifies, so a shell
+without the deploy's public verify key (`MIP_AI_GATEWAY_PROOF_VERIFY_KEY`)
+reads every marker as frozen: export that key to publish after a thaw. To
+publish one release folder while frozen anyway, add `--override-freeze
+<marker id> --override-freeze-ack <sha256>`, the `override_freeze` digest the
+refusal prints for that marker and that exact folder; it lifts no other
+marker and carries to no other folder. `./scripts/deploy.sh`'s own publish
+passes `--held-lease-app-name` and `--held-lease-id`, and its proven lease
+exempts that App's own markers only: the governed run under the signed lease
+is the coordinated path the freeze protects, and every other App's marker is
+still judged, so a lease taken on a decoy App lifts nothing. A lease root that
+does not exist changes nothing. Once it exists, though (a governed lease
+creates it, or a freeze creates it bare until the first lease converges it),
+the publisher lists it on every publish, so the identity that runs this
+recipe must be able to list it (a workspace admin can: admins manage it), or
+the publish refuses (`freeze_unreadable`) even with no marker; and since
+markers are never deleted, after any freeze every later publish needs
+`MIP_AI_GATEWAY_PROOF_VERIFY_KEY` exported to read an expired or thawed marker
+as such. The freeze blocks only this publisher, not an old session's own
+deploy driver.
 
 Publish, converge and deploy are the three commands that call the workspace,
 and each names the live workspace's CLI profile, the same `<profile>` in all
@@ -1504,7 +1548,10 @@ App/deployer ownership marker, and is re-audited before every record read,
 write, or legacy-key deletion. Its direct ACL must be exactly the original
 deployer plus `admins` at `MANAGE`, and its only permitted non-marker keys are
 that App's v5/v6 rollback records. An unmarked pre-existing scope, foreign ACL,
-or unrelated key blocks deployment without adoption or cleanup.
+or unrelated key blocks deployment without adoption or cleanup. A v7 record
+(M2-PR7, below) shares the v6 key, so one slot always holds the one current
+record; the v5/v6 reader the release path calls refuses a v7 record by name
+and reads a v7 retired tombstone as no record.
 The only bounded adoption path is an unmarked, exact-current-deployer scope
 containing solely that App's v5 key; deploy verifies the v5 Ed25519 signature,
 schema, digests, and Lakebase binding before writing the ownership marker, then
@@ -2702,10 +2749,10 @@ that identity's root, so the client deployer's own state binds nothing and
 every plan refuses it as `not_adopted`. `--phase adopt` binds exactly the
 legacy keys into the deployer's state; `--phase unadopt` is its exact inverse.
 Neither stops, starts or deploys the App, changes a grant or deletes anything:
-the only mutation is the deployer's own bundle state, through
-`databricks bundle deployment bind|unbind`, under the signed lease. Signing the
-live deployment as an adopted blue (`adopt-live`: the full-tree digest, the
-immutable `app-src/adopted-*` copy, supersede, freeze) is M2-PR7's.
+the bind's only mutation is the deployer's own bundle state, through
+`databricks bundle deployment bind|unbind`, under the signed lease. Each phase
+then runs `adopt-live` (next section), which signs the live deployment as an
+adopted blue or retires that record.
 
 **Profile.** `MIP_LEGACY_BUNDLE_ROOT` (identifying: a GitHub Environment secret
 in CI, `.env.local` locally) names the legacy root,
@@ -2788,8 +2835,9 @@ lease to be held, which only the deploy's signing authority can take. The CLI
 never inherits the proof-signing keys, and its output (which names ids) stays
 out of the log; every id read from either state is a runner
 mask. A live adopt or unadopt phase is CI-only, like the plan phase; locally,
-`--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`) prints the
-steps and stops before the lease. The expected run on client #1 binds 16 keys and
+`--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`; with it,
+adopt-live's own ack must be exported too) prints the steps and stops before
+the lease. The expected run on client #1 binds 16 keys and
 plans exactly 2 creates (the two jobs the legacy install never had).
 
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
@@ -2822,6 +2870,156 @@ deployer's state binds the App. The Workspace API has no move call, so
 and copies each file and notebook create-only and byte-verified. It never
 deletes: removing the legacy originals stays the owner's cutover step, from
 the plan's list.
+
+### Signing the live deployment as an adopted blue (`adopt-live`, M2-PR7)
+
+`tools/databricks/adopt_live.py` runs in the adopt phases after the bind (adopt)
+or the unbind (unadopt): `plan` before the signed lease, `apply` under it. It
+never stops, starts, deploys or updates the App (a spy test of every SDK App
+mutation and the stop-primitive AST map both prove it). Its writes are a
+create-only copy of the live source folder, the rollback scope when absent,
+and one signed record version.
+
+**Preconditions** (`tools/databricks/adopt_live_facts.py`), each with its own
+refusal, all before the lease: the active deployment is the newest SUCCEEDED
+one, nothing is pending and the compute is ACTIVE (`deployment_unstable`); its
+env-name set (names only; Databricks redacts the values) carries no agent
+model, serving, Gateway, Supervisor, eval, Gateway-attestation or proxy name
+(`env_names_not_proxyless`; the two agentic switches `MIP_AI_GATEWAY` and
+`MIP_AGENT_ORCHESTRATOR` are core names whose restore value must be `0`); the live
+bindings are core kinds only (`bindings_invalid`) and, after the bind, equal
+the profile's reviewed bindings from the bundle summary (`bindings_differ`);
+the App ACL is snapshotted (`acl_unreadable`); the campaign-treatment boundary
+is exactly converged, read-only, in the runtime or the quiesce mode
+(`treatment_unverified`); the App's authenticated health names a commit that
+resolves in the checkout and is an ancestor of main, where main is
+`refs/remotes/origin/main`, never the run's own HEAD, and the run's source
+commit is itself on that main (`health_unreadable`, `main_unresolved`,
+`source_not_on_main`, `health_sha_not_on_main`; a CI checkout needs the full
+history and origin/main fetched), so a run from a branch whose HEAD carries an
+unmerged commit refuses; the full-tree digest of the deployment's source folder (every file,
+`app.yaml` and `frontend/dist` included) equals that of its `/src/` snapshot
+(`tree_drift`); `app.yaml` is byte-equal to the repo's at the health sha
+(`app_yaml_differs`); and every other file outside `frontend/dist` is the App
+runtime closure git tracks at that sha (`closure_differs`). A folder staged by
+an older closure definition therefore refuses, and the remedy is a fresh
+emergency deploy of a current commit before the adoption. `frontend/dist` is
+compared with a dist adopt-live builds itself from the health sha when
+`MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
+that sha into a private temporary tree, then `npm ci --ignore-scripts` and
+`npm run build` there, with an allowlisted environment that holds no
+Databricks, proof or npm credential: the tools, an allowlist of npm's
+registry, cache and proxy settings (never an auth token or password, and no
+registry or proxy URL that carries userinfo), the reviewed tenant appearance,
+and npm's user and global config pointed at an empty private file, so
+`~/.npmrc` is never read. It is no sandbox: the build runs as the operator's
+OS user, like the deploy's own frontend build. No CI
+job keeps a dist artifact, and a directory an operator names proves nothing (a
+copy of the live dist itself compares equal), so no such input exists. Equal
+bytes are `verified`, and the plan and the record carry the digest of the dist
+they matched; anything else (no build, a failed one, another Node, a lender
+mark the build cannot stage) is `unverified`, and any restore to an unverified
+record needs the `restore_unverified_frontend` ack.
+
+**The record slot and the modes.** adopt signs only when the slot holds no
+record, a retired tombstone, or this deployment's own adopted record (an
+idempotent re-run); any other record refuses (`record_present`). It signs the
+core tier only (`tier_agentic`): the adopted deployment carries no Gateway, so
+its record cannot carry the Gateway resource proof, and the agentic tier waits
+for the estate inventory (M4-PR1). `MIP_ADOPT_LIVE_SUPERSEDE=<sha256 of the
+record's deployment id>` in an adopt phase re-signs an adopted record onto a
+newer active deployment after the same proofs (`predecessor_deployment_id`
+names the old one). unadopt writes the tombstone version (`provenance:
+retired`, every other field kept), so a later adopt starts clean; with no
+adopted record it retires nothing, so the bind's unadopt recovery still runs
+in either tier, and a captured blue refuses (`record_present`). Only adopt and
+supersede refuse the agentic tier. Over a tombstone, the v5/v6 reader's
+remedy (the same text in either tier) is a re-adoption in the core tier:
+`--phase adopt` from a profile whose `MIP_AGENTIC_TIER` is off. adopt-live
+refuses the agentic tier (`tier_agentic`) and the one-time unsigned rebase's
+bootstrap gate refuses over any signed record, a tombstone included, so an
+agentic-tier profile has no route over a tombstone until the agentic tier can
+adopt.
+
+**The acks.** The owner attestation is deferred (review mode
+`single_maintainer_audited`), so each mode prints the sha256 of its plan's
+purpose-named canonical body (`tools/databricks/operation_ack.py`):
+`MIP_ACK_ADOPT_LIVE`, `MIP_ACK_SUPERSEDE` or `MIP_ACK_UNADOPT`, a one-run shell
+export and never a `.env.local` line. The bind's `MIP_ADOPT_PLAN_ACK` without
+it refuses before the lease. The body names its purpose, so an ack for one
+purpose never satisfies another, and whenever the slot holds a record the plan
+names that exact signed version's sha256 (`record_sha256`), so an ack covers
+one record version: the first unadopt's ack is refused after a re-adoption.
+`apply` recomputes the plan immediately before its first write and refuses on
+any difference. The `override_freeze` ack goes to the publisher as
+`--override-freeze-ack`, and the `restore_unverified_frontend` ack to the one
+restore that needs it; neither is an environment variable, and a refusal names
+the route each really takes.
+
+**The copy.** `apply` publishes the downloaded bytes create-only into the
+deployer's `app-src/adopted-<id12>-<digest12>` (`id12` from the sha256 of the
+deployment id, `digest12` from the full-tree digest) with
+`app_release_source`'s own stage checks, listing and sha256 proof, re-hashes the
+copy remotely and refuses on any difference, with no record written. Prune
+never deletes it: its name is no release id, and every record that names it is
+read before any delete.
+
+**The record (v7).** `tools/databricks/app_rollback_record_v7.py`: `tier`
+(`core`, whose resource proof is exactly the core bindings and refuses any
+serving-endpoint, Gateway or proxy binding, never consulting the Gateway
+resource proof; or `agentic`, which keeps v6's Gateway contract unchanged),
+`provenance` (`adopted`, `captured`, `retired`), `ack_purpose` and
+`ack_sha256` (the exact ack that authorised the version, in place of the
+plan's `profile_attestation_digest`, which needs the deferred attestation),
+`source_code_path`, `source_tree_sha256`, `restore_source_path`,
+`frontend_provenance` and `frontend_reference_sha256`, `env_names`,
+`restore_payload` and `restore_payload_sha256` (null until a release proves
+them), `predecessor_deployment_id`, the App ACL snapshot and the treatment
+mode. A core record's restore payload carries `MIP_AI_GATEWAY` and
+`MIP_AGENT_ORCHESTRATOR` as exactly a literal `0` or not at all (the core
+tier's own invariant), so a core record never restores an agentic surface.
+Golden v5 and v6 records verify byte-identically.
+
+Where the tier is checked today: adopt-live signs the core tier only; the
+pre-activation proof and `tier_b_payload` (before it re-hashes the copy)
+refuse a v7 blue whose tier is not the profile's `MIP_AGENTIC_TIER`
+(`blue_tier_mismatch`); and `app_deployment_rollback
+inspect` re-proves the record's own tier (core: the App identity and exactly
+the record's core bindings, never the Gateway; agentic: v6 inspect's own
+Gateway resource proof, its reviewed-function owner the signed payload's).
+Owed to M2-PR7b, the core release path, and not claimed here: a capture
+writer (whose tier must equal the profile's), the restore that deploys
+`tier_b_payload`'s payload (with the restore-owned resource repair and, for
+an agentic record, the Gateway proof), and a release that builds blue's
+restore payload: `scripts/deploy.sh` passes no `--restore-payload` yet, so
+over a v7 blue the only way through activation is the exact `no_rollback_for`
+ack, and today's core builder adds the two switches as `0`, which D0's
+env-name set lacks.
+
+**Spike S7 is owed** (whether the Apps update API can set
+`default_source_code_path`, and how an App start snapshots source). The worst
+case holds: the App's default source is never pointed at the copy.
+`S7_DEFAULT_SOURCE_SETTABLE` in `adopt_live.py` is the reviewed switch a later
+PR flips with the recorded S7 result (a code constant, never an environment
+variable); until then the switch refuses.
+
+**The pre-activation rollback proof (attack O2).** The first activation of a
+run (`deploy_app_snapshot`) first runs
+`blue_restore_proof prepare-activation`. A v5 or v6 record's own payload is
+blue's tier-b restore payload, so nothing changes for the agentic release. A
+v7 record must carry `restore_payload_sha256`, re-proven now (the copy
+re-hashed), or be handed blue's restore payload (env-name set equal to blue's,
+source the immutable copy), which is checked and recorded under the lease;
+otherwise activation refuses unless `MIP_ACK_NO_ROLLBACK_FOR` is the exact
+`no_rollback_for` digest the refusal prints. Its plan covers this blue and
+this green only: sha256(blue's deployment id), the release's source commit
+and its release id (`--source-git-sha`, `--release-id`), so an ack left
+exported in a long-lived shell never carries to another release. Tier a (start-only) refuses once blue is no longer the App's last
+deployment. Building the restore payload in the release and the core release
+path itself are M2-PR7b's; the core release still refuses before the lease.
+
+**Freeze.** The emergency recipe's publisher obeys a signed freeze marker
+(the emergency recipe, above).
 
 ### Ownership handover (M2-PR8, cutover steps 7 and 8)
 

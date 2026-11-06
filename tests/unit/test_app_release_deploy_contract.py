@@ -338,6 +338,9 @@ def test_a_dry_run_names_the_deployer_without_the_identity_check(tmp_path: Path)
     assert f"principal={DEPLOYER} leaf={LEAF}\n" in result.stdout
 
 
+LEASE = "11111111-1111-4111-8111-111111111111"
+
+
 def _publish_env(files_root: str, leaf: str) -> dict[str, str]:
     return {
         **_stage_env(),
@@ -347,6 +350,8 @@ def _publish_env(files_root: str, leaf: str) -> dict[str, str]:
         "APP_RELEASE_PRINCIPAL": PRINCIPAL,
         "APP_RELEASE_ROOT_LEAF": leaf,
         "TARGET": "client",
+        "_GRANTS_APP_NAME": "mip-app",
+        "MIP_APP_DEPLOYMENT_LEASE_ID": LEASE,
     }
 
 
@@ -356,6 +361,8 @@ def _publish(repo: Path, *, dry_run: int, files_root: str, leaf: str = LEAF, exi
     argv = [
         "publish", "--release-id", RELEASE_ID, "--stage-dir", ".databricks/app-release/source",
         "--manifest", ".databricks/app-release/manifest.json", "--files-root", files_root,
+        # The governed run's held lease: a freeze marker does not refuse it (M2-PR7).
+        "--held-lease-app-name", "mip-app", "--held-lease-id", LEASE,
         "--expected-commit", SHA, "--expected-principal", PRINCIPAL, "--expected-target", "client",
         "--expected-root-leaf", leaf,
     ]
