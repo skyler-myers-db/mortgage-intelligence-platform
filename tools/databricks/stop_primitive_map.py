@@ -51,8 +51,8 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
   reviewed shell job runs (``SHELL_JOB_RUN_SITES``, M1-PR6): ``--phase data``
   runs its jobs only through the runner, and a run with no ``--phase`` keeps
   today's ``bundle run`` sites, each named; and every pipeline update or stop
-  (``databricks pipelines start-update|stop``, the REST paths, an inline
-  ``.pipelines.start_update``) in any shell file.
+  (``databricks pipelines start-update|stop|run|dry-run``, the REST paths, an
+  inline ``.pipelines.start_update``) in any shell file.
 
 The window library and the EXIT-trap library are the only shell callers of a
 stop; every top-level script is scanned too, so the owner-run WR5 entry
@@ -123,6 +123,8 @@ PRIMITIVE_SITES = frozenset(
         ("tools/databricks/stop_app_fail_closed.py", "stop_app_fail_closed", "stop"),
         ("tools/databricks/app_start_deployment.py", "start_app", "start"),
         ("tools/databricks/app_deployment_repin.py", "redeploy_signed_blue", "deploy_and_wait"),
+        # The core tier's tier-b restore (M2-PR7b): blue's restore payload, deploy only.
+        ("tools/databricks/core_blue_restore.py", "redeploy_core_blue", "deploy_and_wait"),
         (
             "tools/databricks/app_rollback_resource_contract.py",
             "restore_signed_app_resource_contract",
@@ -178,6 +180,11 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
     ),
     "tools.databricks.app_deployment_rollback_cli": EntryPoint(
         modes={"ensure": True, "restore": True, "repin": True, "capture": False, "inspect": False}
+    ),
+    # The core tier's step-0a proof and tier-b restore (M2-PR7b); its capture and
+    # restore-payload modes deploy, start and stop nothing.
+    "tools.databricks.app_core_rollback": EntryPoint(
+        modes={"ensure": True, "restore": True, "capture": False, "restore-payload": False}
     ),
     # The dead-man job (M0-PR9): only the window's submit runs it, no shell file.
     "jobs.window_deadman": EntryPoint(
@@ -243,10 +250,12 @@ _JOB_RUN = re.compile(
 
 # A bundle job run from shell (M1-PR6): its key is the command's first operand.
 _BUNDLE_RUN = re.compile(r"\bdatabricks\s+bundle\s+run\b(?P<rest>[^;&|#]*)")
-# A pipeline update or stop (M1-PR6): reviewed in no shell file.
+# A pipeline update or stop (M1-PR6): reviewed in no shell file. ``run`` starts
+# an update, and ``dry-run`` a validate-only one whose ``--restart`` stops a
+# running update.
 _REST_PIPELINE_RUN = re.compile(r"/api/2\.\d+/pipelines/[^\s\"'/]+/(updates|stop)\b")
 _PIPELINE_RUN = re.compile(
-    r"\bdatabricks\s+pipelines\s+(start-update|stop)\b|\.pipelines\.("
+    r"\bdatabricks\s+pipelines\s+(start-update|stop|run|dry-run)\b|\.pipelines\.("
     + "|".join(sorted(PIPELINE_RUN_METHODS))
     + r")\s*\(|"
     + _REST_PIPELINE_RUN.pattern

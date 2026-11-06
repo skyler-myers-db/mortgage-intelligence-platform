@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import InvalidParameterValue, NotFound, ResourceDoesNotExist
 from databricks.sdk.service._internal import Wait
 from databricks.sdk.service.jobs import Job, Run, RunNowResponse
 from databricks.sdk.service.pipelines import GetPipelineResponse
@@ -125,7 +125,12 @@ def state_document(*, jobs: dict[str, int] | None = None, pipelines: dict[str, s
 class FakeJobs:
     """Jobs API by job id; run-now honours the idempotency token like the service does.
 
-    Each run reports the job id it was started for, as ``runs/get`` does.
+    Each run reports the job id it was started for, as ``runs/get`` does. A job
+    id that no longer exists (deleted, or recreated under another id) answers
+    as the live service does: ``jobs/get`` with ``ResourceDoesNotExist`` (the
+    SDK's override of its ``INVALID_PARAMETER_VALUE``), ``run-now`` and
+    ``runs/list`` with ``InvalidParameterValue`` ("Job N does not exist.").
+    ``runs/list`` with no job id lists every active run, a deleted job's too.
     """
 
     settings: dict[str, dict[str, Any]]
@@ -140,18 +145,25 @@ class FakeJobs:
     # bundle key -> live job id (a job recreated under a new id is rebound here).
     ids: dict[str, int] = field(default_factory=lambda: dict(JOB_IDS))
     run_jobs: dict[int, int] = field(default_factory=dict)
+    # Job ids deleted out of band (the bundle state may still bind one).
+    deleted: set[int] = field(default_factory=set)
 
     def _by_id(self) -> dict[int, str]:
-        return {self.ids[key]: key for key in self.settings}
+        return {self.ids[key]: key for key in self.settings if self.ids[key] not in self.deleted}
+
+    def _exists(self, job_id: int) -> None:
+        if int(job_id) not in self._by_id():
+            raise InvalidParameterValue(f"Job {int(job_id)} does not exist.")
 
     def get(self, job_id: int) -> Job:
         key = self._by_id().get(int(job_id))
         if key is None:
-            raise NotFound("job")
+            raise ResourceDoesNotExist(f"Job {int(job_id)} does not exist.")
         return Job.from_dict({"job_id": int(job_id), "settings": self.settings[key]})
 
     def run_now(self, *, job_id: int, idempotency_token: str) -> Wait[Run]:
         self.run_now_calls.append((int(job_id), idempotency_token))
+        self._exists(job_id)
         if idempotency_token not in self.tokens:
             self.next_run_id += 1
             self.tokens[idempotency_token] = self.next_run_id
@@ -168,10 +180,14 @@ class FakeJobs:
             state["result_state"] = result
         return Run.from_dict({"run_id": int(run_id), "job_id": self.run_jobs.get(int(run_id)), "state": state})
 
-    def list_runs(self, *, job_id: int, active_only: bool) -> Iterator[Run]:
+    def list_runs(self, *, active_only: bool, job_id: int | None = None) -> Iterator[Run]:
         assert active_only
-        for run_id in self.active.get(int(job_id), []):
-            yield Run.from_dict({"run_id": run_id, "state": {"life_cycle_state": "RUNNING"}})
+        if job_id is not None:
+            self._exists(job_id)
+        for owner, run_ids in sorted(self.active.items()):
+            if job_id is None or owner == int(job_id):
+                for run_id in run_ids:
+                    yield Run.from_dict({"run_id": run_id, "job_id": owner, "state": {"life_cycle_state": "RUNNING"}})
 
 
 class FakePipelines:
@@ -204,6 +220,12 @@ class DataPhaseEstate:
         self.workspace.data[api_path(bundle_state.state_path(deployer=DEPLOYER, client_key=CLIENT))] = json.dumps(
             state_document(jobs=self.jobs.ids)
         ).encode("utf-8")
+
+    def delete(self, key: str) -> int:
+        """The job is deleted out of band; the bundle state still binds its id."""
+
+        self.jobs.deleted.add(self.jobs.ids[key])
+        return self.jobs.ids[key]
 
     def ledger_bytes(self) -> bytes | None:
         from tools.databricks.job_phase_ledger import ledger_path

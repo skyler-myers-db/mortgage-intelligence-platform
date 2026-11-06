@@ -24,7 +24,9 @@ calls the Apps API and never cancels a run.
   no longer readable) is retired only by ``--ack-rerun``, the sha256 of its
   rerun plan (printed on every resume, purpose ``data_ledger_rerun``). Neither
   ack satisfies the other or retires a generation while any of its runs is
-  active, and a resume refuses while an entry outside its plan still runs.
+  active, and a resume refuses while an entry outside its plan still runs. An
+  entry whose bound job was deleted out of band is ``absent``
+  (``job_phase_activity``): not running, and named in the supersede plan.
 * **run** (under the lease): recompute the definition digest (it must equal
   the plan's), then re-attach to a running run, skip a succeeded one, or run
   the next attempt of a failed one, with the token
@@ -40,7 +42,8 @@ calls the Apps API and never cancels a run.
 * **close** (under the lease): every planned job succeeded and no other entry
   still runs; the generation closes, and the next data phase opens a new one.
 * **quiet** (read-only): a release's (or a no-phase run's) refusal, under its
-  lease, while a job a data phase left at its deadline still runs.
+  lease, while a job a data phase left at its deadline still runs; a deleted
+  job is not running, so the ledger never refuses the release that rebinds it.
 """
 
 from __future__ import annotations
@@ -58,6 +61,7 @@ from typing import Any
 
 from tools.databricks import bundle_state, phase_budget
 from tools.databricks import job_phase_ledger as ledger
+from tools.databricks.job_phase_activity import activity, job_present, outcome
 from tools.databricks.job_phase_definition import (
     PLAN_SCHEMA,
     Refused,
@@ -74,7 +78,6 @@ SUPERSEDE_PURPOSE = "data_ledger_supersede"
 ACK_SUPERSEDE_ENV = "MIP_ACK_DATA_LEDGER_SUPERSEDE"
 RERUN_PURPOSE = "data_ledger_rerun"
 ACK_RERUN_ENV = "MIP_ACK_DATA_LEDGER_RERUN"
-TERMINAL_LIFECYCLE = frozenset({"TERMINATED", "SKIPPED", "INTERNAL_ERROR"})
 POLL_SECONDS = 30
 # The deadline reserve: the reconcile, the verify, the smoke and the close.
 WAIT_RESERVE_SECONDS = 10 * 60
@@ -87,17 +90,6 @@ EXIT_STILL_RUNNING = 4
 def token(*, client_key: str, job_key: str, definition_sha256: str, generation: str, attempt: int) -> str:
     material = "\0".join((client_key, job_key, definition_sha256, generation, str(attempt)))
     return "mip-data-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:48]
-
-
-def outcome(run: Any) -> str:
-    """``running``, ``succeeded`` or ``failed``; anything not terminal is still running."""
-
-    state = getattr(run, "state", None)
-    lifecycle = enum_value(getattr(state, "life_cycle_state", None))
-    if lifecycle not in TERMINAL_LIFECYCLE:
-        return "running"
-    result = enum_value(getattr(state, "result_state", None))
-    return "succeeded" if lifecycle == "TERMINATED" and result == "SUCCESS" else "failed"
 
 
 def supersede_digest(body: Mapping[str, Any]) -> str:
@@ -156,23 +148,8 @@ def _record(ctx: Context, current: dict[str, Any], key: str, entry: dict[str, An
     return _write(ctx, current, {**current, "jobs": {**current["jobs"], key: entry}})
 
 
-def _active(ctx: Context, entry: Mapping[str, Any]) -> bool:
-    """Is this entry's run still going? A run that cannot be read is judged by its job's active runs."""
-
-    if entry["status"] not in {"running", "submitted"}:
-        return False
-    if entry["status"] == "running":
-        try:
-            run = ctx.workspace.jobs.get_run(int(entry["run_id"]))
-        except Exception:  # noqa: BLE001 - unreadable (a purged run): the job's own active runs decide
-            run = None
-        if run is not None:
-            return outcome(run) == "running"
-    return any(True for _ in ctx.workspace.jobs.list_runs(job_id=int(entry["job_id"]), active_only=True))
-
-
 def _still_running(ctx: Context, current: Mapping[str, Any], keys: Any) -> list[str]:
-    return [key for key in sorted(keys) if _active(ctx, current["jobs"][key])]
+    return [key for key in sorted(keys) if activity(ctx.workspace, current["jobs"][key]) == "running"]
 
 
 def _jobs(keys: Sequence[str]) -> str:
@@ -239,6 +216,8 @@ def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str, rerun_ack: str = "
                 "ledger_definition_sha256": entry["definition_sha256"],
                 "live_definition_sha256": planned[key]["definition_sha256"],
                 "ledger_job_id": entry["job_id"],
+                # False: the ledger's job was deleted, so its entry is judged by absence (the ack says so).
+                "ledger_job_present": job_present(ctx.workspace, entry["job_id"]),
                 "live_job_id": str(planned[key]["job_id"]),
             }
             for key, entry in stale.items()
@@ -366,14 +345,15 @@ def close(ctx: Context, plan: Mapping[str, Any]) -> dict[str, Any]:
     return _write(ctx, current, {**current, "state": "closed"})
 
 
-def quiet(ctx: Context) -> list[str]:
-    """Read-only: the entries of an open generation whose runs are still going."""
+def quiet(ctx: Context) -> tuple[list[str], list[str]]:
+    """Read-only: an open generation's entries whose runs are still going, and those whose job was deleted."""
 
     current = ledger.read(ctx.workspace, app_name=ctx.app_name)
     if ledger.state_of(current) != "open":
-        return []
+        return [], []
     assert current is not None
-    return _still_running(ctx, current, current["jobs"])
+    states = {key: activity(ctx.workspace, entry) for key, entry in sorted(current["jobs"].items())}
+    return [key for key, s in states.items() if s == "running"], [key for key, s in states.items() if s == "absent"]
 
 
 def _load_plan(path: Path) -> dict[str, Any]:
@@ -431,9 +411,12 @@ def _dispatch(args: argparse.Namespace, workspace: Any, environ: Mapping[str, st
         print(f"  {phase_budget.describe(plan['budget'], args.deadline_epoch, now=time.time())}")
         return 0
     if args.command == "quiet":
-        busy = quiet(Context(workspace, args.app_name, "", "", **clock))
+        busy, absent = quiet(Context(workspace, args.app_name, "", "", **clock))
         if busy:
             raise Refused(f"{_jobs(busy)} of the open data-phase generation is still running; wait for it, or re-run --phase data to re-attach")
+        if absent:
+            print(f"[job-phase] {_jobs(absent)} of the open data-phase generation names a deleted job with no active run; "
+                  f"once a release rebinds it, --phase data retires the generation only by the {ACK_SUPERSEDE_ENV} it prints")
         print("[job-phase] no data-phase job is running")
         return 0
     plan = _load_plan(args.plan)

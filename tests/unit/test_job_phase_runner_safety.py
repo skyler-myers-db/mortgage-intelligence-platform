@@ -11,11 +11,18 @@ started for, as ``runs/get`` does. The cases:
 * **the rerun ack**: an open generation with nothing stale (a smoke that fails
   after every job succeeded, a run no longer readable) is retired only by the
   exact digest of its rerun plan, which no supersede ack satisfies;
-* **one job at a time**: no resume, run-now, close or retirement while another
-  entry of the generation still runs, planned or not;
+* **one job at a time**: no run-now, close or retirement while another entry
+  of the generation still runs, planned or not, and no resume while an entry
+  outside the phase's plan still runs (a planned one is re-attached);
 * **fail closed reads**: five unreadable polls refuse, and a submitted entry
   whose job still has an active run is never superseded;
-* **quiet**: the read-only check a release runs under its lease.
+* **quiet**: the read-only check a release runs under its lease;
+* **a deleted bound job**: the Jobs API answers ``runs/list`` of a deleted job
+  with ``InvalidParameterValue`` (the fake answers as it does), so its entry is
+  ``absent`` only when ``jobs/get`` proves the job gone and no run of its id is
+  active: quiet passes the release that rebinds it, the exact supersede ack
+  (which names the absence) retires the generation, and a ``--skip-silver``
+  phase resumes, reruns and closes past it. Any other read error still refuses.
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import InvalidParameterValue, NotFound, PermissionDenied
 
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tests.fixtures.client_profiles import env_file_text, paychex_shaped_profile
@@ -277,6 +284,19 @@ def test_no_run_now_while_another_entry_of_the_generation_still_runs() -> None:
     assert len(estate.jobs.run_now_calls) == calls and SILVER not in _ledger(estate)["jobs"]
 
 
+
+def test_a_resume_re_attaches_a_planned_entry_still_running() -> None:
+    # The docs' "no resume while an entry outside this phase's plan still runs": a planned one is re-attached.
+    estate = DataPhaseEstate()
+    plan = _plan(estate)
+    record = runner.begin(_ctx(estate), plan, ack="")
+    silver = _still_running_at_the_deadline(estate, plan, SILVER)
+    resumed = runner.begin(_ctx(estate), plan, ack="")
+    assert resumed["generation"] == record["generation"] and resumed["jobs"][SILVER]["status"] == "running"
+    estate.jobs.scripts[silver] = [("RUNNING", ""), ("TERMINATED", "SUCCESS")]
+    assert _run(estate, plan, SILVER) == (0, "succeeded (re-attached)")
+    assert len(estate.jobs.run_now_calls) == 1, "re-attached, never resent"
+
 def test_a_supersede_never_discards_a_run_that_is_not_stale_but_still_active() -> None:
     estate = DataPhaseEstate()
     plan = _plan(estate)
@@ -364,3 +384,104 @@ def test_the_plan_writes_nothing_to_the_workspace(tmp_path: Path, monkeypatch: p
     argv = ["plan", "--app-name", APP_NAME, "--deadline-epoch", str(DEADLINE), "--out", str(tmp_path / "plan.json")]
     assert runner.main(argv, client=estate, environ={}, env_file=env_file) == 0
     assert uploads == [] and estate.jobs.run_now_calls == [] and estate.ledger_bytes() is None
+
+
+# --- a deleted bound job ---------------------------------------------------------------
+
+
+def _deleted_silver(estate: DataPhaseEstate, plan: dict[str, Any]) -> int:
+    """Silver is deleted out of band after the plan: its run-now fails and its entry stays submitted."""
+
+    runner.begin(_ctx(estate), plan, ack="")
+    dead = estate.delete(SILVER)
+    with pytest.raises(InvalidParameterValue, match=f"Job {dead} does not exist"):
+        _run(estate, plan, SILVER)
+    assert _ledger(estate)["jobs"][SILVER]["status"] == "submitted"
+    return dead
+
+
+def test_quiet_passes_a_deleted_job_with_no_active_run_and_names_the_remedy(capsys: pytest.CaptureFixture[str]) -> None:
+    estate = DataPhaseEstate()
+    dead = _deleted_silver(estate, _plan(estate))
+    capsys.readouterr()
+    before, calls = dict(estate.workspace.data), len(estate.jobs.run_now_calls)
+    # A release and a run with no --phase (refuse_while_a_data_job_runs) run exactly this.
+    assert runner.main(["quiet", "--app-name", APP_NAME], client=estate) == 0
+    out = capsys.readouterr().out
+    assert "jobs.mip_refresh_silver of the open data-phase generation names a deleted job with no active run" in out
+    assert runner.ACK_SUPERSEDE_ENV in out and "no data-phase job is running" in out
+    assert estate.workspace.data == before and len(estate.jobs.run_now_calls) == calls, "read-only"
+    # A run of the deleted job id still active anywhere in the workspace keeps it running.
+    estate.jobs.active[dead] = [4242]
+    assert runner.main(["quiet", "--app-name", APP_NAME], client=estate) == runner.EXIT_REFUSED
+    assert "jobs.mip_refresh_silver of the open data-phase generation is still running" in capsys.readouterr().err
+
+
+def test_a_deleted_job_rebound_by_a_release_is_retired_only_by_the_supersede_ack_naming_its_absence() -> None:
+    estate = DataPhaseEstate()
+    plan = _plan(estate)
+    dead = _deleted_silver(estate, plan)
+    entry = _ledger(estate)["jobs"][SILVER]
+    estate.rebind(SILVER, NEW_SILVER_ID)
+    replanned = _plan(estate)
+    assert runner.main(["quiet", "--app-name", APP_NAME], client=estate) == 0, "the rebinding release is never refused"
+    with pytest.raises(runner.Refused, match="stale_definition") as refused:
+        runner.begin(_ctx(estate), replanned, ack="")
+    ack = _ack(refused, runner.ACK_SUPERSEDE_ENV)
+    named = {
+        "status": "submitted", "run_id": "", "ledger_definition_sha256": entry["definition_sha256"],
+        "live_definition_sha256": _planned(replanned, SILVER)["definition_sha256"], "ledger_job_id": str(dead),
+        "ledger_job_present": False, "live_job_id": str(NEW_SILVER_ID),
+    }
+    body = {"purpose": runner.SUPERSEDE_PURPOSE, "app_name": APP_NAME, "generation": _ledger(estate)["generation"]}
+    assert ack == runner.supersede_digest({**body, "stale": {SILVER: named}}), "the ack names the deleted job"
+    with pytest.raises(runner.Refused, match="stale_definition"):
+        runner.begin(_ctx(estate), replanned, ack="", rerun_ack=runner.rerun_digest(runner.rerun_body(APP_NAME, _ledger(estate))))
+    fresh = runner.begin(_ctx(estate), replanned, ack=ack)
+    assert fresh["jobs"] == {} and fresh["generation"] != body["generation"]
+    assert _run(estate, replanned, SILVER) == (0, "succeeded (attempt 1)")
+    assert estate.jobs.run_now_calls[-1][0] == NEW_SILVER_ID
+
+
+@pytest.mark.parametrize("path", ("resume_and_close", "rerun_ack"))
+def test_a_skip_silver_phase_resumes_reruns_and_closes_past_a_deleted_silver(path: str) -> None:
+    estate = DataPhaseEstate()
+    _deleted_silver(estate, _plan(estate))
+    generation = _ledger(estate)["generation"]
+    skip = _plan(estate, (REFRESH,))
+    if path == "rerun_ack":
+        digest = runner.rerun_digest(runner.rerun_body(APP_NAME, _ledger(estate)))
+        assert runner.begin(_ctx(estate), skip, ack="", rerun_ack=digest)["jobs"] == {}
+        return
+    assert runner.begin(_ctx(estate), skip, ack="")["generation"] == generation, "resumed past the absent silver"
+    assert _run(estate, skip, REFRESH) == (0, "succeeded (attempt 1)")
+    assert runner.close(_ctx(estate), skip)["state"] == "closed"
+
+
+@pytest.mark.parametrize("fault", ("refused_for_a_present_job", "transient", "deleted_but_get_unreadable"))
+def test_an_unproven_absence_still_refuses(monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    estate = DataPhaseEstate()
+    plan, skip = _plan(estate), _plan(estate, (REFRESH,))
+    record = runner.begin(_ctx(estate), plan, ack="")
+    runner._record(_ctx(estate), record, SILVER, _entry(_planned(plan, SILVER), _token(plan, record, SILVER)))
+    error = RuntimeError("network") if fault == "transient" else InvalidParameterValue("Job 101 does not exist.")
+
+    real = estate.jobs.list_runs
+
+    def list_runs(*, active_only: bool, job_id: int | None = None) -> Any:
+        if job_id is None:
+            return real(active_only=active_only)  # the workspace-wide listing still answers
+        raise error
+
+    def get(job_id: int) -> Any:
+        raise PermissionDenied("the job cannot be read")
+
+    monkeypatch.setattr(estate.jobs, "list_runs", list_runs)
+    if fault == "deleted_but_get_unreadable":
+        estate.delete(SILVER)
+        monkeypatch.setattr(estate.jobs, "get", get)
+    assert runner.main(["quiet", "--app-name", APP_NAME], client=estate) == runner.EXIT_REFUSED
+    with pytest.raises(Exception) as refused:
+        runner.begin(_ctx(estate), skip, ack="")
+    assert not isinstance(refused.value, runner.Refused), "the read error itself: never judged idle"
+    assert _ledger(estate)["generation"] == record["generation"]

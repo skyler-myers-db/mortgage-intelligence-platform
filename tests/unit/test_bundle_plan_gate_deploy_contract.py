@@ -153,15 +153,12 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
     assert before[: before.index("# >>> adopt phase: plan >>>")].rstrip().endswith(
         "fi"
     ), "outside the dry-run branches"
-    # Only the core tier's release refusal (M2-PR3) and the release's budget
-    # admission (M1-PR6), also at top level, sit between the gate and the lease.
+    # Only the release's budget admission (M1-PR6), also at top level, sits
+    # between the gate and the lease block: the core tier's release refusal
+    # (M2-PR3) was lifted with the core release path (M2-PR7b).
     after = text[text.index(GATE_END) + len(GATE_END) :]
-    refusal_end = "# <<< core tier: release refusal <<<"
     admission_end = "# <<< release phase: budget admission <<<"
-    assert after.startswith("\n# >>> core tier: release refusal >>>\n")
-    assert after[after.index(refusal_end) + len(refusal_end) :].startswith(
-        "\n# >>> release phase: budget admission >>>\n"
-    )
+    assert after.startswith("\n# >>> release phase: budget admission >>>\n")
     assert after[after.index(admission_end) + len(admission_end) :].startswith(
         '\nif [[ "$DRY_RUN" -eq 0 ]]; then\n'
     )

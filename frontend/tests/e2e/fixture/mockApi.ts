@@ -94,6 +94,59 @@ export const WAREHOUSE_WARMING_UP: DegradeOptions = {
   },
 };
 
+/**
+ * The page's own count of the API fetches it has issued (`window[PAGE_API_PROBE]`,
+ * one object per document). The route handler below only sees a request once
+ * the engine has handed it over, measured from ~100 ms to several seconds
+ * after the page called fetch() on a loaded host; in that gap `inflight` is 0
+ * although the page is waiting on the API. AppDriver.settle reads this probe
+ * so a read the page has started counts as in flight from that moment.
+ */
+export const PAGE_API_PROBE = '__mipFixtureApiFetches';
+
+export interface PageApiProbe {
+  /** Random per document: a navigation starts a new probe at zero. */
+  readonly doc: string;
+  /** Same-origin `/api/` fetches started, and those whose promise has settled. */
+  started: number;
+  settled: number;
+}
+
+/** Init script (serialised into every document): wrap fetch to count same-origin API calls. */
+function installPageApiProbe(probeKey: string): void {
+  // One probe per document, even if a second MockApi installs on the same page.
+  if (Object.prototype.hasOwnProperty.call(window, probeKey)) return;
+  const probe: PageApiProbe = { doc: Math.random().toString(36).slice(2), started: 0, settled: 0 };
+  Object.defineProperty(window, probeKey, { value: probe });
+  const original = window.fetch;
+  const isApi = (input: RequestInfo | URL): boolean => {
+    try {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, window.location.href);
+      return url.origin === window.location.origin && /^\/api(\/|$)/.test(url.pathname);
+    } catch {
+      return false; // fetch() itself rejects a URL it cannot parse
+    }
+  };
+  window.fetch = function fetchWithApiProbe(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const result = original.call(window, input, init);
+    if (!isApi(input)) return result;
+    probe.started += 1;
+    // The app gets a mirror of the fetch, never the fetch with a handler
+    // attached: a rejection the app leaves unhandled stays an unhandled
+    // rejection, so the hygiene gate's pageerror check still sees it.
+    return result.then(
+      (response) => {
+        probe.settled += 1;
+        return response;
+      },
+      (error: unknown) => {
+        probe.settled += 1;
+        throw error;
+      },
+    );
+  };
+}
+
 export function normalizeApiPath(pathname: string): string {
   return pathname.replace(/^\/api\/v\d+(?=\/|$)/, '/api');
 }
@@ -231,7 +284,9 @@ export class MockApi {
     return [...this.entries.keys()].sort();
   }
 
+  /** Answer the page's API calls, and count them in-page from the moment it issues them (PAGE_API_PROBE). */
   async install(page: Page): Promise<void> {
+    await page.addInitScript(installPageApiProbe, PAGE_API_PROBE);
     await page.route('**/api/**', (route) => this.handle(route));
   }
 

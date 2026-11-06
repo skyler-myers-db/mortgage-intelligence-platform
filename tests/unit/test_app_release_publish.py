@@ -30,6 +30,7 @@ from tests.fixtures.fake_workspace import FakeWorkspaceClient, deployment, sdk_g
 from tools.databricks import app_release_contract as contract
 from tools.databricks import app_release_retry as retry
 from tools.databricks import app_release_source as source
+from tools.databricks.app_deployment_freeze import LEASE_ROOT
 
 PRINCIPAL = "deployer@example.com"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
@@ -402,7 +403,8 @@ def test_a_listing_the_sdk_gave_up_on_is_refused_at_once_naming_it(
 
     assert code == 2
     assert _gave_up_text(f"listing of {root}") in capsys.readouterr().err
-    assert client.workspace.ops("list") == [root]
+    # The freeze gate's one listing of the lease root (absent here) comes first (M2-PR7).
+    assert client.workspace.ops("list") == [LEASE_ROOT, root]
     assert waits == []
     assert client.workspace.ops("delete") == []
 

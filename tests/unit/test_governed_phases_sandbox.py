@@ -5,6 +5,7 @@ Each run is ``scripts/deploy.sh --dry-run`` in the sandbox clone
 anything but ``--version``, so the stub's log shows that no phase makes a
 Databricks call in a dry run. A dry run proves nothing about a live run's
 writes: what a live ``--phase plan`` runs is pinned by
+tests/unit/test_plan_phase_live_sandbox.py and
 tests/unit/test_plan_phase_live_shape.py, and the read-only data plan by
 tests/unit/test_job_phase_runner_safety.py. The matrix:
 
@@ -140,7 +141,12 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, subprocess.Compl
 
 
 def test_the_release_is_the_full_run_minus_the_data_jobs_plus_its_banners(runs: dict[str, subprocess.CompletedProcess[str]]) -> None:
-    full, release = runs["none"], runs["release"]
+    _assert_the_release_is_the_full_run_minus_the_data_jobs(runs["none"], runs["release"])
+
+
+def _assert_the_release_is_the_full_run_minus_the_data_jobs(
+    full: subprocess.CompletedProcess[str], release: subprocess.CompletedProcess[str]
+) -> None:
     full_commands, release_commands = _normal(planned_commands(full.stdout)), _normal(planned_commands(release.stdout))
     removed = [command for command in full_commands if any(job in command for job in DATA_JOB_COMMANDS)]
     # FRED, silver, gold, the stale-rate guard, the lifecycle sync and the KPI
@@ -231,16 +237,18 @@ def test_no_phase_keeps_every_data_step_in_todays_order(runs: dict[str, subproce
         assert banner not in out, banner
 
 
-def test_a_core_tier_release_refuses_like_a_run_with_no_phase(tmp_path: Path) -> None:
+def test_a_core_tier_release_is_its_full_run_minus_the_data_jobs(tmp_path: Path) -> None:
+    # The core release path (M2-PR7b) lifted the tier's release refusal: --phase release defers its data jobs too.
     checkout, env, log = sandbox(tmp_path)
     values = {**core_tier_profile(), "DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
     (checkout / ".env.local").write_text(env_file_text(values), encoding="utf-8")
-    for args in ((), ("--phase", "release")):
-        result = _deploy(checkout, env, *args)
-        assert result.returncode == 2, result.stdout[-2000:] + result.stderr[-2000:]
-        assert "the core tier (MIP_AGENTIC_TIER=off) cannot release yet" in result.stderr
-        assert "admit the release" not in result.stdout, "refused before the admission and the lease"
+    full, release = _deploy(checkout, env), _deploy(checkout, env, "--phase", "release")
+    for result in (full, release):
+        assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+        assert "cannot release yet" not in result.stderr
+    _assert_the_release_is_the_full_run_minus_the_data_jobs(full, release)
     # The data phase never activates anything: the core tier runs it.
     data = _deploy(checkout, env, "--phase", "data")
     assert data.returncode == 0, data.stdout[-2000:] + data.stderr[-2000:]
     assert "--agent-runtime-application-id" not in ANSI.sub("", data.stdout), "the core tier reconciles the App's grants only"
+    assert log.read_text(encoding="utf-8").splitlines() == ["--version"] * 3, "no Databricks call"

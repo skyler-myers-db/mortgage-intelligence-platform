@@ -9,21 +9,6 @@
   exit 2
 }
 
-# >>> core tier: activation boundary >>>
-# The core tier (MIP_AGENTIC_TIER=off, M2-PR3) is tier-aware through the grant
-# and reconcile steps above. Everything from here on (publish and activation,
-# signed capture, the signed-blue restore, agentic provisioning, cutover and
-# evaluation) still runs through the agentic identities. A core release
-# already refused before the lease (the core tier release refusal in
-# deploy_step_automation_identities.sh); this stop is its defence in depth,
-# before anything is published or activated. A first install's App is removed
-# by the first-install compensation on exit.
-if ! tier_is_agentic; then
-  echo "${RED}[deploy] the core tier (MIP_AGENTIC_TIER=off) stops at the activation boundary: the grant and reconcile steps completed, but publish, activation and signed capture are not tier-aware yet; nothing was published or activated.${RST}" >&2
-  exit 2
-fi
-# <<< core tier: activation boundary <<<
-
 APP_NAME="${MIP_APP_NAME:-mip-app}"
 
 # Make the snapshot deploy deterministic (2026-06-10 audit fix). Two platform
@@ -77,6 +62,8 @@ emit_app_deploy_payload() {
 
 deploy_app_snapshot() {
   local label="$1"
+  # Attack O2 (M2-PR7): blue's tier-b restore proof, once, before the first activation.
+  prove_blue_restorable_before_activation
   step "$label"
   APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
   emit_app_deploy_payload "$APP_DEPLOY_PAYLOAD" "$APP_SOURCE_PATH" "$APP_GIT_SHA"
@@ -187,13 +174,17 @@ fi
 # same release uploads nothing. A failure here restores signed blue on an
 # upgrade and leaves a first install stopped and quiesced. APP_SOURCE_PATH is
 # assigned only here: all three activations promote this one folder, and
-# converge re-checks it against the manifest before each of them.
+# converge re-checks it against the manifest before each of them. The held
+# lease flags prove this is the governed run, which a freeze marker does not
+# refuse (tools/databricks/app_deployment_freeze.py, M2-PR7).
 step "publish App release source ${APP_RELEASE_ID} (create-only, byte-verified)"
 run "$PYTHON" -m tools.databricks.app_release_source publish \
   --release-id "$APP_RELEASE_ID" \
   --stage-dir "$APP_RELEASE_STAGE_ROOT/source" \
   --manifest "$APP_RELEASE_MANIFEST" \
   --files-root "$APP_BUNDLE_FILES_PATH" \
+  --held-lease-app-name "$_GRANTS_APP_NAME" \
+  --held-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
   --expected-commit "$SOURCE_GIT_SHA" \
   --expected-principal "$APP_RELEASE_PRINCIPAL" \
   --expected-target "$TARGET" \
@@ -208,8 +199,13 @@ APP_SOURCE_PATH="${APP_BUNDLE_FILES_PATH%/files}/app-src/${APP_RELEASE_ID}"
 # --out-env is persisted under .databricks/ (gitignored) at the end of each
 # run; source it here so a re-deploy never forgets what is already
 # provisioned. First-ever deploys have no file and keep the two-phase flow.
+# The core tier (M2-PR7b) provisions nothing agentic and its payload refuses a
+# truthy agentic switch: a cache an earlier agentic run left in this checkout
+# (not keyed by client) is never carried into a core release.
 AGENTIC_ENV_CACHE=".databricks/mip-agentic.env"
-if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" && \
+if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" ]] && ! tier_is_agentic; then
+  echo "[deploy] core tier: ignoring the agentic env cache $AGENTIC_ENV_CACHE (an agentic run's; never carried into a core release)"
+elif [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" && \
       "${MIP_REBASE_UNVERIFIED_APP:-0}" != "1" ]]; then
   echo "[deploy] carrying forward agentic env from $AGENTIC_ENV_CACHE (last provisioning)"
   set -a

@@ -17,11 +17,13 @@ identity-bearing environment names it was handed. Then, by what it is:
   control check (tools/databricks/lakebase_oauth_role_bootstrap_control.py)
   on the credential the deploy handed it. A refusal fails the step loudly. A
   ``--recover-bootstrap-only`` call finds no creator to recover;
+* the App payload builder, for real (it reads only the profile), so a test
+  reads the payload each activation deployed;
 * a scripted answer for each tool whose output the deploy reads (the lease,
   the first-install journal, the bundle summary, the release id, the stop
   outcome, the resource bindings, the Genie space id, the catalog bootstrap
-  skip rule and the quiesce window plan of a first install), kept in
-  ``SANDBOX_STATE``;
+  skip rule, the quiesce window plan of a first install and the core
+  capture's binding env, M2-PR7b), kept in ``SANDBOX_STATE``;
 * success for every other repository tool, which would otherwise need a live
   workspace (the check-only preflight tools, every convergence and audit).
 
@@ -57,7 +59,12 @@ APP = {
 WAREHOUSE = "warehouse-1"
 LEASE_ID = "lease-sandbox-1"
 # Real code: the profile resolver and the probes, which read the fake estate.
-REAL_MODULES = ("tools.clients", "tools.databricks.deploy_prestop_probes")
+REAL_MODULES = (
+    "tools.clients",
+    "tools.databricks.deploy_prestop_probes",
+    "tools.databricks.app_deploy_payload",
+)
+CAPTURED_DEPLOYMENT = "deployment-green-sandbox"
 
 
 def _state() -> dict[str, Any]:
@@ -211,6 +218,29 @@ def _converge_lakebase_role(args: list[str]) -> int:
     return 0
 
 
+def _core_rollback(args: list[str]) -> int:
+    """The core capture (M2-PR7b): its own tests prove it; here, record it and bind green."""
+
+    state = _state()
+    state.setdefault("core_rollback", []).append(args[0])
+    _save(state)
+    failure = json.loads(os.environ.get("SANDBOX_FAIL_JSON") or "{}").get(args[0])
+    if failure:
+        print(f"[mip-core-blue] REFUSED sandbox: {args[0]} fails (injected)", file=sys.stderr)
+        return int(failure)
+    if "--out-env" in args:
+        _write_env(
+            _option(args, "--out-env"),
+            {
+                "MIP_APP_ROLLBACK_RECORD_VERSION": "7",
+                "MIP_APP_ROLLBACK_TIER": "core",
+                "MIP_APP_ROLLBACK_PROVENANCE": "captured",
+                "MIP_APP_ROLLBACK_DEPLOYMENT_ID": CAPTURED_DEPLOYMENT,
+            },
+        )
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     with open(os.environ["SANDBOX_PY_LOG"], "a", encoding="utf-8") as log:
@@ -233,6 +263,7 @@ def main() -> int:
         "tools.databricks.bundle_env": _bundle_env,
         "tools.databricks.verify_reviewed_function_execute_grants": _function_grants,
         "tools.databricks.converge_lakebase_oauth_role": _converge_lakebase_role,
+        "tools.databricks.app_core_rollback": _core_rollback,
     }
     if module in handlers:
         return handlers[module](rest)

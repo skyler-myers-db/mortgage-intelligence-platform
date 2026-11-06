@@ -172,6 +172,8 @@ def test_every_step_file_that_needs_a_stop_calls_a_window_function() -> None:
         ),
         "deploy_step_agentic_provisioning.sh": ("run stop_unsigned_rebase_app",),
         "deploy_step_agent_eval_and_smoke.sh": ("run stop_unproven_candidate_before_rollback",),
+        # The core tier's steps 10b-11 (M2-PR7b) stop an unproven green the same way.
+        "deploy_step_core_activation.sh": ("run stop_unproven_candidate_before_rollback",),
         "deploy_step_app_promotion_and_refresh.sh": ("run start_stopped_app_before_activation",),
         "deploy_first_install_lifecycle.sh": ("run stop_journal_owned_first_install_app",),
     }
@@ -219,10 +221,13 @@ def test_a_bundle_job_runs_from_shell_only_at_its_reviewed_site() -> None:
     (
         'databricks pipelines start-update "$PIPELINE_ID" --full-refresh\n',
         'databricks pipelines stop "$PIPELINE_ID"\n',
+        "databricks pipelines run mip_feature_pipeline\n",
+        "databricks pipelines run --full-refresh-all\n",
+        "databricks pipelines dry-run --restart mip_feature_pipeline\n",
         'databricks api post /api/2.0/pipelines/abc-123/updates --json "{}"\n',
         '"$PYTHON" -c "w.pipelines.start_update(pipeline_id=p)"\n',
     ),
-    ids=("cli_start", "cli_stop", "rest", "inline"),
+    ids=("cli_start", "cli_stop", "cli_run", "cli_run_full_refresh", "cli_dry_run", "rest", "inline"),
 )
 def test_a_pipeline_update_from_shell_is_reviewed_nowhere(line: str) -> None:
     # A direct pipeline update is a silver refresh by another door (M1-PR6).

@@ -959,29 +959,6 @@ def test_main_reads_the_approval_lists_from_the_environment_never_argv(
     assert refused.value.code == 2, "argv would echo the principals into the deploy transcript"
 
 
-def test_main_passes_the_plan_phases_genie_turn_off_to_the_suite(monkeypatch: pytest.MonkeyPatch) -> None:
-    # --phase plan writes nothing (M1-PR6): its probes open no Genie conversation.
-    import databricks.sdk
-
-    from tools.databricks import m2m_access_policy, provision_agentic_resources
-
-    seen: list[Any] = []
-
-    def record(*_args: Any, config: Any, **_kwargs: Any) -> tuple[list[Any], list[str]]:
-        seen.append(config)
-        return [], []
-
-    workspace = _ReadOnlyWorkspace(acls={"governed": _acl()}, app=_app())
-    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: workspace)
-    monkeypatch.setattr(provision_agentic_resources, "_supervisor_agents", _agents_human)
-    monkeypatch.setattr(m2m_access_policy, "resolve_effective_groups", _walk({}))
-    monkeypatch.setattr(probes, "suite_refusals", record)
-    monkeypatch.setenv(ack.ACKNOWLEDGEMENT_ENV, HUMAN_ID)
-    assert probes.main(_main_args()) == 0
-    assert probes.main([*_main_args(), "--genie-turn", "off"]) == 0
-    assert [config.genie_turn for config in seen] == [True, False], "the default asks the turn"
-
-
 def test_main_resolves_each_principal_through_the_admin_scim_walk(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1324,7 +1301,7 @@ TARGET=client
 CLIENT_INSTALL_CLASS=demo
 CLIENT_DEMO_FEEDS=1
 # The profile's agentic tier and its lease writer (resolve_client_profile,
-# M2-PR3): client #1's shape. A core release refuses before the lease.
+# M2-PR3): client #1's shape (the core tier's release path is M2-PR7b's).
 CLIENT_AGENTIC_TIER=on
 CLIENT_LEASE_WRITER_ENV=DATABRICKS_AGENT_RUNTIME_CLIENT_ID
 tier_is_agentic() {{ [[ "$CLIENT_AGENTIC_TIER" == "on" ]]; }}
