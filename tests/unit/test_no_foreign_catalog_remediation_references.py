@@ -210,7 +210,8 @@ def test_no_deleted_module_can_be_imported(module: str) -> None:
 def test_only_the_refusal_and_its_records_name_the_refused_flag() -> None:
     counts = _counts(rf"\b{REFUSED_FLAG}\b")
 
-    assert _offenders(counts, *FLAG_FILES) == []
+    # Exact: the dated records may name the deleted tooling, never the flag.
+    assert sorted(set(counts) - set(FLAG_FILES)) == []
     assert not any(path.startswith(".github/") for path in counts), "no workflow may pass the flag"
     assert counts["scripts/deploy.sh"] > 0, "the positive control: the refusal names it"
 
