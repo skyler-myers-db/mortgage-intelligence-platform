@@ -1,5 +1,6 @@
 /**
- * The reviewed GET routes that write no audit row, in their `/api/` form.
+ * The reviewed reads that write no audit row, per HTTP method, in their
+ * `/api/` form.
  *
  * A read the server answered can still fail on the client: a 200 whose body
  * was lost mid-transfer fails offline or unreachable but keeps its status
@@ -9,14 +10,18 @@
  * no act behind it. A read on this list writes none, so a recovery may
  * complete it (connectionState `refetchableAfterNetworkLoss`).
  *
- * Fail-closed: a path that is not on the list is treated as audited, so a
- * new route stays out of every automatic re-read until someone reviews it
- * here. `tests/unit/test_audit_free_reads_registry.py` pins each entry from
- * the server side: a mounted GET route whose dependencies never take the
- * audit store or a background task, and no audited GET route matches one.
+ * Fail-closed: a method and path that are not on the list are treated as
+ * audited, so a new route stays out of every automatic re-read until someone
+ * reviews it here. `tests/unit/test_audit_free_reads_registry.py` pins each
+ * entry from the server side: it calls every entry on the mounted app with
+ * the audit store and the Lakebase client recording, and asserts that the
+ * call wrote no audit row, through the store or as raw SQL, and queued no
+ * background task; and that no route outside the list serves a path that one
+ * of its entries matches.
  *
- * Matching: the request path loses its query string and `/api/v1` becomes
- * `/api`; each `{name}` matches one path segment that is not `.` or `..`.
+ * Matching: the method must be the entry's; the request path loses its query
+ * string and `/api/v1` becomes `/api`; each `{name}` matches one path segment
+ * that is not `.` or `..` and holds no encoded `/` or `\`.
  */
 export const AUDIT_FREE_GET_ROUTES: readonly string[] = [
   '/api/activation/destinations',
@@ -26,6 +31,9 @@ export const AUDIT_FREE_GET_ROUTES: readonly string[] = [
   '/api/admin/capabilities',
   '/api/admin/field-performance',
   '/api/admin/health',
+  // A ledger read that writes no row (the registry pin calls it): the Admin
+  // data-operations panel reads the last run of each job for its cooldown.
+  '/api/admin/operations',
   '/api/admin/rules',
   '/api/admin/settings',
   '/api/admin/sources',
@@ -41,6 +49,9 @@ export const AUDIT_FREE_GET_ROUTES: readonly string[] = [
   '/api/analytics/segments',
   '/api/analytics/signals',
   '/api/assets/{asset_key}/freshness',
+  // A ledger read that writes no row: "My recent activity" in the Console,
+  // the events of the reader alone.
+  '/api/audit/my-events',
   '/api/borrowers/search',
   '/api/borrowers/{borrower_id}/decisions',
   '/api/borrowers/{borrower_id}/evidence',
@@ -92,7 +103,18 @@ export const AUDIT_FREE_GET_ROUTES: readonly string[] = [
   '/api/workspace/saved-views',
 ];
 
+/**
+ * The reviewed POST reads that write no audit row: a query that reads with a
+ * POST (a body the server needs), never a write. Ask Genie's starters and
+ * trusted assets (lib/genieStartQuery; the route is audit-exempt).
+ */
+export const AUDIT_FREE_POST_READS: readonly string[] = [
+  '/api/genie/start',
+];
+
 const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+/** An encoded separator: the server would decode it into another path. */
+const ENCODED_SEPARATOR = /%(?:2f|5c)/i;
 
 function templatePattern(template: string): RegExp {
   const source = template
@@ -102,7 +124,10 @@ function templatePattern(template: string): RegExp {
   return new RegExp(`^${source}$`);
 }
 
-const AUDIT_FREE_PATTERNS: readonly RegExp[] = AUDIT_FREE_GET_ROUTES.map(templatePattern);
+const AUDIT_FREE_PATTERNS: ReadonlyMap<string, readonly RegExp[]> = new Map([
+  ['GET', AUDIT_FREE_GET_ROUTES.map(templatePattern)],
+  ['POST', AUDIT_FREE_POST_READS.map(templatePattern)],
+]);
 
 /** The request path as the list spells it: no query string, `/api/v1` as `/api`. */
 export function logicalApiPath(path: string): string {
@@ -110,9 +135,14 @@ export function logicalApiPath(path: string): string {
   return bare.replace(/^\/api\/v1(?=\/|$)/, '/api');
 }
 
-/** True only when `path` (an ApiError's request path) is a reviewed audit-free GET. */
-export function isAuditFreeRead(path: string): boolean {
+/**
+ * True only when `method` and `path` (an ApiError's) name a reviewed
+ * audit-free read. An unknown method (null: not a transport error) never does.
+ */
+export function isAuditFreeRead(path: string, method: string | null): boolean {
+  const patterns = method === null ? undefined : AUDIT_FREE_PATTERNS.get(method.toUpperCase());
+  if (!patterns) return false;
   const logical = logicalApiPath(path);
-  if (logical.split('/').some((segment) => DOT_SEGMENT.test(segment))) return false;
-  return AUDIT_FREE_PATTERNS.some((pattern) => pattern.test(logical));
+  if (logical.split('/').some((segment) => DOT_SEGMENT.test(segment) || ENCODED_SEPARATOR.test(segment))) return false;
+  return patterns.some((pattern) => pattern.test(logical));
 }

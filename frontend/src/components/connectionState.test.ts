@@ -30,7 +30,7 @@ describe('refetchUnreachableQueries', () => {
     // A 200 whose body was lost mid-transfer (apiTransport _readJson): served.
     // /api/v1/leads writes VIEW_LEADS, and an unreviewed path counts as audited.
     const bodyLost = (path: string) => () =>
-      Promise.reject(new ApiError('unreachable', { path, reason: 'unreachable', status: 200 }));
+      Promise.reject(new ApiError('unreachable', { path, method: 'GET', reason: 'unreachable', status: 200 }));
     const plain = vi.fn(unreachable);
     const audited = vi.fn(unreachable);
     const answered = vi.fn(bodyLost('/api/v1/leads?limit=5'));
@@ -83,8 +83,8 @@ describe('neverAnswered', () => {
 
 describe('answeredAuditFreeLoss', () => {
   const inState = (error: unknown) => ({ state: { error } }) as unknown as Pick<Query, 'state'>;
-  const lost = (path: string, reason = 'unreachable', status: number | null = 200, aborted = false) =>
-    new ApiError('failed', { path, reason, status, aborted });
+  const lost = (path: string, reason = 'unreachable', status: number | null = 200, aborted = false, method: string | null = 'GET') =>
+    new ApiError('failed', { path, method, reason, status, aborted });
 
   it('is true only for a reviewed audit-free read the server answered whose body the network lost', () => {
     expect(answeredAuditFreeLoss(inState(lost('/api/v1/analytics/executive')))).toBe(true);
@@ -100,5 +100,13 @@ describe('answeredAuditFreeLoss', () => {
     expect(answeredAuditFreeLoss(inState(lost('/api/v1/analytics/executive', 'unreadable_response')))).toBe(false);
     expect(answeredAuditFreeLoss(inState(lost('/api/v1/analytics/executive', 'warming_up', 503)))).toBe(false);
     expect(answeredAuditFreeLoss(inState(null))).toBe(false);
+  });
+
+  it('judges the method the request used: a reviewed POST read, never a POST to a listed GET path', () => {
+    expect(answeredAuditFreeLoss(inState(lost('/api/v1/genie/start', 'unreachable', 200, false, 'POST')))).toBe(true);
+    expect(answeredAuditFreeLoss(inState(lost('/api/v1/audit/my-events?limit=8')))).toBe(true);
+    expect(answeredAuditFreeLoss(inState(lost('/api/v1/workspace/saved-views', 'unreachable', 200, false, 'POST')))).toBe(false);
+    // No method recorded: fail-closed.
+    expect(answeredAuditFreeLoss(inState(lost('/api/v1/analytics/executive', 'unreachable', 200, false, null)))).toBe(false);
   });
 });

@@ -204,8 +204,9 @@ async function keepBodies(page: Page): Promise<void> {
 }
 
 const EXECUTIVE = { pathname: '/api/v1/analytics/executive' };
-const executiveReads = (mockApi: MockApi) =>
-  mockApi.calls.filter((call) => call.method === 'GET' && call.path === '/api/analytics/executive').length;
+const reads = (mockApi: MockApi, method: string, path: string) =>
+  mockApi.calls.filter((call) => call.method === method && call.path === path).length;
+const executiveReads = (mockApi: MockApi) => reads(mockApi, 'GET', '/api/analytics/executive');
 
 test.describe('a recovery completes an audit-free read whose answer lost its body, never an audited one', () => {
   test('Analytics: the executive read answered 200, lost its body, and loads on reconnect', async ({ app, context, mockApi, page }) => {
@@ -277,5 +278,30 @@ test.describe('a recovery completes an audit-free read whose answer lost its bod
     await reconnect(app, context, mockApi, page, assets);
     expectNoAuditedReadSince(mockApi, natural, 'borrower-360 after a reconnect');
     await expect(page.locator('#main-content').getByText("Today's top leads")).toHaveCount(0);
+  });
+});
+
+test.describe('a recovery completes the ledger reads that write no row', () => {
+  test('Console: My recent activity answered 200, lost its body, and loads on reconnect', async ({ app, context, mockApi, page }) => {
+    const assets = trackAssets(page);
+    await loseBodies(page, { pathname: '/api/v1/audit/my-events' });
+    await app.gotoRoute('/glossary');
+    const consolePanel = await app.openConsole();
+    const activity = consolePanel.getByRole('region', { name: 'My recent activity' });
+    await expect(activity.getByText('Recent activity is unavailable.')).toBeVisible();
+    const served = reads(mockApi, 'GET', '/api/audit/my-events');
+    expect(served).toBeGreaterThan(0);
+    await app.settle();
+    const natural = markNaturalLoad(mockApi);
+    await keepBodies(page);
+
+    await page.clock.setFixedTime(new Date(Date.parse(FIXTURE_NOW) + PAST_EVERY_STALE_TIME_MS));
+    await reconnect(app, context, mockApi, page, assets);
+    // It lists the reader's own ledger events and writes no row: completing it adds none.
+    await expect
+      .poll(() => reads(mockApi, 'GET', '/api/audit/my-events'), { message: 'the reconnect completed the my-events read' })
+      .toBe(served + 1);
+    await expect(activity.getByText('Recent activity is unavailable.')).toHaveCount(0);
+    expectNoAuditedReadSince(mockApi, natural, 'the Console after a reconnect');
   });
 });

@@ -34,12 +34,13 @@ export function neverAnswered(query: Pick<Query, 'state'>): boolean {
 /**
  * A query the server answered whose body the network then lost: offline or
  * unreachable with a status. Only a reviewed audit-free read
- * (lib/auditFreeReads) may be completed after that; any other path counts
- * as audited, whose row the answered attempt has already written.
+ * (lib/auditFreeReads, per method) may be completed after that; any other
+ * method and path count as audited, whose row the answered attempt has
+ * already written.
  */
 export function answeredAuditFreeLoss(query: Pick<Query, 'state'>): boolean {
   const error = networkLoss(query);
-  return error !== null && error.status !== null && isAuditFreeRead(error.path);
+  return error !== null && error.status !== null && isAuditFreeRead(error.path, error.method);
 }
 
 /**

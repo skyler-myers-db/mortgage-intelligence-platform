@@ -8,7 +8,7 @@ import {
 } from './queryClient';
 import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
-import { getJson } from './apiTransport';
+import { getJson, postJson } from './apiTransport';
 import { LEADS_PAGED_SCOPE, leadsPagedQueryKey } from './leadsQuery';
 
 describe('createMipQueryClient', () => {
@@ -92,10 +92,12 @@ describe('createMipQueryClient', () => {
 
 function failure(
   reason: string | undefined,
-  extra: { status?: number | null; aborted?: boolean; path?: string } = {},
+  extra: { status?: number | null; aborted?: boolean; path?: string; method?: string | null } = {},
 ): ApiError {
   return new ApiError('failed', {
     path: extra.path ?? '/api/v1/leads',
+    // The transport records the method of every request it makes.
+    method: extra.method === undefined ? 'GET' : extra.method,
     status: extra.status ?? null,
     retryable: false,
     reason,
@@ -145,6 +147,15 @@ describe('refetchOnReconnectAfterNetworkLoss', () => {
     expect(
       refetchOnReconnectAfterNetworkLoss(queryIn(failure('offline', { status: 200, path: AUDIT_FREE }), { auditedPages: true })),
     ).toBe(false);
+  });
+
+  it('judges a lost answer by the method too: a reviewed POST read, never a POST to a listed GET path', () => {
+    const genieStart = '/api/v1/genie/start';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: genieStart, method: 'POST' })))).toBe(true);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: genieStart, method: 'GET' })))).toBe(false);
+    const savedViews = '/api/v1/workspace/saved-views';
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: savedViews, method: 'POST' })))).toBe(false);
+    expect(refetchOnReconnectAfterNetworkLoss(queryIn(failure('unreachable', { status: 200, path: AUDIT_FREE, method: null })))).toBe(false);
   });
 });
 
@@ -312,6 +323,7 @@ describe('createMipQueryClient on reconnect', () => {
         expect(error).toBeInstanceOf(ApiError);
         expect((error as ApiError).reason).toBe('unreachable');
         expect((error as ApiError).status).toBe(200);
+        expect((error as ApiError).method).toBe('GET');
       }
 
       onlineManager.setOnline(false);
@@ -323,6 +335,74 @@ describe('createMipQueryClient on reconnect', () => {
 
       expect(calls('/api/v1/leads')).toBe(2);
       expect(audited.getCurrentResult().status).toBe('error');
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('completes a reviewed POST read whose 200 body was lost, never a POST the list names only as a GET', async () => {
+    // Ask Genie's starters read with a POST and write no row; a query that
+    // POSTs to /workspace/saved-views (a write: SAVE_QUEUE_VIEW) is not that
+    // read, though its GET is on the list.
+    const encoder = new TextEncoder();
+    const ok = () => new Response(JSON.stringify({ rows: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const bodyLost = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"rows": ['));
+            controller.error(new TypeError('network connection was lost'));
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    const scripted: Record<string, Array<() => Response>> = {
+      '/api/v1/genie/start': [bodyLost, ok],
+      '/api/v1/workspace/saved-views': [bodyLost],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, 'http://app.test');
+      const next = scripted[url.pathname]?.shift();
+      if (!next) throw new Error(`unexpected request ${url.pathname}`);
+      return next();
+    });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(([input]) => new URL(String(input), 'http://app.test').pathname === pathname).length;
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const starters = new QueryObserver(client, {
+      queryKey: ['mip', 'genie', 'start', 'body-lost'],
+      queryFn: ({ signal }) => postJson<{ rows: unknown[] }, { context: object }>('/api/genie/start', { context: {} }, signal),
+      staleTime: 0,
+    });
+    const savedViewWrite = new QueryObserver(client, {
+      queryKey: ['mip', 'workspace', 'saved-view-post', 'body-lost'],
+      queryFn: ({ signal }) =>
+        postJson<{ rows: unknown[] }, { name: string }>('/api/workspace/saved-views', { name: 'x' }, signal),
+      staleTime: 0,
+    });
+    const unsubscribe = [starters.subscribe(() => undefined), savedViewWrite.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(starters.getCurrentResult().status).toBe('error'));
+      await vi.waitFor(() => expect(savedViewWrite.getCurrentResult().status).toBe('error'));
+      for (const observer of [starters, savedViewWrite]) {
+        const error = observer.getCurrentResult().error as ApiError;
+        expect(error.status).toBe(200);
+        expect(error.method).toBe('POST');
+      }
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      await vi.waitFor(() => expect(starters.getCurrentResult().status).toBe('success'));
+      expect(calls('/api/v1/genie/start')).toBe(2);
+
+      expect(calls('/api/v1/workspace/saved-views')).toBe(1);
+      expect(savedViewWrite.getCurrentResult().status).toBe('error');
     } finally {
       unsubscribe.forEach((stop) => stop());
       client.unmount();
