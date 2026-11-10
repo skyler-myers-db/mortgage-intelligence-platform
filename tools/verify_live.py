@@ -5,8 +5,12 @@ Probes each production API endpoint using an OAuth bearer token obtained via
 lightweight payload sanity check.
 
 Usage:
-    python tools/verify_live.py
-    python tools/verify_live.py --base-url https://mip-app-2543889327043640.aws.databricksapps.com
+    python tools/verify_live.py --base-url https://<app-host>
+    MIP_APP_URL=https://<app-host> python tools/verify_live.py
+
+The base URL is the deployed App's (``databricks apps get <app-name>`` prints
+it as ``url``); it is a required input, never a default, because an App URL
+names one client's workspace.
 
 Idempotent: write probes use real borrower IDs discovered from `/api/leads`.
 Unknown-borrower probes use synthetic B-TEST ids only as 404 negative checks,
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -53,7 +58,9 @@ from tools.verify_live_source_readiness import (  # noqa: E402
     resolve_max_source_age_days,
 )
 
-DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
+# The deployed App's URL: --base-url, else MIP_APP_URL (scripts/e2e_live.sh's
+# name). No default: an App URL names one client's workspace (M1-PR4).
+BASE_URL_ENV = "MIP_APP_URL"
 
 
 def _report_safe_sample(value: Any) -> Any:
@@ -711,7 +718,11 @@ def render_markdown(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default=DEFAULT_BASE)
+    ap.add_argument(
+        "--base-url",
+        default=None,
+        help=f"the deployed App's URL (https://<app-host>); required, else ${BASE_URL_ENV}",
+    )
     ap.add_argument("--profile", default="DEFAULT")
     ap.add_argument("--out", default="docs/validation/e2e-verification-2026-04-23.md")
     ap.add_argument(
@@ -726,6 +737,12 @@ def main() -> int:
         ),
     )
     args = ap.parse_args()
+    args.base_url = (args.base_url or os.environ.get(BASE_URL_ENV, "")).strip()
+    if not args.base_url:
+        ap.error(
+            f"--base-url (or {BASE_URL_ENV}) is required: the deployed App's URL, which "
+            "`databricks apps get <app-name>` prints as url"
+        )
     if args.max_source_age_days is not None and args.max_source_age_days < 1:
         ap.error("--max-source-age-days must be at least 1")
 
