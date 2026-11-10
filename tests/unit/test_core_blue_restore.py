@@ -69,8 +69,10 @@ def test_step_0a_repairs_a_drifted_core_binding_and_refuses_a_serving_one_unrepa
     job = {"name": "candidate_job", "job": {"id": "999", "permission": "CAN_MANAGE_RUN"}}
     world.resources = [*copy.deepcopy(rr.APP_RESOURCES), job]  # a killed run's candidate binding
     record = core_blue_restore.ensure_core_blue(world, **world.kwargs())
-    assert world.apps.mutations == ["update"] and record["deployment_id"] == "deployment-blue"
+    # Spike S2: a create-update masked to resources, so the description survives.
+    assert world.apps.mutations == ["create_update"] and record["deployment_id"] == "deployment-blue"
     assert world.resources == rr.APP_RESOURCES, "the record's own bindings, restored"
+    assert world.description and world.update_ledger.masks == ["resources"]
 
     world.apps.mutations.clear()
     world.resources = [*copy.deepcopy(rr.APP_RESOURCES), SERVING]

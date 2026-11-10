@@ -24,7 +24,7 @@ from collections.abc import Callable
 from typing import Any
 
 from tools.databricks import quiesce_window_journal as journal
-from tools.databricks.app_resource_bindings import binding_diff
+from tools.databricks.app_resource_bindings import binding_diff, description_differs
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
     V7_REFUSAL,
@@ -43,6 +43,9 @@ from tools.databricks.quiesce_window_plan import WindowFacts
 NOT_FOUND_RECORD = "no server-owned last-good App rollback contract exists"
 MIGRATION_DECISIONS = frozenset({"noop", "apply", "refuse"})
 ROLE_STATES = frozenset({"exact", "drift"})
+# The App role's CREATE ON DATABASE, from the migration plan (spike S2): owed
+# when a binding send re-granted it, which only the migration job revokes.
+REGRANT_STATES = frozenset({"exact", "owed"})
 # The core tier (MIP_AGENTIC_TIER=off, M2-PR3) deploys no verifier: its role is
 # recorded absent, which no converge can rotate. The App and the jobs reader
 # always exist.
@@ -104,7 +107,15 @@ def _migration(plan: dict[str, Any]) -> dict[str, Any]:
         jobs_reader_grants = "unchecked"
     elif jobs_reader_grants not in ROLE_STATES:
         raise ValueError("the Lakebase migration plan did not check the jobs reader's grants")
+    # Spike S2: a noop plan whose App role holds CREATE ON DATABASE again is a
+    # WR2 window. A plan that never read it is incomplete, unless it refused.
+    app_role_regrant = plan.get("app_role_regrant")
+    if decision == "refuse" and app_role_regrant in {None, "unchecked"}:
+        app_role_regrant = "unchecked"
+    elif app_role_regrant not in REGRANT_STATES:
+        raise ValueError("the Lakebase migration plan did not read the App role's CREATE ON DATABASE")
     return {
+        "app_role_regrant": app_role_regrant,
         "jobs_reader_grants": jobs_reader_grants,
         "migration_decision": decision,
         "migration_blue_restorable": bool(plan.get("blue_restorable")),
@@ -171,12 +182,17 @@ def collect_facts(
             "an installed signed blue needs the App, verifier and jobs-reader role checks "
             "and the migration plan"
         )
+    description_state = "equal"
     if binding_payload is None:
         binding_state, lines = "unresolved", ()
     else:
         live = app.as_dict() if hasattr(app, "as_dict") else dict(app.__dict__)
+        # Bindings as a set by name (spike S2): order is no reason. The
+        # description is the release's online fix-up, never a window.
         lines = tuple(binding_diff(expected=binding_payload, live=live))
         binding_state = "diff" if lines else "equal"
+        if description_differs(expected=binding_payload, live=live):
+            description_state = "differs"
     blue_id = record["deployment_id"]
     blue = workspace.apps.get_deployment(app_name, blue_id)
     facts = WindowFacts(
@@ -185,6 +201,7 @@ def collect_facts(
         deadman_state=deadman_state,
         binding_state=binding_state,
         binding_lines=lines,
+        description_state=description_state,
         role_state=role_state,
         verifier_role_state=verifier_role_state,
         jobs_reader_role_state=jobs_reader_role_state,

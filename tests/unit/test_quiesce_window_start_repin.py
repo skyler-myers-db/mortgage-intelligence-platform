@@ -70,6 +70,7 @@ MIGRATION_APPLY = {
     "blue_restorable": True,
     "migrations": {"pending": ["0042"], "pending_contract": []},
     "jobs_reader_grants": "exact",
+    "app_role_regrant": "exact",
 }
 MIGRATION_NOOP = {**MIGRATION_APPLY, "decision": "noop", "migrations": {"pending": []}}
 EQUAL_BINDINGS = {"name": APP_NAME, "description": "", "resources": APP_RESOURCES}

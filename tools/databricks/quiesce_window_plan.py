@@ -3,17 +3,27 @@
 A release keeps blue serving. It stops the App only for a window reason:
 
 * **WR1** binding diff: the App's live resource bindings differ from the
-  bundle's (any diff, until spike S2 proves an unchanged database binding
-  leaves a running App and its role alone), or a binding id is unresolved;
+  bundle's, compared as a set keyed by binding name (an order-only difference
+  is equal), or a binding id is unresolved. Spike S2 measured that every
+  update that carries resources, an identical array included, grants CREATE
+  ON DATABASE to the App's Lakebase role again with no restart, and only the
+  migration job's revoke takes it back: a WR1 window runs that job after its
+  binding update whatever the migration plan says (``app_role_regrant``
+  ``binding_send`` in the body, and its budget). A description-only
+  difference is no reason: the release applies it online with a
+  create-update masked to ``description`` (no restart, no role change; S2,
+  S2b), and the public summary names it as an ``online_fixups`` entry;
 * **WR2** Lakebase role rotation: ``converge_lakebase_oauth_role --check``
   drifts for the App, verifier or jobs-reader role, or a ``noop`` migration
-  plan reads the jobs reader's grants as drift (M2-PR5; absent included). A
-  rotation drops the role's grants, which only the migration job re-applies,
-  and that job runs only inside a window. Blue never reads as the jobs
-  reader, so its re-grant keeps blue restorable. The grants alone are no
-  reason under an ``apply`` plan, whose WR3 window runs that job anyway (a
-  pending table reads as grant drift), nor under a ``refuse`` plan, which
-  refuses the window;
+  plan reads the jobs reader's grants as drift (M2-PR5; absent included) or
+  the App role's CREATE ON DATABASE as re-granted (``app_role_regrant``
+  ``owed``: an earlier binding send outside a window, spike S2). A rotation
+  drops the role's grants, which only the migration job re-applies, and that
+  job runs only inside a window. Blue never reads as the jobs reader, and the
+  App role's re-grant changes no schema, so either keeps blue restorable. The
+  grants alone are no reason under an ``apply`` plan, whose WR3 window runs
+  that job anyway (a pending table reads as grant drift), nor under a
+  ``refuse`` plan, which refuses the window;
 * **WR3** pending migration: the Lakebase migration plan decides ``apply``;
 * **WR4** acked instance update: the bundle plan updates the Lakebase
   instance under an acknowledged digest (``bundle_plan_instance_ack``).
@@ -120,6 +130,7 @@ REMEDIES = {
     ),
 }
 ACK_STATES = frozenset({"not_required", "matched", "absent", "mismatch"})
+DESCRIPTION_STATES = frozenset({"equal", "differs"})
 # Conservative per-step budgets in seconds, for the admission (M0-PR9). They
 # are not measurements: spikes S2 and S7 owe the live timings.
 # "green_activation" is a contract window's tail: it stays open (the App
@@ -132,6 +143,10 @@ STEP_BUDGET_S = {
     "WR4": 900,
     "start": 600,
     "repin": 300,
+    # Every window runs the migration job (step 4b). A WR3 budgets it; any
+    # other window gets this: the job re-grants a rotated role (WR2) and
+    # revokes the CREATE ON DATABASE a binding send re-granted (WR1, spike S2).
+    "migrate": 600,
     "green_activation": 1800,
 }
 # The admission margin on top of the predicted window and restore (M0-PR9).
@@ -149,10 +164,16 @@ class WindowFacts:
     deadman_state: str = "absent"
     binding_state: str = "equal"  # "equal", "diff" or "unresolved"
     binding_lines: tuple[str, ...] = ()
+    # The bundle's App description against the live one: a difference is the
+    # release's online fix-up (create-update masked to description), never a window.
+    description_state: str = "equal"  # "equal" or "differs"
     role_state: str = "exact"  # the App role: "exact" or "drift"
     verifier_role_state: str = "exact"  # the AI Gateway verifier role; "absent" in the core tier
     jobs_reader_role_state: str = "exact"  # the jobs identity's Lakebase role (M2-PR5)
     jobs_reader_grants: str = "exact"  # its grants, from the plan ("unchecked" if it refused early)
+    # The App role's CREATE ON DATABASE, from the plan (spike S2): "owed" after
+    # a binding send re-granted it ("unchecked" if the plan refused early).
+    app_role_regrant: str = "exact"
     migration_decision: str = "noop"  # "noop", "apply" or "refuse"
     migration_blue_restorable: bool = True
     migration_pending: tuple[str, ...] = ()
@@ -171,12 +192,11 @@ class WindowFacts:
         # value than exact is a drift (WR2), never a silent skip.
         verifier = "exact" if self.verifier_role_state == "absent" else self.verifier_role_state
         roles = (self.role_state, verifier, self.jobs_reader_role_state)
-        # Only a skipped migration job leaves the jobs reader's grants as they
-        # are: apply re-grants them inside its WR3 window, refuse runs nothing.
-        regrant = self.jobs_reader_grants != "exact" and self.migration_decision not in {
-            "apply",
-            "refuse",
-        }
+        # Only a skipped migration job leaves the jobs reader's grants, or the
+        # App role's CREATE ON DATABASE (S2), as they are: apply re-grants and
+        # revokes inside its WR3 window, refuse runs nothing.
+        grants = self.jobs_reader_grants != "exact" or self.app_role_regrant != "exact"
+        regrant = grants and self.migration_decision not in {"apply", "refuse"}
         present = {
             "WR1": self.binding_state != "equal",
             "WR2": any(state != "exact" for state in roles) or regrant,
@@ -233,6 +253,8 @@ class WindowPlan:
             raise ValueError("window plan carries an unreviewed refusal code")
         if any(reason not in REASONS for reason in self.reasons):
             raise ValueError("window plan carries an unreviewed reason")
+        if self.facts.description_state not in DESCRIPTION_STATES:
+            raise ValueError("window plan carries an unreviewed description state")
         return {
             "schema": PUBLIC_SCHEMA,
             "position": self.position,
@@ -247,6 +269,9 @@ class WindowPlan:
             "refusals": list(self.refusals),
             "admission": dict(self.admission) or {"state": "not_evaluated"},
             "deadman_recovery": deadman_recovery(self.facts, position=self.position),
+            # Applied online whatever the window (spike S2): never a reason.
+            "online_fixups": online_fixups(self.facts),
+            "app_role_regrant": list(self.canonical.get("app_role_regrant") or ()),
         }
 
     def full(self) -> dict[str, Any]:
@@ -286,7 +311,25 @@ def canonical_body(facts: WindowFacts, *, blue_restorable: bool) -> dict[str, An
     }
     if reasons:
         body["budget"] = budget_body(reasons, blue_restorable=blue_restorable)
+        regrant = role_regrant(facts, reasons)
+        if regrant:
+            body["app_role_regrant"] = regrant
     return body
+
+
+def role_regrant(facts: WindowFacts, reasons: tuple[str, ...]) -> list[str]:
+    """Why the App role holds CREATE ON DATABASE in this window, which its migration job revokes.
+
+    Spike S2: every update that carries resources grants that privilege to the
+    App's Lakebase role again. ``binding_send``: this window's own binding
+    update (WR1). ``observed``: an earlier send outside a window, which the
+    migration plan read (``app_role_regrant`` ``owed``, a WR2).
+    """
+
+    sources = ["binding_send"] if "WR1" in reasons else []
+    if facts.app_role_regrant == "owed":
+        sources.append("observed")
+    return sources
 
 
 def body_sha256(body: Mapping[str, Any]) -> str:
@@ -300,11 +343,15 @@ def predicted_seconds(reasons: tuple[str, ...], *, blue_restorable: bool) -> int
     A restorable window closes on blue's start and re-pin. A contract window
     closes only at green activation, so its tail (``green_activation``) is
     part of the outage the admission must fit before the job's deadline.
+    Every window runs the migration job: a window without WR3 adds its
+    ``migrate`` budget (spike S2: the revoke after a binding send).
     """
 
     if not reasons:
         return 0
     total = STEP_BUDGET_S["stop"] + sum(STEP_BUDGET_S[reason] for reason in reasons)
+    if "WR3" not in reasons:
+        total += STEP_BUDGET_S["migrate"]
     if blue_restorable:
         total += STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"]
     else:
@@ -350,6 +397,12 @@ def with_admission(plan: WindowPlan, admission: Mapping[str, Any], *, admitted: 
         refusals=tuple(dict.fromkeys(refusals)),
         code="refused" if refusals else plan.code,
     )
+
+
+def online_fixups(facts: WindowFacts) -> list[str]:
+    """What the release applies online, outside any window: a differing description (S2, S2b)."""
+
+    return ["description"] if facts.description_state == "differs" else []
 
 
 def deadman_recovery(facts: WindowFacts, *, position: str) -> bool:

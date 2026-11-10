@@ -22,6 +22,7 @@ NOOP = {
     "blue_restorable": True,
     "migrations": {"pending": []},
     "jobs_reader_grants": "exact",
+    "app_role_regrant": "exact",
 }
 
 

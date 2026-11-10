@@ -119,6 +119,8 @@ class SpyApps:
             service_principal_client_id="app-client",
             service_principal_id="app-scim-id",
             resources=copy.deepcopy(world.resources),
+            # A world with no description (adopt-live's) reads as the App's "" one.
+            description=getattr(world, "description", ""),
         )
 
     def list_deployments(self, _name: str, **_: Any) -> list[SimpleNamespace]:

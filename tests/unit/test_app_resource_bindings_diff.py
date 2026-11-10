@@ -1,4 +1,10 @@
-"""Bindings-diff fixtures: the read-only diff names changes without printing values."""
+"""Bindings-diff fixtures: the read-only diff names changes without printing values.
+
+Spike S2: the bindings compare as a set keyed by name (an order-only
+difference is equal), and the description is read apart
+(``description_differs``): a create-update masked to description is the
+release's online fix-up, never a window.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from tools.databricks.app_resource_bindings import (
     _assert_exact_transition,
     binding_diff,
     build_resource_binding_payload,
+    description_differs,
 )
 from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
@@ -83,14 +90,10 @@ def _resource(live: dict[str, Any], name: str) -> dict[str, Any]:
             ),
             ["1 unreviewed live binding(s) (update removes them)"],
         ),
-        (
-            lambda live: live["resources"].reverse(),
-            ["binding order differs (update reorders them)"],
-        ),
-        (
-            lambda live: live.update(description="Edited in the UI"),
-            ["description: differs (update replaces it)"],
-        ),
+        # S2: an order-only difference is equal, and the description is no binding.
+        (lambda live: live["resources"].reverse(), []),
+        (lambda live: live.update(description="Edited in the UI"), []),
+        (lambda live: live.update(description=""), []),
         (
             lambda live: _resource(live, "migration_job").update(
                 job={"id": 12345}, serving_endpoint={"name": "x"}
@@ -211,4 +214,50 @@ def test_property_diff_is_empty_exactly_when_the_post_update_verifier_passes(
     except ValueError:
         verifier_passes = False
 
-    assert (binding_diff(expected=expected, live=live) == []) is verifier_passes
+    equal = binding_diff(expected=expected, live=live) == [] and not description_differs(
+        expected=expected, live=live
+    )
+    assert equal is verifier_passes
+
+
+def test_a_reordered_binding_set_is_equal_to_the_diff_and_to_the_verifier() -> None:
+    live = _live(_payload())
+    live["resources"] = list(reversed(live["resources"]))
+
+    assert binding_diff(expected=_payload(), live=live) == []
+    _assert_exact_transition(
+        expected=_payload(), after=live, before=None, require_stopped_without_deployment=False
+    )
+
+
+def test_the_description_is_read_apart_from_the_bindings() -> None:
+    payload = _payload()
+    assert payload["description"], "the bundle declares the App's description"
+    live = _live(payload)
+
+    assert description_differs(expected=payload, live=live) is False
+    live["description"] = ""  # what a PATCH without one leaves (S2)
+    assert description_differs(expected=payload, live=live) is True
+    assert binding_diff(expected=payload, live=live) == []
+    with pytest.raises(ValueError, match="description"):
+        _assert_exact_transition(
+            expected=payload, after=live, before=None, require_stopped_without_deployment=False
+        )
+
+
+def test_cli_diff_reports_a_description_only_difference_and_exits_exact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    expected_path, live_path = tmp_path / "expected.json", tmp_path / "live.json"
+    expected_path.write_text(json.dumps(_payload()), encoding="utf-8")
+    live = _live(_payload())
+    live.update(description="")
+    live["resources"].reverse()
+    live_path.write_text(json.dumps(live), encoding="utf-8")
+
+    status = bindings.main(["diff", "--expected", str(expected_path), "--live", str(live_path)])
+
+    assert status == CHECK_EXACT, "a description and an order are no window"
+    out = capsys.readouterr().out
+    assert "equal the bundle payload (as a set)" in out
+    assert "description: differs (an online fix-up" in out

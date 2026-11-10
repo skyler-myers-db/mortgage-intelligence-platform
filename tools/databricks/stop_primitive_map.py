@@ -103,6 +103,8 @@ EXIT_TRAP_LIBRARY = "scripts/lib/deploy_app_release_lifecycle.sh"
 STOP_LIBRARIES = frozenset({WINDOW_LIBRARY, EXIT_TRAP_LIBRARY})
 # The data phase (M1-PR6): the only shell caller of the job phase runner.
 DATA_PHASE_LIBRARY = "scripts/lib/deploy_governed_phases_lifecycle.sh"
+# The release's binding step: the only shell caller of the online description fix-up.
+BUNDLE_APPLY_STEP = "scripts/lib/deploy_step_bundle_apply.sh"
 JOB_RUN_LIBRARIES = frozenset({WINDOW_LIBRARY, DATA_PHASE_LIBRARY})
 # Shell file -> the bundle jobs it may ``databricks bundle run``: the release's
 # deploy-time jobs and the gold refresh's reviewed reconcile wrapper, and the
@@ -125,13 +127,17 @@ PRIMITIVE_SITES = frozenset(
         ("tools/databricks/app_deployment_repin.py", "redeploy_signed_blue", "deploy_and_wait"),
         # The core tier's tier-b restore (M2-PR7b): blue's restore payload, deploy only.
         ("tools/databricks/core_blue_restore.py", "redeploy_core_blue", "deploy_and_wait"),
+        # A create-update masked to resources (spike S2: a PATCH clears the description).
         (
             "tools/databricks/app_rollback_resource_contract.py",
             "restore_signed_app_resource_contract",
-            "update",
+            "create_update",
         ),
         # The dead-man's restart (M0-PR9): start and get only, never a stop.
         ("jobs/window_deadman.py", "start_blue", "start"),
+        # The release's online description fix-up (spike S2): a create-update
+        # masked to description, which restarts nothing and re-grants nothing.
+        ("tools/databricks/app_description_fixup.py", "apply_bundle_description", "create_update"),
     }
 )
 # The scanned roots: the deploy tooling and the job sources (M0-PR9).
@@ -207,6 +213,13 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
             "cancel-deadman": True,
         },
         callers=frozenset({WINDOW_LIBRARY}),
+    ),
+    # The online description fix-up (spike S2): it updates the description
+    # alone, never a binding, a deployment or the compute.
+    "tools.databricks.app_description_fixup": EntryPoint(
+        modes={"(default)": True},
+        callers=frozenset({BUNDLE_APPLY_STEP}),
+        positional=False,
     ),
     # The data phase's runner (M1-PR6): plan and quiet are read-only; begin,
     # run and close write the signed ledger, and run starts the job. No App call.

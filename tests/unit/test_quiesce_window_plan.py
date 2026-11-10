@@ -76,9 +76,13 @@ def test_each_reason_alone_needs_a_window_and_the_exact_digest_ack(reason: str) 
     assert unacked.ack == "absent" and wrong.ack == "mismatch"
     assert acked.code == "window" and acked.ack == "matched" and not acked.refusals
     assert acked.reasons == (reason,) and acked.tier == "a"
+    # Every window runs the migration job; a WR3 budgets it, any other window
+    # gets its "migrate" budget (spike S2: the revoke after a binding send).
+    migrate = 0 if reason == "WR3" else STEP_BUDGET_S["migrate"]
     assert acked.predicted_seconds == (
         STEP_BUDGET_S["stop"]
         + STEP_BUDGET_S[reason]
+        + migrate
         + STEP_BUDGET_S["start"]
         + STEP_BUDGET_S["repin"]
     )

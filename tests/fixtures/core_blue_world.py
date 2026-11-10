@@ -22,6 +22,7 @@ from databricks.sdk.service.workspace import ObjectType
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.adopt_live_world import DIST, World, make_repo
+from tests.fixtures.measured_app_updates import UpdateLedger, apply_create_update, apply_patch
 from tools.databricks import blue_restore_proof as proof
 
 GREEN_SHA = "c" * 40
@@ -62,8 +63,16 @@ class CoreApps:
         return SimpleNamespace(response=SimpleNamespace(pending_deployment=SimpleNamespace(deployment_id=new)))
 
     def update(self, name: str, app: Any) -> None:
+        """A PATCH as measured (S2): it clears an omitted description."""
+
         self.mutations.append("update")
-        self.world.resources = [item.as_dict() for item in app.resources]
+        apply_patch(self.world, app, self.world.update_ledger)
+
+    def create_update(self, app_name: str, update_mask: str, *, app: Any = None) -> Any:
+        """Only the masked fields, as measured (S2, S2b); a resources mask re-grants CREATE."""
+
+        self.mutations.append("create_update")
+        return apply_create_update(self.world, app_name, update_mask, app, self.world.update_ledger)
 
 
 @dataclass
@@ -72,6 +81,9 @@ class CoreWorld(World):
     env_sets: dict[str, list[str]] = field(default_factory=dict)
     treatments: list[str] = field(default_factory=list)
     health_calls: list[str] = field(default_factory=list)
+    # The App's description and what each update did (measured_app_updates, spike S2).
+    description: str = "Mortgage Intelligence Platform (synthetic)"
+    update_ledger: UpdateLedger = field(default_factory=UpdateLedger)
 
     def __post_init__(self) -> None:
         super().__post_init__()

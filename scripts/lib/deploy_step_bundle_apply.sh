@@ -280,6 +280,10 @@ if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
     --json "@$FIRST_INSTALL_MARKED_PAYLOAD" \
     --no-compute \
     -o json
+  # The database binding creates the App's Lakebase role with CREATE ON
+  # DATABASE (spike S2); step 4b's migration job, which always runs on a
+  # first install, revokes it.
+  APP_ROLE_REGRANT_OWED=1
   if [[ "$DRY_RUN" -eq 0 ]]; then
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
     "$PYTHON" -m tools.databricks.app_resource_bindings verify \
@@ -344,9 +348,11 @@ PYEOF
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
   fi
   if [[ -n "${QUIESCE_WINDOW_STATE:-}" && "$QUIESCE_WINDOW_STATE" != "window_open" ]]; then
-    # No window reason: the bindings must already equal the bundle's, read
-    # again now under the lease (time of check, time of use). A diff refuses
-    # with blue still serving; it is never updated outside the window.
+    # No window reason: the bindings must already equal the bundle's as a set
+    # (an order-only difference is equal), read again now under the lease
+    # (time of check, time of use). A diff refuses with blue still serving;
+    # resources are never sent outside the window (spike S2: every send
+    # re-grants CREATE ON DATABASE to the App's Lakebase role).
     step "prove the serving App's resource bindings already equal the bundle (no window)"
     if ! "$PYTHON" -m tools.databricks.app_resource_bindings diff \
       --expected "$APP_RESOURCE_BINDING_PAYLOAD" \
@@ -354,10 +360,26 @@ PYEOF
       echo "${RED}[deploy] the App's bindings drifted after the window plan; re-run to plan the window. Blue keeps serving.${RST}" >&2
       exit 2
     fi
+    # A description-only difference is the one online fix-up (spikes S2 and
+    # S2b): a create-update masked to description restarts nothing, makes no
+    # deployment and leaves the App's role alone. Blue keeps serving.
+    step "apply the bundle's App description online when it differs (description only, no window)"
+    assert_expected_app_identity "$_GRANTS_APP_NAME"
+    run "$PYTHON" -m tools.databricks.app_description_fixup \
+      --app-name "$_GRANTS_APP_NAME" \
+      --payload "$APP_RESOURCE_BINDING_PAYLOAD" \
+      --expected-app-id "$_EXISTING_APP_ID" \
+      --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID" \
+      --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID"
+    assert_expected_app_identity "$_GRANTS_APP_NAME"
   else
     assert_expected_app_identity "$_GRANTS_APP_NAME"
     run databricks apps update "$_GRANTS_APP_NAME" \
       --json "@$APP_RESOURCE_BINDING_PAYLOAD"
+    # Spike S2: this send, an identical array included, grants CREATE ON
+    # DATABASE to the App's Lakebase role again. Only the migration job's
+    # revoke takes it back, and step 4b runs that job below, in this window.
+    APP_ROLE_REGRANT_OWED=1
     assert_expected_app_identity "$_GRANTS_APP_NAME"
     if [[ "$DRY_RUN" -eq 0 ]]; then
       databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"

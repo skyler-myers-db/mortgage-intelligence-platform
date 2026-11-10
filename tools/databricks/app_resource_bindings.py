@@ -140,9 +140,11 @@ def _assert_exact_transition(
     app_name = str(expected.get("name") or "")
     if str(after.get("name") or "") != app_name:
         raise ValueError("updated App identity does not match the binding payload")
-    if str(after.get("description") or "") != str(expected.get("description") or ""):
+    if description_differs(expected=expected, live=after):
         raise ValueError("updated App description does not exactly match the binding payload")
-    if after.get("resources") != expected.get("resources"):
+    if _bindings_by_name(after.get("resources") or [], label="updated") != _bindings_by_name(
+        expected.get("resources"), label="expected"
+    ):
         raise ValueError("updated App resource bindings do not exactly match the bundle")
     if before is not None:
         for field in ("active_deployment", "pending_deployment"):
@@ -184,13 +186,24 @@ def _differing_fields(expected: Any, live: Any, prefix: str = "") -> list[str]:
     return [] if expected == live else [prefix or "value"]
 
 
-def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
-    """Describe, symbolically, how the live App differs from the binding payload.
+def description_differs(*, expected: dict[str, Any], live: dict[str, Any]) -> bool:
+    """Whether the live App's description is not the binding payload's (an unset one reads "")."""
 
-    Empty exactly when the post-update verifier would accept ``live`` as an
-    exact match for ``expected`` (same description, same bindings, same order).
-    Reviewed binding names come from the bundle and are printed; live-only
-    names are counted. No resource id, name or other value is ever printed.
+    return str(live.get("description") or "") != str(expected.get("description") or "")
+
+
+def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """Describe, symbolically, how the live App's resource bindings differ from the payload's.
+
+    The bindings are compared as a set keyed by binding name: an order-only
+    difference is equal. Empty exactly when the post-update verifier would
+    accept ``live``'s bindings as the payload's. The description is not a
+    binding: ``description_differs`` reads it apart, because spike S2 measured
+    that a create-update masked to ``description`` changes it with no
+    restart and no role change, while every send of resources re-grants
+    CREATE ON DATABASE to the App's Lakebase role. Reviewed binding names come
+    from the bundle and are printed; live-only names are counted. No resource
+    id, name or other value is ever printed.
     """
 
     _assert_source_free(expected)
@@ -199,8 +212,6 @@ def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]
     reviewed = _bindings_by_name(expected.get("resources"), label="expected")
     observed = _bindings_by_name(live.get("resources") or [], label="live")
     lines: list[str] = []
-    if str(live.get("description") or "") != str(expected.get("description") or ""):
-        lines.append("description: differs (update replaces it)")
     for name, binding in reviewed.items():
         if name not in observed:
             lines.append(f"binding {name}: missing (update adds it)")
@@ -211,8 +222,6 @@ def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]
     unreviewed = [name for name in observed if name not in reviewed]
     if unreviewed:
         lines.append(f"{len(unreviewed)} unreviewed live binding(s) (update removes them)")
-    if not lines and live.get("resources") != expected.get("resources"):
-        lines.append("binding order differs (update reorders them)")
     return lines
 
 
@@ -233,7 +242,11 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--require-stopped-without-deployment", action="store_true")
 
     diff = subparsers.add_parser(
-        "diff", help="Read-only: print the symbolic binding diff and exit 3 when it is non-empty."
+        "diff",
+        help=(
+            "Read-only: print the symbolic binding diff (bindings as a set by name) and exit 3 "
+            "when it is non-empty; a description-only difference exits 0."
+        ),
     )
     diff.add_argument("--expected", type=Path, required=True)
     diff.add_argument("--live", type=Path, required=True)
@@ -243,11 +256,18 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "diff":
-        lines = binding_diff(expected=_load_object(args.expected), live=_load_object(args.live))
+        expected, live = _load_object(args.expected), _load_object(args.live)
+        lines = binding_diff(expected=expected, live=live)
         for line in lines:
             print(f"[mip-app-bindings] diff: {line}")
         if not lines:
-            print("[mip-app-bindings] live App resource bindings equal the bundle payload")
+            print("[mip-app-bindings] live App resource bindings equal the bundle payload (as a set)")
+        if description_differs(expected=expected, live=live):
+            # Never a drift code: the release applies it online (spike S2).
+            print(
+                "[mip-app-bindings] description: differs (an online fix-up: a create-update "
+                "masked to description, no window)"
+            )
         return CHECK_DRIFT if lines else CHECK_EXACT
     if args.command == "build":
         payload = build_resource_binding_payload(
