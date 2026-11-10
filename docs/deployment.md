@@ -2828,15 +2828,24 @@ only for a **window reason** the read-only plan predicted
 (`tools/databricks/quiesce_window_plan.py`):
 
 - **WR1** binding diff: the App's live resource bindings differ from the
-  bundle's (any diff, until spike S2 proves an unchanged database binding
-  leaves a running App and its role alone), or a binding id is unresolved;
+  bundle's, compared as a set keyed by binding name (an order-only difference
+  is equal), or a binding id is unresolved. Every update that carries
+  resources re-grants CREATE ON DATABASE to the App's Lakebase role (spike
+  S2, below), so a WR1 window always runs the migration job after its binding
+  update, and its acked body names that re-grant
+  (`app_role_regrant: ["binding_send"]`). A description-only difference is no
+  reason: the release applies it online (below);
 - **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
   drifts for the App role, the AI Gateway verifier role or the jobs
   identity's `jobs_reader` role (M2-PR5), or a `noop` migration plan reads
   the jobs reader's grants as drift, an absent role included (a rotation
   drops the role's grants, which only the migration job re-applies, and that
   job runs only inside a window). Blue never reads as the jobs reader, so its
-  re-grant keeps blue restorable. The first roll-forward that brings the
+  re-grant keeps blue restorable. The same holds for a `noop` migration plan
+  that reads the App role's CREATE ON DATABASE as re-granted
+  (`app_role_regrant: owed`, an earlier binding send outside a window, spike
+  S2): the window's migration job revokes it, the schema is unchanged, and
+  blue stays restorable. The first roll-forward that brings the
   jobs identity to an installed signed blue therefore plans a WR2 window to
   create and grant that role. The grants alone are no reason under an
   `apply` plan: its WR3 window runs the migration job, which re-grants the
@@ -2896,7 +2905,11 @@ the App's active deployment. Until then any failure, in the EXIT trap or the
 final-proof rollback, stops the App and refuses the tier-b blue restore.
 
 With no reason, nothing stops: the binding update is skipped (the bindings
-are re-read under the lease and must still equal the bundle's), the App role
+are re-read under the lease and must still equal the bundle's as a set; a
+description-only difference is applied online with
+`tools/databricks/app_description_fixup.py`, a create-update masked to
+`description`, identity-pinned, which restarts nothing and re-grants
+nothing), the App role
 converger refuses any rotation the plan did not predict, the verifier and
 jobs-reader roles are re-checked under the lease right before their converges
 (drift exits 2, blue serving), and the migration job is skipped because the
@@ -2929,7 +2942,9 @@ clause the live side does not compare (a parameter `DEFAULT` or `COMMENT`,
 rendered source always means "run"; only the rule's own exit 0 skips.
 
 **Stop contract** (attack O16). The window library and the EXIT-trap
-compensation are the only shell files that stop or start the App, and
+compensation are the only shell files that stop or start the App (the binding
+step's online description fix-up, a create-update masked to `description`,
+is the one App update another step file runs; spike S2), and
 `tools/databricks/stop_primitive_map.py` maps every SDK `apps.stop`, `start`,
 `deploy` and `update` call in `tools/` (also through a name bound from
 `.apps`) to the CLI modes that reach it; only those two files may call a
@@ -2944,6 +2959,43 @@ config carries over, and the start of a FAILED-active App. Spike S2: whether
 role. Until then the code assumes the worst case for both. The live shape of
 `information_schema.routines.routine_definition` is also derived, not
 captured; a reformatted body only ever means "run".
+
+**Spike S2 is recorded** (throwaway Apps, 2026-11-06 and 2026-11-10, with
+S2b; it supersedes the S2 sentence above). An `apps update` or
+`apps create-update` that carries resources, an identical array included,
+grants CREATE ON DATABASE to the App's Lakebase role again (`=c` to `=Cc`,
+TEMPORARY not), with no restart, no new deployment and no compute change.
+Only the migration job's revoke takes it back. A PATCH (`apps update`)
+without a description clears it to `""`. A create-update masked to
+`description` changes the description and `update_time` only. So:
+
+- every send of resources is followed by the migration job in the same run:
+  the step files record it (`APP_ROLE_REGRANT_OWED`), a WR1 window runs the
+  job after its binding update whatever the migration plan says (its budget
+  counts it: every window without WR3 adds `migrate`), and a migration skip
+  with a send recorded refuses;
+- the signed-blue restore (`restore_signed_app_resource_contract`, step 0a
+  and the rollbacks) sends a create-update masked to `resources`, so the
+  description survives, and says on stderr that the role now holds CREATE ON
+  DATABASE; the next migration plan reports it as `app_role_regrant: owed`
+  and the window plan makes it a restorable WR2;
+- the migration plan's verify sets that one privilege apart and reports it
+  (`app_role_regrant`); `--mode verify` and apply's postflight still refuse it;
+- the bindings compare as a set by name, and the description is an online
+  fix-up, never a window.
+
+S2b also proved an online `REVOKE CREATE, TEMPORARY ON DATABASE` by the
+database owner safe while the App serves. The release does not use it: the
+grantor it needs after the ownership handover is inferred, not tested, so the
+revoke stays the migration job's, inside a window.
+
+Cutover run 1 on client #1, on the shape S2 read live (an empty description,
+the eleven bindings, the scheduler binding in another position), now plans no
+WR1 window and one online description fix-up
+(`tests/unit/test_cutover_run1_binding_plan.py`). Whether it needs another
+window depends on facts the plan reads and the spike did not: the live App
+role's CREATE ON DATABASE (a WR2 if a past restore left it re-granted) and
+WR2-WR4's other inputs.
 
 ### The job budget and the dead-man (M0-PR9)
 
@@ -4059,6 +4111,35 @@ credentials is a deliberate replacement or an owner-approved key delete (see
 the `provision_runtime_secrets.py` notes under "Databricks App"). A partial connector
 remains honestly staged and cannot claim delivery.
 
+**The three Salesforce bindings are the profile's to switch on** (spike S2b).
+`databricks.yml` declares them (`salesforce_client_secret`,
+`salesforce_password`, `salesforce_security_token`) beside the App's other
+eleven, and stays their one definition. The release applies them only when
+the client profile's `MIP_SALESFORCE_BINDINGS` is `on`; unset or `off` (the
+default) keeps the eleven, client #1's live set
+(`tools/databricks/app_optional_bindings.py`). The binding payload
+(`app_resource_bindings build --salesforce-bindings`), the window plan, the
+adopt phase's reviewed bindings and the App payload all read that one value.
+With the switch off the App payload names no Salesforce secret, even with the
+connector's inputs set: a `valueFrom` naming an unbound binding does not fail
+a deployment, it starts the App with the env var unset (S2b), so the payload
+prints a names-only `Salesforce notice:` instead. Switching it on adds three
+bindings: a resources send, so a WR1 window with its migration job. Each key
+must exist in the runtime scope first (a missing key refuses the whole
+update, S2b); `provision_runtime_secrets.py` writes an absent one as a
+disabled sentinel.
+
+**Owner patch: `.env.example`.** Agents cannot edit the template, so this is
+the line the owner adds under the public profile fields:
+
+```bash
+# Optional (client profile): bind the App's three Salesforce connector secrets
+# (salesforce_client_secret, salesforce_password, salesforce_security_token).
+# off when unset; on adds the three bindings in a WR1 window (docs/deployment.md,
+# "Optional Salesforce activation").
+MIP_SALESFORCE_BINDINGS=
+```
+
 ## Optional OTLP log export
 
 The shipped default is stdout-safe JSON only. To prove durable
@@ -4538,7 +4619,7 @@ environment). Variables, the public fields: `MIP_CLIENT`,
 `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`, plus, when they apply,
 `MIP_IDENTITY_PREFIX`, `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS`,
 `MIP_PRESENTER_MODE`, `MIP_LAKEBASE_READABLE_SECONDARIES`,
-`MIP_COTALITY_SOURCE_CATALOG`, `MIP_COTALITY_SOURCE_SCHEMA`,
+`MIP_SALESFORCE_BINDINGS`, `MIP_COTALITY_SOURCE_CATALOG`, `MIP_COTALITY_SOURCE_SCHEMA`,
 `MIP_COTALITY_SOURCE_TABLE_PREFIX` and `MIP_LENDER_IDENTITY_SHA256`. Secrets,
 the identifying fields: `DATABRICKS_HOST`, `MIP_EXPECT_WORKSPACE_ID`,
 `MIP_EXPECT_METASTORE_ID`, `DATABRICKS_ACCOUNT_ID`, `MIP_IDENTITY_IDS_JSON`,
