@@ -33,9 +33,13 @@ the dispatch's exact digest acks (tools/clients/dispatch_acks.py). Nothing
 here signs anything or verifies a signature.
 
 Positive controls (a dispatch with planted defects, and the checks applied to
-inputs that must fail them) prove each check can fail: an account-admin call,
-a log and a summary leak, a client-#1 literal and an identifying value in the
-tree. The ci.yml job ``client-portability-proof`` runs this module and the integrity one.
+inputs that must fail them) prove each check can fail: account-admin calls in
+the shapes the deploy really uses (a Python tool, the account identity's
+wrapper, a CLI call behind a global flag, the human bootstrap by path), an
+agentic tool called from a core file, a bundle call by path to another
+target, a log and a summary leak, a client-#1 literal and an identifying value
+in the tree. The ci.yml job ``client-portability-proof`` runs this module and
+the integrity one.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ from tests.fixtures.dispatch_replay import REPOSITORY, TOKEN
 from tests.fixtures.lakeflow_pipeline_stub import exec_pipeline
 from tests.fixtures.role_ledger import (
     ACCOUNT_PRINCIPAL,
+    REVIEWED_MODULES,
     account_admin_needs,
     planned_role,
 )
@@ -78,26 +83,46 @@ REPO = Path(__file__).resolve().parents[2]
 PHASES = ("plan", "release")
 PREFLIGHT = "scripts/lib/deploy_step_preflight_gates.sh"
 PLANT_ANCHOR = 'export BUNDLE_VAR_tenant_id="$MIP_TENANT_ID"\n'
-# The one client-#1 value acme's core-tier run may name: the dry run's
-# pre-stop line prints the Supervisor default, which the deploy shell never
-# reads from the profile. The core tier's probes list no agent, so the name
-# is never used (tools/databricks/deploy_prestop_probes.py); the agentic
-# tier's use of the default is owed (the PR body), not exempted.
-SUPERVISOR_EXEMPTION = (("MIP_AGENT_SUPERVISOR_NAME", "would probe read-only: the creator of Supervisor"),)
 CORE_SKIP = "core tier: skip the agentic provisioning, cutover and Agent Evaluation"
-# A bundle call: the env-aware wrapper or the CLI's own bundle command.
-BUNDLE_CALL = re.compile(r"-m tools\.databricks\.bundle_env\s|(?:^|[\s/])databricks\s+bundle\s")
+# A bundle call: the env-aware wrapper in any form (``-m`` or by path), or a
+# ``bundle`` token, the CLI's command group behind any global flag. Word-bound
+# so the ``.bundle/`` root and ``--bundle-summary`` flags are no call.
+BUNDLE_CALL = re.compile(r"(?<![\w-])bundle_env(?:\.py)?(?!\w)|(?<![\w./-])bundle(?![\w./-])")
+TARGET = re.compile(r"(?:^|\s)(?:-t|--target)(?:\s+|=)(\S+)")
+
+
+# The planted account-admin needs, each in a shape the deploy really uses
+# (review of #330): a CLI call run behind a global flag; and planned, a CLI
+# call behind a global flag, an unreviewed Python tool, an unreviewed tool
+# under the account identity's wrapper, a reviewed workspace tool under it and
+# the human bootstrap by path.
+PLANTED_NEEDS = (
+    "cli (account_admin): databricks -p account-admin account service-principals list",
+    "planned (account_admin): databricks --profile account-admin account groups list",
+    "planned (unclassified): $PY -m tools.databricks.account_admin_grant --grant account_admin --principal deployer",
+    "planned (unclassified): $PY -m tools.databricks.account_sp_create --create-service-principal planted"
+    " (bounded account-SCIM identity)",
+    "planned (unclassified): $PY -m tools.databricks.bundle_env summary -t client (bounded account-SCIM identity)",
+    "planned (account_admin): $PY tools/clients/bootstrap_account.py --apply",
+    "planned (unclassified): $PY -m tools.databricks.provision_agentic_resources --plan-only",
+)
+PLANTED_AGENTIC = "tools.databricks.provision_agentic_resources"
 
 
 def _planted(values: dict[str, str]) -> tuple[cp.Plant, ...]:
-    """The positive controls: an account-admin call run and planned, a human bootstrap, a literal, two leaks, a tree value."""
+    """The positive controls: account-admin needs, an agentic tool, a stray bundle target, a literal, two leaks, a tree value."""
 
     shell = (
         "# The portability proof's positive controls, planted in its sandbox clone only.\n"
-        "databricks account service-principals list >/dev/null 2>&1 || true\n"
-        "run databricks account groups list\n"
-        'run "$PYTHON" -m tools.clients.bootstrap_account --apply\n'
-        'run "$PYTHON" -m tools.databricks.app_start_deployment --app-name mip-app\n'
+        "databricks -p account-admin account service-principals list >/dev/null 2>&1 || true\n"
+        "run databricks --profile account-admin account groups list\n"
+        'run "$PYTHON" -m tools.databricks.account_admin_grant --grant account_admin --principal deployer\n'
+        'run_with_account_identity "$PYTHON" -m tools.databricks.account_sp_create --create-service-principal planted\n'
+        'run_with_account_identity "$PYTHON" -m tools.databricks.bundle_env summary -t client\n'
+        'run "$PYTHON" tools/clients/bootstrap_account.py --apply\n'
+        f'run "$PYTHON" -m {PLANTED_AGENTIC} --plan-only\n'
+        'run "$PYTHON" tools/databricks/bundle_env.py validate -t dev\n'
+        'run "$PYTHON" -m tools.databricks.active_deployment_pin digest --app-name mip-app\n'
         "echo \"  lender: $(printf '%s' \"$MIP_LENDER_NAME\" | tr '[:lower:]' '[:upper:]')\"\n"
         "printf 'lender %s\\n' \"$MIP_LENDER_NAME\" >> \"${GITHUB_STEP_SUMMARY:-/dev/null}\"\n"
     )
@@ -190,7 +215,7 @@ def test_every_planned_bundle_call_addresses_the_client_target(
 
     assert bundle, "the dry run plans bundle calls"
     for command in bundle:
-        assert re.findall(r"(?:^|\s)(?:-t|--target)[\s=](\S+)", command) == ["client"], command
+        assert TARGET.findall(command) == ["client"], command
     deployer = acme_profile.identity_ids.deployer
     for command in (c for c in planned if "--expected-target" in c):
         assert "--expected-target client" in command and f"--expected-root-leaf {cp.CLIENT}" in command, command
@@ -217,6 +242,59 @@ def test_the_validate_hands_the_cli_acmes_variables_and_root_leaf(
     root = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))["targets"]["client"]["workspace"]["root_path"]
     resolved = re.sub(r"\$\{var\.([a-z_]+)\}", lambda m: sent[f"BUNDLE_VAR_{m.group(1)}"], root)
     assert resolved.endswith(f"/{cp.CLIENT}") and f"/Users/{acme_profile.identity_ids.deployer.lower()}/" in resolved
+
+
+def _resolved_variables(sent: dict[str, str]) -> dict[str, str]:
+    """Every variable databricks.yml declares, as the CLI resolves it: the value sent, else the client target's, else the default."""
+
+    bundle = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
+    overrides = bundle["targets"]["client"].get("variables") or {}
+    resolved = {}
+    for name, declared in bundle["variables"].items():
+        default = declared.get("default") if isinstance(declared, dict) else declared
+        value = sent.get(f"BUNDLE_VAR_{name}", overrides.get(name, default))
+        resolved[name] = value if isinstance(value, str) else json.dumps(value)
+    return resolved
+
+
+def test_every_declared_variable_resolves_to_acmes_value(validated: dict[str, cp.Validated], values: dict[str, str]) -> None:
+    """Review of #330: a variable the view stops sending falls back to databricks.yml's default, client #1's.
+
+    The values expected are read from acme.env itself, never from the
+    profile view bundle_env sends them from.
+    """
+
+    resolved = _resolved_variables(validated["acme"].calls[0]["bundle_vars"])
+    record, ids = json.loads(values[cp.LENDER_ENV]), json.loads(values["MIP_IDENTITY_IDS_JSON"])
+    expected = {
+        "client_key": values["MIP_CLIENT"],
+        "uc_catalog": values["MIP_DEFAULT_CATALOG"],
+        "app_name": values["MIP_APP_NAME"],
+        "lakebase_instance_name": values["MIP_LAKEBASE_INSTANCE"],
+        "lakebase_catalog_name": values["MIP_LAKEBASE_SYNC_CATALOG"],
+        "lakebase_database_name": values["LAKEBASE_DATABASE"],
+        "lakebase_readable_secondaries": values["MIP_LAKEBASE_READABLE_SECONDARIES"],
+        "runtime_secret_scope": values["MIP_RUNTIME_SECRET_SCOPE"],
+        "dashboard_parent_path": values["MIP_DASHBOARD_PARENT_PATH"],
+        "cotality_source_catalog": values["MIP_COTALITY_SOURCE_CATALOG"],
+        "cotality_source_schema": values["MIP_COTALITY_SOURCE_SCHEMA"],
+        "cotality_source_table_prefix": values["MIP_COTALITY_SOURCE_TABLE_PREFIX"],
+        "deployer_principal": ids["deployer"].lower(),
+        "jobs_principal": ids["jobs"].lower(),
+        "lender_name": record["legal_name"],
+        "lender_nmls_id": record["nmls_id"],
+        "tenant_id": record["tenant_id"],
+        "lender_identity_sha256": values[cp.PIN_ENV],
+    }
+
+    assert {name: resolved[name] for name in expected} == expected
+    lines = [f"{name}={value}" for name, value in resolved.items()]
+    assert checks.literal_hits(lines, checks.install_literals(values)) == []
+    # Not vacuous: databricks.yml's own defaults are client #1's literals.
+    defaults = [f"{name}={value}" for name, value in _resolved_variables({}).items()]
+    hit = {line.split("=", 1)[0] for _field, line in checks.literal_hits(defaults, checks.install_literals(values))}
+    assert hit >= {"app_name", "lakebase_instance_name", "lakebase_database_name", "runtime_secret_scope",
+                   "lender_name", "cotality_source_catalog"}, hit
 
 
 def _sql_files(tree: Path) -> dict[str, str]:
@@ -250,13 +328,18 @@ def test_the_canonical_render_fails_the_token_scan(validated: dict[str, cp.Valid
 
 
 def test_the_client_one_shaped_render_is_byte_identical(validated: dict[str, cp.Validated], tmp_path: Path) -> None:
-    """Client #1's shape renders the default install's SQL: catalog mip, the demo feeds on, the canonical share."""
+    """Client #1's shape renders the default install's SQL: the sources, with only the demo feeds switched on.
 
-    reference = tmp_path / "default-render"
-    render_sql.render(catalog="mip", demo_first_party_enabled=True, dest_root=reference)
+    The reference is read from sql/ (portability_checks.default_install_render),
+    not rendered by the code under test (review of #330): catalog mip, the
+    canonical share and no pinned lender change no byte of a source.
+    """
+
+    reference = checks.default_install_render(tmp_path / "default-render")
 
     assert validated["shaped"].calls[0]["rendered_sha256"] == tree_sha256(reference)
     assert validated["shaped"].calls[0]["bundle_vars"]["BUNDLE_VAR_client_key"] != cp.CLIENT
+    assert any(checks.DEMO_SWITCH in path.read_text(encoding="utf-8") for path in (REPO / "sql").rglob("*.sql"))
 
 
 def test_the_pipeline_reads_acmes_share(validated: dict[str, cp.Validated], source: CotalitySource) -> None:
@@ -345,15 +428,24 @@ def test_the_analytics_battery_stays_allowed_with_acmes_names(
 # --- the tier and the refresh ------------------------------------------------------------
 
 
+def _modules(done: cp.Dispatch) -> set[str]:
+    """Every tool the dispatch plans (``-m`` or by path) or its interpreter really ran."""
+
+    planned = {module for command in done.planned for module in re.findall(r"-m (tools(?:\.\w+)+)", command)}
+    planned |= {path.replace("/", ".") for command in done.planned for path in re.findall(r"(?:^|[\s/=])(tools(?:/\w+)+)\.py(?!\w)", command)}
+    return planned | set(done.record.modules())
+
+
 @pytest.mark.parametrize("phase", PHASES)
 def test_no_agentic_step_is_planned_or_run(dispatches: dict[str, cp.Dispatch], phase: str) -> None:
-    done = dispatches[phase]
-    agentic = checks.agentic_only_modules()
-    assert len(agentic) > 10, "the agentic slices name their tools"
-    planned = {module for command in done.planned for module in re.findall(r"-m (tools(?:\.\w+)+)", command)}
+    """Held to committed sets, never to one read from the tree that runs (review of #330)."""
 
-    assert planned & agentic == set()
-    assert set(done.record.modules()) & agentic == set()
+    done = dispatches[phase]
+    modules = _modules(done)
+
+    assert modules & checks.AGENTIC_ONLY_MODULES == set()
+    # The reviewed core allowlist (tests/fixtures/role_ledger.py): a tool no core run was reviewed for fails here.
+    assert modules - REVIEWED_MODULES == set()
     assert [c for c in done.planned if re.search(r"--identity-role (verifier|agent_runtime|agent_proxy)|--role-contract verifier", c)] == []
     assert "agentic tier: off (core: the normal, operator2, admin and release-probe identities only)" in done.stdout
     if phase == "release":
@@ -374,8 +466,9 @@ def test_no_ci_step_needs_account_admin(dispatches: dict[str, cp.Dispatch], vali
     cli = [call["argv"] for done in dispatches.values() for call in done.record.cli_calls()]
     cli += [call["argv"] for result in validated.values() for call in result.calls]
     planned = [command for done in dispatches.values() for command in done.planned]
+    executed = [module for done in dispatches.values() for module in done.record.modules()]
 
-    assert account_admin_needs(cli=cli, planned=planned) == []
+    assert account_admin_needs(cli=cli, planned=planned, executed=executed) == []
     # Not vacuous: the bounded account principal is planned, and classed as such.
     assert any(planned_role(command) == ACCOUNT_PRINCIPAL for command in planned)
 
@@ -413,7 +506,8 @@ def test_no_client_one_literal_reaches_acmes_run(
     lines += [f"{name}={value}" for name, value in checks.literal_env(payload).items()]
 
     assert len(literals) > 20
-    assert checks.literal_hits(lines, literals, SUPERVISOR_EXEMPTION) == []
+    # No exemption: since #333 the dry run names the profile's Supervisor, never the default.
+    assert checks.literal_hits(lines, literals) == []
 
 
 # --- tampering: the lender record and the accepted exposure ------------------------------
@@ -482,12 +576,27 @@ def test_a_tampered_release_dispatch_refuses_whatever_acks_it_carries(
 
 
 def test_planted_account_admin_calls_are_found(planted: cp.Dispatch) -> None:
-    needs = account_admin_needs(cli=[call["argv"] for call in planted.record.cli_calls()], planned=planted.planned)
+    needs = account_admin_needs(
+        cli=[call["argv"] for call in planted.record.cli_calls()],
+        planned=planted.planned,
+        executed=planted.record.modules(),
+    )
+    python = re.compile(r"\S*/deploy-python(?=\s)")
 
-    assert "cli: databricks account service-principals list" in needs
-    assert "planned: databricks account groups list" in needs
-    assert [need for need in needs if "tools.clients.bootstrap_account --apply" in need], needs
-    assert len(needs) == 3, needs
+    assert sorted(python.sub("$PY", need) for need in needs) == sorted(PLANTED_NEEDS)
+
+
+def test_a_planted_agentic_tool_is_found_though_the_tree_stops_calling_it_agentic_only(planted: cp.Dispatch) -> None:
+    """Review of #330: a core file calling an agentic tool drops it from a set read from that tree."""
+
+    assert PLANTED_AGENTIC in _modules(planted) & checks.AGENTIC_ONLY_MODULES
+    assert PLANTED_AGENTIC not in checks.agentic_only_modules(planted.replay.checkout / "scripts")
+
+
+def test_a_planted_bundle_call_by_path_to_another_target_is_found(planted: cp.Dispatch) -> None:
+    stray = [command for command in planted.planned if BUNDLE_CALL.search(command) and TARGET.findall(command) != ["client"]]
+
+    assert len(stray) == 1 and "tools/databricks/bundle_env.py validate -t dev" in stray[0], stray
 
 
 def test_planted_log_and_summary_leaks_are_found(planted: cp.Dispatch, values: dict[str, str]) -> None:
@@ -501,10 +610,10 @@ def test_planted_log_and_summary_leaks_are_found(planted: cp.Dispatch, values: d
 
 
 def test_a_planted_client_one_literal_is_found(planted: cp.Dispatch, values: dict[str, str]) -> None:
-    hits = checks.literal_hits(_corpus(planted), checks.install_literals(values), SUPERVISOR_EXEMPTION)
+    hits = checks.literal_hits(_corpus(planted), checks.install_literals(values))
 
     assert {field for field, _line in hits} == {"MIP_APP_NAME"}
-    assert all("app_start_deployment --app-name mip-app" in line for _field, line in hits)
+    assert all("active_deployment_pin digest --app-name mip-app" in line for _field, line in hits)
 
 
 def test_a_planted_identifying_value_in_the_tree_is_recorded_and_refuses_a_release(

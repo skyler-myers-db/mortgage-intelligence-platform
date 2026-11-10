@@ -10,7 +10,14 @@ planted defects, so each check is shown to find what it looks for:
   install (tests/fixtures/client_profiles.paychex_shaped_profile, placeholders
   only) that acme configures differently, wherever acme's run names it: a
   client literal in code;
-* ``agentic_only_modules``: the tools only the agentic tier's deploy slices run;
+* ``agentic_only_modules``: the tools only the agentic tier's deploy slices
+  run, read from a tree; ``AGENTIC_ONLY_MODULES`` is the same set committed,
+  since a set read from the tree under test shrinks when a core file starts
+  calling an agentic tool (review of #330);
+* ``account_api_reach``: the modules in a tool's import closure that name an
+  account API, the check behind tests/fixtures/role_ledger.py's table;
+* ``default_install_render``: client #1's render, read from the sql/ sources
+  themselves rather than from tools/render_sql.py;
 * ``checkout_state``: the real checkout's status and the build artifacts a
   dry run would write there;
 * ``app_settings``: the App's settings, read in a fresh process with exactly
@@ -20,6 +27,8 @@ planted defects, so each check is shown to find what it looks for:
 
 from __future__ import annotations
 
+import ast
+import functools
 import hashlib
 import json
 import os
@@ -68,6 +77,37 @@ AGENTIC_LIBRARIES = (
 # Build artifacts a dry run, a render or a validate would write in the checkout it runs in.
 ARTIFACTS = ("sql/_rendered", ".databricks", ".env.local", "genie/space_id.txt")
 _MODULE = re.compile(r"-m (tools(?:\.[A-Za-z0-9_]+)+)")
+# agentic_only_modules() of the reviewed tree, committed: a test holds the
+# tree to it, so a core file that starts calling one of these fails both ways.
+AGENTIC_ONLY_MODULES = frozenset(
+    {
+        "tools.databricks.agent_proxy_access",
+        "tools.databricks.agent_runtime_access",
+        "tools.databricks.converge_verifier_gateway_access",
+        "tools.databricks.export_gateway_runtime_contract",
+        "tools.databricks.grant_ai_gateway_inference_table",
+        "tools.databricks.provision_agentic_resources",
+        "tools.databricks.read_agent_tool_probe_expectation",
+        "tools.databricks.reconcile_historical_agent_endpoints",
+        "tools.databricks.run_agent_eval",
+        "tools.databricks.supervisor_creation_control",
+        "tools.databricks.supervisor_creation_runtime",
+        "tools.databricks.verify_agent_proxy_identity_boundary",
+        "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority",
+        "tools.databricks.verify_agent_runtime_identity_boundary",
+        "tools.databricks.verify_hosted_agent_tool_execution",
+        "tools.databricks.verify_lakebase_oauth_identity",
+        "tools.databricks.verify_verifier_identity_boundary",
+        "tools.verify_app_agent_green_path",
+        "tools.verify_deployed_app_contract",
+    }
+)
+# An account API in source: the SDK's account client, its account-level
+# service classes or an accounts REST path.
+ACCOUNT_API = re.compile(r"\bAccountClient\b|\bAccount[A-Z]\w*API\b|/api/2\.[0-9]/accounts\b")
+# The demo switch, the one token client #1's render (catalog mip, the demo
+# feeds on, the canonical share, no pinned lender) changes in a source file.
+DEMO_SWITCH = "{{mip_enable_demo_first_party_feeds}}"
 
 
 def leaks(lines: Iterable[str], forbidden: Sequence[str]) -> list[tuple[str, str]]:
@@ -148,6 +188,65 @@ def agentic_only_modules(scripts: Path = REPO / "scripts") -> frozenset[str]:
         is_agentic = AGENTIC_MARKER in text or path.name in AGENTIC_LIBRARIES
         (agentic if is_agentic else elsewhere).update(_MODULE.findall(text))
     return frozenset(agentic - elsewhere)
+
+
+def _module_files(module: str, repo: Path) -> tuple[Path, ...]:
+    """A module's source files; a package's ``__init__`` and ``__main__`` (``-m`` runs both)."""
+
+    base = repo.joinpath(*module.split("."))
+    if base.with_suffix(".py").is_file():
+        return (base.with_suffix(".py"),)
+    return tuple(path for path in (base / "__init__.py", base / "__main__.py") if path.is_file())
+
+
+@functools.cache
+def _imports(module: str, repo: Path) -> frozenset[str]:
+    """The repository modules one module imports, at any depth of its code (lazy imports too)."""
+
+    found: set[str] = set()
+    for path in _module_files(module, repo):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                found.add(node.module)
+                found.update(f"{node.module}.{alias.name}" for alias in node.names)
+            elif isinstance(node, ast.Import):
+                found.update(alias.name for alias in node.names)
+    return frozenset(name for name in found if name.split(".")[0] in {"tools", "backend"} and _module_files(name, repo))
+
+
+def account_api_reach(module: str, repo: Path = REPO) -> list[str]:
+    """The modules in ``module``'s import closure whose source names an account API."""
+
+    seen: set[str] = set()
+    todo = [module]
+    while todo:
+        name = todo.pop()
+        if name not in seen:
+            seen.add(name)
+            todo.extend(_imports(name, repo))
+    return sorted(
+        name for name in seen if any(ACCOUNT_API.search(path.read_text(encoding="utf-8")) for path in _module_files(name, repo))
+    )
+
+
+def default_install_render(dest: Path, sql: Path = REPO / "sql") -> Path:
+    """Client #1's render read from the sources, never from tools/render_sql.py.
+
+    Every canonical source file with the demo switch on and nothing else
+    changed: the sources name catalog ``mip``, ``mip``'s schemas and the
+    canonical share already. A fixed reference, so a change to the renderer
+    that alters every install's SQL, client #1's included, fails the pin
+    (review of #330), while a reviewed change to sql/ moves both sides.
+    """
+
+    for source in sorted(sql.rglob("*.sql")):
+        relative = source.relative_to(sql)
+        if "_rendered" in relative.parts:
+            continue
+        target = dest / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.read_text(encoding="utf-8").replace(DEMO_SWITCH, "TRUE"), encoding="utf-8")
+    return dest
 
 
 def checkout_state(repo: Path) -> dict[str, str | None]:

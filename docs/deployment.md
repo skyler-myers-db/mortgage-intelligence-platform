@@ -4273,7 +4273,8 @@ plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
 ## Second-client portability proof (CI, offline, M3-PR4)
 
 The ci.yml job `client-portability-proof` runs
-`tests/unit/test_client_portability_proof.py` on every push. It proves that a
+`tests/unit/test_client_portability_proof.py` and
+`tests/unit/test_client_portability_integrity.py` on every push. It proves that a
 second client onboards with zero code edits. The client is `acme`
 (`tests/fixtures/clients/acme.env`), a synthetic customer install: prod App
 env, agentic tier off, weekly refresh off, and the Cotality share mounted as
@@ -4297,8 +4298,16 @@ The proof fails in any of these cases:
 - a bundle call leaves `-t client` or acme's variables and root leaf;
 - a canonical Cotality token stays in acme's rendered SQL;
 - the pipeline configuration or the App's booted settings are not acme's;
-- an agentic step runs, or the refresh is not PAUSED;
-- a CI step needs account-admin authority;
+- an agentic step runs (held to a committed list of the agentic-only tools,
+  and to a reviewed list of the tools a core run may use), or the refresh is
+  not PAUSED;
+- a CI step needs account-admin authority, or plans or runs a tool, a CLI
+  command group or a CLI flag that the reviewed role table
+  (`tests/fixtures/role_ledger.py`) does not class: an unclassified call
+  counts as an account-admin need, and a tool reviewed as workspace-only may
+  not reach an account API through its imports;
+- a bundle call, in any form, addresses another target than `client`, or a
+  bundle variable databricks.yml declares resolves to a client-#1 default;
 - an identifying value reaches the public log or the step summary in any
   letter case;
 - a value of the client-#1-shaped install reaches acme's run (a client
@@ -4308,13 +4317,17 @@ The proof fails in any of these cases:
   refused, whatever ack the dispatch carries.
 
 Its client-#1-shaped case (placeholders only) renders SQL byte for byte as
-the default install does. A dispatch with planted defects proves that each
-check can fail.
+the sql/ sources with only the demo feeds switched on, a reference read from
+the sources rather than from the renderer. A dispatch with planted defects
+proves that each check can fail.
 
 The owner attestation layer is deferred (M1-PR5). So the integrity it
 exercises is main's: the record's exact-digest pin and the dispatch's exact
-digest acks. Nothing signs anything. backend-tests ignores the module, so it
-runs once per push (`tests/unit/test_ci_client_portability_job.py`).
+digest acks. Nothing signs anything. backend-tests ignores both modules, so
+they run once per push; `tests/unit/test_ci_client_portability_job.py` pins
+both sides, and refuses a job or step that is switched off (`if`,
+`continue-on-error`, `needs`) or a pytest command that deselects or swallows
+a failure. The job is advisory until the owner makes it a required check.
 
 ## Jobs identity and pinned job parameters (M2-PR5)
 

@@ -15,7 +15,11 @@ job ``client-portability-proof`` runs both):
   exposure is refused under the old pin, or changes the profile digest the
   owner's exact profile ack covers, and the exposure plan's own ack;
 * the proof's real-checkout check sees an untracked file and an ignored
-  build artifact (its positive control).
+  build artifact (its positive control);
+* the reviewed tables the proof classes by (tests/fixtures/role_ledger.py
+  and the committed agentic-only set) agree with the code: no tool reviewed
+  as workspace reaches an account API through its imports, and the agentic
+  slices name exactly the committed tools (review of #330).
 
 The owner hardware-key attestation layer is deferred (M1-PR5): the integrity
 here is main's exact-digest pin and acks. Nothing signs or verifies a
@@ -33,6 +37,7 @@ import pytest
 from backend.schemas.lender_identity_record import LenderIdentityRefused, lender_identity_digest
 from tests.fixtures import client_portability as cp
 from tests.fixtures import portability_checks as checks
+from tests.fixtures import role_ledger as roles
 from tests.fixtures.bootstrap_harness import FakeSink, plan_and_apply, run_tool
 from tests.fixtures.fake_databricks_account import FakeEstate
 from tests.fixtures.role_ledger import READ, account_admin_needs, sdk_role
@@ -210,3 +215,54 @@ def test_the_checkout_state_sees_an_untracked_file_and_an_ignored_build_artifact
     assert clean["git status"] == rendered["git status"] == profiled["git status"] == ""
     assert clean != rendered != profiled
     assert checks.checkout_state(repo)["git status"] == "?? stray.txt\n"
+
+
+# --- the reviewed tables agree with the code ----------------------------------------------
+
+
+def test_no_tool_reviewed_as_workspace_reaches_an_account_api() -> None:
+    """A tool that builds an account client must be reviewed for the account identity, or is a need (review of #330)."""
+
+    tables = (roles.WORKSPACE_MODULES, roles.ACCOUNT_IDENTITY_MODULES, roles.ACCOUNT_PRINCIPAL_MODULES, roles.HUMAN_ONLY_MODULES)
+    assert sum(map(len, tables)) == len(frozenset().union(*tables)), "each tool has one class"
+    assert all(checks._module_files(module, checks.REPO) for table in tables for module in table), "no stale entry"
+
+    assert {module: checks.account_api_reach(module) for module in sorted(roles.WORKSPACE_MODULES) if checks.account_api_reach(module)} == {}
+    # Not vacuous: the tools reviewed for the account principal do reach one.
+    assert [m for m in sorted(roles.ACCOUNT_IDENTITY_MODULES | roles.ACCOUNT_PRINCIPAL_MODULES) if not checks.account_api_reach(m)] == []
+
+
+def test_the_role_table_fails_closed_for_every_shape_the_deploy_uses() -> None:
+    """Positive controls, in process: each shape a planted dispatch carries, and the ones it cannot."""
+
+    py = "/venv/bin/python"
+    label = roles.ACCOUNT_IDENTITY_LABEL
+    assert roles.planned_role(f"{py} -m tools.databricks.bundle_env validate -t client") == roles.WORKSPACE
+    assert roles.planned_role(f"run_with_proof_signing_authority {py} -m tools.databricks.ensure_pipeline_namespace {label}") == roles.ACCOUNT_PRINCIPAL
+    for command in (
+        f"{py} -m tools.databricks.unreviewed_tool",  # an unreviewed tool
+        f"{py} -m tools.databricks.ensure_pipeline_namespace",  # reviewed for the wrapper, run without it
+        f"{py} -m tools.databricks.bundle_env summary -t client {label}",  # a workspace tool under the wrapper
+        f"{py} -c import_tools",  # inline code
+        "bash scripts/unreviewed.sh",  # an unknown executable
+        f"databricks apps list {label}",  # the CLI under the wrapper
+        "databricks --host https://example.invalid apps list",  # an unknown global flag
+        "databricks auth token",  # an unknown command group
+    ):
+        assert roles.planned_role(command) == roles.UNCLASSIFIED, command
+    for command in (
+        f"{py} tools/clients/bootstrap_account.py --plan",
+        f"{py} -m tools.clients.bootstrap_account --apply",
+        "databricks -p account-admin account groups list",
+        "databricks --profile=x api get /api/2.0/accounts/1/scim/v2/Groups",
+    ):
+        assert roles.planned_role(command) == roles.ACCOUNT_ADMIN, command
+    assert roles.cli_role(["--debug", "-o", "json", "bundle", "validate"]) == roles.WORKSPACE
+    assert roles.module_role("tools.databricks.unreviewed_tool") == roles.UNCLASSIFIED
+
+
+def test_the_agentic_slices_name_exactly_the_committed_tools() -> None:
+    """The set the proof refuses is committed; the tree is held to it, so a core call into one fails both ways."""
+
+    assert checks.agentic_only_modules() == checks.AGENTIC_ONLY_MODULES
+    assert not roles.REVIEWED_MODULES & checks.AGENTIC_ONLY_MODULES
