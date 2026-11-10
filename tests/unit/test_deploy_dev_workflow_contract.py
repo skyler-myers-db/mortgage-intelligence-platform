@@ -2891,9 +2891,10 @@ def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
     assert "${YEL}" not in script
 
 
-def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() -> None:
+def test_gateway_grant_pending_delivery_blocks_only_a_strict_release_and_its_retry_is_a_listed_gap() -> None:
     script = _deploy_entrypoint_text()
     workflow = NIGHTLY.read_text(encoding="utf-8")
+    doc = (REPO / "docs" / "deployment.md").read_text(encoding="utf-8")
 
     grant_start = script.index("AI_GATEWAY_GRANTS_READY=1")
     proof_start = script.index('step "verify AI Gateway exact inference-row proof', grant_start)
@@ -2902,8 +2903,12 @@ def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() ->
     assert "strict AI Gateway inference-table grant convergence failed" in grant_block
     assert "delivery/grants are pending" in grant_block
     assert "honestly configured/unavailable" in grant_block
-    # M1-PR8: nightly holds no grant authority; the release phase owns the retry.
+    # The deploy makes one attempt. M1-PR8: nightly holds no grant authority,
+    # so nothing retries a delayed delivery yet; the retry is a listed gap.
+    assert script.count("-m tools.databricks.grant_ai_gateway_inference_table") == 2, "one attempt per principal"
     assert "grant_ai_gateway_inference_table" not in workflow
+    gaps = doc[doc.index("**Gaps: no home yet.**") : doc.index("**Supply chain.**")]
+    assert "the delayed AI Gateway inference-table grant retry" in gaps
 
 
 def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() -> None:

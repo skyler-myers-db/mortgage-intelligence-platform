@@ -31,10 +31,18 @@ principal's, the agent proxy's, a signing key) reaches a nightly step.
 Each job binds the public and identifying names through the same per-name
 collect step deploy-dev.yml uses (``python -m tools.clients.workflow_contexts
 collect``, fed by ``collect_env("validator")`` here instead of the deploy's
-full block). The operator secrets are bound only in the steps that mint
-(``collect_env("operators")``, read from that step's own env by
+full block). The operator secrets are bound only in the env of the steps
+that mint (``collect_env("operators")``, read from that step's own env by
 tools/clients/validation_session.py) and never written to disk, so no npm or
-Playwright step can read them.
+Playwright step's env holds one. That is not isolation from npm: package
+code that ran earlier in the same job (``npx playwright install``, the specs)
+could tamper with the checkout a later minting step executes, so the first
+mints run before any npm step (tests/unit/test_nightly_workflow_contract.py).
+
+``profile_digest`` binds the two environments: nightly fills
+``<client>-validate`` by hand, so the browser job refuses to mint unless
+``<client>`` holds the same client, host, App, catalog and identity map as
+the ``<client>-validate`` the validator jobs read.
 
 ``resolve`` applies tools/clients/environment.from_github's class rules (an
 identifying or secret name in ``vars`` and a public one in ``secrets`` are
@@ -44,6 +52,8 @@ value's shape. Every refusal names a field and a rule, never a value.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -236,3 +246,30 @@ def masks(profile: ValidationProfile) -> tuple[str, ...]:
             if _maskable(spelling):
                 found.add(spelling)
     return tuple(sorted(found, key=lambda item: (-len(item), item)))
+
+
+DIGEST_DOMAIN = "mip-validation-profile-v1"
+
+
+def profile_digest(profile: ValidationProfile, run_id: str) -> str:
+    """A per-run digest of the values both nightly environments must hold alike.
+
+    Over the client, host, App name, catalog and identity map, never a
+    secret. Salted with the run id, so it is no stable fingerprint of an
+    install, and the identity map's ids make it infeasible to invert: it may
+    travel as a job output and print in a step's env.
+    """
+
+    body = json.dumps(
+        {
+            "run": run_id,
+            "client": profile.client,
+            "host": profile.host.casefold(),
+            "app_name": profile.app_name,
+            "catalog": profile.catalog,
+            "identity": {role: value.casefold() for role, value in sorted(profile.identity.by_role().items())},
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(f"{DIGEST_DOMAIN}\n{body}".encode()).hexdigest()

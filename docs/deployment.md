@@ -4221,8 +4221,9 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
   repo-root `*.md`, tests and workflow files are non-runtime), 14 days old
   or newer, with its three release jobs green. An operator `passed` without
   such a run is recorded `unknown`. The `prod-readiness-gate` workflow
-  (`deploy-prod.yml`) runs the same gate as a convenience; neither
-  `scripts/deploy.sh` nor `scripts/package_source.sh` calls GitHub.
+  (`deploy-prod.yml`) runs the same gate as a convenience, for the client
+  its dispatch names (`--client`); neither `scripts/deploy.sh` nor
+  `scripts/package_source.sh` calls GitHub.
 
 ## Client account bootstrap (human-run)
 
@@ -4265,15 +4266,22 @@ client=<client>`. Its run-name is `nightly client=<client> sha=<sha>`, and
 `python -m tools.live_validation_gate --client <client>` accepts only a
 green run whose run-name names that client and the run's own head sha: a
 run of another client (cross-client) or naming another sha (cross-sha) is
-refused, and so is a run from before M1-PR8 (no such run-name). Without
-`--client` (as `deploy-prod.yml` and `tools/release_readiness.py` call it
-today) any client's titled run counts. It is never scheduled.
+refused, and so is a run from before M1-PR8 (no such run-name).
+`deploy-prod.yml` passes its required `client` input as `--client`;
+`tools/release_readiness.py` takes `--client` too, and without it any
+client's titled run counts and the verdict says `client: any`. It is never
+scheduled.
 
-**Identities.** No job authenticates as the deployer, holds a workspace
-PAT, or holds Databricks admin power, and the only writes are product rows
-through the App API: campaigns, approvals and their audit rows under a
-per-run marker, archived at the end, with the App's service principal
-performing every Lakebase transaction.
+**Identities.** No job authenticates as the deployer or holds a workspace
+PAT, and every identity a job uses is proven, before any test, not to be in
+the workspace `admins` group. That is the only admin power checked:
+metastore admin, account admin and MODIFY, MANAGE or ALL PRIVILEGES grants
+are kept out by the owner's grants (owner action 3), not by a check here.
+nightly writes product rows only through the App API, with the App's
+service principal performing every Lakebase transaction, and the
+validator, read-only, opens Genie conversations directly (the Genie suites
+call the Genie Conversation API as the validator, and Genie runs their SQL
+under its grants).
 
 | Job | Environment | ID token | Identity |
 |---|---|---|---|
@@ -4286,28 +4294,64 @@ The browser job runs in `<client>` because the credential sink writes the
 operator M2M secrets there only (tools/databricks/m2m_oauth_github.py
 refuses a `-validate` environment); it requests no ID token, so the
 deployer's federation subject `environment:<client>` is unreachable. The
-secrets are bound only in the steps that mint
+secrets are bound only in the env of the steps that mint
 (`tools/clients/validation_profile.collect_env("operators")`), never written
-to disk and never in an npm or Playwright step; npm runs as `npm ci
---ignore-scripts` in this job only. Each job reads its names one by one
+to disk and never in an npm or Playwright step's env. npm runs in this job
+only, as `npm ci --ignore-scripts`, and only after the first mint, the App
+API suites and their archive. That is not isolation: the remint before the
+browser suites and the `always()` reconcile run after npm package code
+(`npx playwright install`, the specs) has run in the same job, and that
+code could tamper with the checkout they execute; the lockfile limits this
+and does not remove it. Each job reads its names one by one
 (`tools/clients/validation_profile.py`): `MIP_CLIENT`, `MIP_APP_NAME` and
 `MIP_DEFAULT_CATALOG` (variables), `DATABRICKS_HOST` and
 `MIP_IDENTITY_IDS_JSON` (secrets), and in the minting steps
 `DATABRICKS_CLIENT_SECRET`, `DATABRICKS_OPERATOR2_CLIENT_SECRET` and
 `DATABRICKS_ADMIN_CLIENT_SECRET`. The App's URL, SQL warehouse and Genie
-space come from the App itself (`apps.get`), never from a stored id. When
+space come from the App itself (`apps.get`), never from a stored id.
+Because `<client>-validate` is filled by hand, the browser job refuses to
+mint unless `<client>` holds the same client, host, App, catalog and
+identity map: `parity-live` exports a per-run digest of them
+(`validation_profile.profile_digest`, salted with the run id) and every
+minting step recomputes it. The validator session refuses any catalog but
+`mip`: the live suites read `mip.` literally, so a client whose catalog is
+another name cannot be validated until they read `MIP_DEFAULT_CATALOG`. When
 `GITHUB_TOKEN` cannot read an environment's protections (spike S8(a)), the
 dispatch input `protections_unverified_ack` must hold, for each unreadable
 environment, the exact ack the refusal prints (the `protections_unverified`
-digest over the client, that environment and the run's sha).
+digest over the client, that environment and the run's sha). A missing or
+drifted environment refuses whatever the ack.
+
+**What it writes, and what stays.** Through the App API only:
+
+- campaigns under the per-run marker (`MIP_LIVE_CAMPAIGN_RUN_MARKER`), from
+  the App API suites and the browser specs' Genie campaign action, archived
+  again at the end (`tools/cleanup_live_campaign_fixtures.py`);
+- outreach drafts and approvals of real leads (the two-operator bulk
+  approvals, and approvals bound to those campaigns) with their audit rows,
+  which stay: an approval is a governed decision record, nothing is ever
+  sent, and the audit trail is append-only;
+- Genie turns and their audit rows (the browser specs, the scorecard).
+
+The App API mutation suites (`App API workflow contracts`) run only when the
+App's `/api/v1/admin/health` reports `app_env` `dev` or `sandbox`
+(`validation_session install-class`): their own guard refuses any other App,
+so a `prod` App skips them and its run can still be green, and an unknown
+`app_env` refuses. Never written: lead outcomes, call dispositions and
+loan-officer assignments. The one suite test that writes them,
+`test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`,
+is deselected: it posts a funded-loan outcome on a real lead that no
+cleanup undoes.
 
 **What left nightly, and its home.** Each runs under the deployer in
-`./scripts/deploy.sh`:
+`./scripts/deploy.sh`, at deploy time only: between deploys nothing re-runs
+it, and nightly checks the deployed App's git sha only
+(`validation_session app-sha`).
 
 | Protection | Home (`scripts/lib/`) |
 |---|---|
-| `tools.databricks.grant_ai_gateway_inference_table` (the delayed inference-table grants) | `deploy_step_agentic_cutover.sh` (release phase, agentic tier) |
-| `tools.databricks.verify_ai_gateway_exact_proof` (the exact proof ledger, a direct Lakebase write) | `deploy_step_agentic_cutover.sh` (release phase, agentic tier) |
+| `tools.verify_deployed_app_contract` (the deployed commit, its Gateway binding and the deployment lease) | `deploy_step_agentic_cutover.sh` (release phase, agentic tier) |
+| `tools.databricks.export_gateway_runtime_contract` (the source-bound Gateway runtime contract) | `deploy_step_agentic_cutover.sh` (release phase, agentic tier) |
 | `tools.databricks.verify_verifier_identity_boundary` | `deploy_verifier_gateway_lifecycle.sh` (release phase, agentic tier) |
 | `tools.databricks.run_agent_eval` (the Growth Agent evaluation) | `deploy_step_agent_eval_and_smoke.sh` (release phase, agentic tier) |
 | `reconcile_reviewed_function_execute_grants` (grant reconciliation) | `deploy_governed_phases_lifecycle.sh` (data phase, after every gold-touching job) |
@@ -4317,9 +4361,21 @@ M1-PR8 (M0-PR3); the data phase runs the refreshes.
 
 **Gaps: no home yet.** These need more than the validator's reads or the
 App API, so nightly no longer runs them, and nothing else does yet. Until a
-reviewed home exists they are an operator's to run by hand against a
-non-live install, never the live one:
+reviewed home exists, the two AI Gateway items converge only at the next
+deploy, and the rest are an operator's to run by hand against a non-live
+install, never the live one:
 
+- the delayed AI Gateway inference-table grant retry
+  (`tools.databricks.grant_ai_gateway_inference_table`): the deploy's
+  agentic cutover makes one attempt, and a non-strict deploy that finds the
+  table still pending continues without it, so the capability stays
+  honestly configured/unavailable until the next deploy (a strict deploy,
+  `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1`, fails instead);
+- the rolling exact-proof refresh (`tools.databricks.verify_ai_gateway_exact_proof
+  verify-pending`, then `send --wait`): the deploy proves once, so the
+  capability reports configured/unavailable once that proof is older than
+  the 26-hour `AI_GATEWAY_PROOF_FRESHNESS_MAX_S`, until the next deploy
+  (docs/ai-gateway-exact-proof-workorder.md, §1d);
 - `tests/integration/test_lifecycle_delta_replay_live.py` and
   `tests/integration/test_campaign_treatment_at_cap_live.py` create, merge
   into and drop scratch Delta tables in the governed `audit` schema;
@@ -4328,9 +4384,21 @@ non-live install, never the live one:
 - `test_live_saved_holdout_and_household_dedup_exclude_non_treatment_borrowers`
   (in `test_lakebase_idempotency_live.py`, deselected) reads the
   `audit.campaign_treatment_snapshot` table;
+- `test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`
+  (in `test_lakebase_idempotency_live.py`, deselected) writes an
+  assignment, a funded-loan outcome and a disposition on a real lead;
+- on a `prod` App, the whole App API mutation suite (skipped there);
 - the real-infra kill drills, `tools/kill_drill/run_drill.sh` with
   `--target warehouse-real` and `--target lakebase-real`, stop and start the
   warehouse and the Lakebase instance (CAN_MANAGE).
+
+**Supply chain.** Every `pip install` in nightly is `--only-binary=:all:`,
+so no package runs code at install time, but `requirements-dev.txt` is
+version-pinned, not hash-pinned: a validator job (`id-token: write`) imports
+what it installs, and that code can mint the validator's token. There is no
+hashed dev lock yet; it is a blocker before a non-sandbox client's first
+dispatch (`check-validate-environment` already installs the hashed deploy
+lock).
 
 **Owner actions before the first dispatch (spike S8(c)).**
 
@@ -5082,8 +5150,8 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    -t client` with the client profile shows the client root and today's
    resource names (`tests/unit/test_client_install_dry_run.py` pins both for a
    client-#1-shaped profile).
-3. Dispatch `deploy-prod.yml` on `main` and record the expected FAIL
-   (`no_green_run`).
+3. Dispatch `deploy-prod.yml` on `main` with `client=<client>` and record
+   the expected FAIL (`no_green_run`).
 
 Steps 4-6 run only once a client environment exists and owner steps 1-8
 hold for it, never against the live install.
@@ -5096,4 +5164,5 @@ hold for it, never against the live install.
    refuses, before any test.
 6. Repair stale `frontend/tests/e2e/real_data.spec.ts` assertions in a PR if
    it is red, then repeat 4-5; record the green run URL in the audit
-   report; re-dispatch `deploy-prod.yml` and expect PASS.
+   report; re-dispatch `deploy-prod.yml` with the same `client` and expect
+   PASS.

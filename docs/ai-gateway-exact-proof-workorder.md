@@ -111,6 +111,12 @@ Detail strings (update all surfaces consistently, §4):
   `FRESHNESS` while refusing inference-only promotion. If delivery or trace
   proof breaks, the newest proof ages past FRESHNESS and the capability
   self-heals to `configured`.
+  **Status (M1-PR8): no home.** The per-client `nightly.yml` holds no
+  verifier credential and writes no ledger row, so it no longer runs this
+  refresh; the deploy proves once, and the capability honestly reports
+  `configured` once that proof is older than FRESHNESS, until the next
+  deploy. docs/deployment.md, "Live validation per client", lists it as a
+  gap.
 - Document both in `docs/deployment.md` (including the strict-mode admin-token note already
   there).
 

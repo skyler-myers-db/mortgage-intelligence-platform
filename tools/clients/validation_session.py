@@ -23,29 +23,35 @@ workspace ``admins`` group:
   authenticates through it as the validator, which must **not** be in
   ``admins``, and the App ``MIP_APP_NAME`` names its URL, SQL warehouse and
   Genie space. Each id is a runner mask the moment it is read. The session
-  goes to ``$GITHUB_ENV``: ``DATABRICKS_HOST``, a short-lived validator token
-  as ``DATABRICKS_TOKEN`` and ``MIP_BEARER_TOKEN``, ``DATABRICKS_WAREHOUSE_ID``,
-  ``GENIE_SPACE_ID``, ``MIP_APP_URL``, ``MIP_DEPLOYED_APP_URL``,
-  ``MIP_APP_NAME`` and ``MIP_DEFAULT_CATALOG``.
+  goes to ``$GITHUB_ENV`` (``SESSION_EXPORTS``): ``DATABRICKS_HOST``, a
+  short-lived validator token as ``DATABRICKS_TOKEN`` and ``MIP_BEARER_TOKEN``,
+  ``DATABRICKS_WAREHOUSE_ID``, ``GENIE_SPACE_ID``, ``MIP_APP_URL``,
+  ``MIP_DEPLOYED_APP_URL``, ``MIP_APP_NAME`` and ``MIP_DEFAULT_CATALOG``; with
+  ``--github-output``, the profile's per-run digest
+  (validation_profile.profile_digest) goes to ``$GITHUB_OUTPUT``. It refuses,
+  before any call, a catalog other than ``LIVE_SUITES_CATALOG``: the live
+  suites read ``mip.`` literally, and against another catalog they would
+  fail, or read another install's ``mip``.
 * ``token``: remint the validator token through the same profile before a
   long step (a federated workspace token lives about an hour).
 * ``operators``: the browser job (no ``id-token``). Resolve the ``browser``
   names: the public and identifying ones from the collect step's files, the
   three operator secrets from this step's own env only (``step_secrets``;
   they never touch disk, and no child but the mint inherits one). Refuse an
-  ambient ``DATABRICKS_TOKEN``, and mint one App bearer per
-  reserved operator identity (``normal``, ``operator2``, ``admin``) through
-  tools/oauth_m2m_mint.py, each in a child that receives only the host and
-  that identity's id and secret. Each bearer must be its role's own identity
-  and that identity must **not** be in ``admins`` (the App's admin role is a
-  product role, never Databricks admin power), or nothing is exported. The
-  normal operator's bearer then reads the App's URL. With ``--github-env``
-  it appends the bearers and the URL to that
-  file; after ``--`` it runs the command with them instead (an ``always()``
+  ambient ``DATABRICKS_TOKEN``, and refuse unless ``<client>`` holds the
+  validation profile the validator jobs read in ``<client>-validate``
+  (``MIP_VALIDATE_PROFILE_DIGEST``, parity-live's output). Then mint one App
+  bearer per reserved operator identity (``normal``, ``operator2``,
+  ``admin``) through tools/oauth_m2m_mint.py, each in a child that receives
+  only the host and that identity's id and secret. Each bearer must be its
+  role's own identity and that identity must **not** be in ``admins`` (the
+  App's admin role is a product role, never workspace admin membership), or
+  nothing is exported. The normal operator's bearer then reads the App's
+  URL. With ``--github-env`` it appends the bearers and the URL to that file;
+  after ``--`` it runs the command with them instead (an ``always()``
   cleanup, which must not depend on an earlier step).
-* ``app-sha --token-env NAME --git-sha SHA``: the deployed App's authenticated
-  ``/api/health`` must name the run's commit, which is what lets a green run
-  certify its own sha (tools/live_validation_gate.py).
+* ``app-sha`` and ``install-class``: the deployed App's own answers
+  (tools/clients/validation_app.py).
 
 Output is booleans, codes, counts and public names, never a value. Exit 0, or
 2 on a refusal or a failed check.
@@ -55,15 +61,12 @@ from __future__ import annotations
 
 import argparse
 import configparser
-import json
+import hmac
 import os
 import re
 import subprocess
 import sys
 import tempfile
-import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -76,7 +79,15 @@ from tools.clients.errors import ProfileRefusal
 from tools.clients.github_protections import VALIDATE_SUFFIX, environment_names
 from tools.clients.oidc_proof import OVERRIDES, REQUEST_ENV, Proof, _admins, _same_folded
 from tools.clients.redact import emit_mask
-from tools.clients.validation_profile import COLLECTS, ValidationProfile, client_of, masks, resolve
+from tools.clients.validation_app import app_sha, install_class
+from tools.clients.validation_profile import (
+    COLLECTS,
+    ValidationProfile,
+    client_of,
+    masks,
+    profile_digest,
+    resolve,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 PROFILE = "mip-validator"
@@ -88,6 +99,20 @@ BEARERS: dict[str, tuple[str, ...]] = {
     "admin": ("MIP_ADMIN_BEARER_TOKEN",),
 }
 WorkspaceFactory = Callable[..., Any]
+# What ``session`` appends to $GITHUB_ENV, and the catalog the live suites read.
+SESSION_EXPORTS = (
+    "DATABRICKS_HOST",
+    "DATABRICKS_TOKEN",
+    "MIP_BEARER_TOKEN",
+    "DATABRICKS_WAREHOUSE_ID",
+    "GENIE_SPACE_ID",
+    "MIP_APP_URL",
+    "MIP_DEPLOYED_APP_URL",
+    "MIP_APP_NAME",
+    "MIP_DEFAULT_CATALOG",
+)
+LIVE_SUITES_CATALOG = "mip"
+DIGEST_ENV = "MIP_VALIDATE_PROFILE_DIGEST"
 
 
 class CheckFailed(Exception):
@@ -124,9 +149,9 @@ def step_secrets(environ: Mapping[str, str]) -> dict[str, str]:
 
 
 def _child_environ(environ: Mapping[str, str]) -> dict[str, str]:
-    """``environ`` without any bound profile name, so no child inherits an operator secret."""
+    """``environ`` without any bound profile name or the digest, so no child inherits an operator secret."""
 
-    bound = (contexts.VAR_PREFIX, contexts.SECRET_PREFIX, contexts.MISFILED_ENV)
+    bound = (contexts.VAR_PREFIX, contexts.SECRET_PREFIX, contexts.MISFILED_ENV, DIGEST_ENV)
     return {name: value for name, value in environ.items() if not name.startswith(bound)}
 
 
@@ -218,6 +243,7 @@ def session(args: argparse.Namespace, environ: Mapping[str, str], factory: Works
     profile = _load(args, "validator")
     proof = Proof()
     _local_checks(proof, environ)
+    proof.checks["catalog_is_the_one_the_live_suites_read"] = profile.catalog == LIVE_SUITES_CATALOG
     cfg = Path(args.databrickscfg)
     if proof.holds:
         _write_new(cfg, databrickscfg_text(profile))
@@ -245,6 +271,9 @@ def session(args: argparse.Namespace, environ: Mapping[str, str], factory: Works
                         "MIP_DEFAULT_CATALOG": profile.catalog,
                     },
                 )
+                if getattr(args, "github_output", None):
+                    digest = profile_digest(profile, environ.get("GITHUB_RUN_ID", ""))
+                    _append_env(Path(args.github_output), {"profile_digest": digest})
     code = _finish(proof, "the validator session failed; see the false checks above (never the deployer, never an admin).")
     if code == 0:
         print(f"validator session ready: client={profile.client} environment={profile.environment} app={profile.app_name}")
@@ -326,6 +355,13 @@ def operators(
     if environ.get("DATABRICKS_TOKEN"):
         print("::error::the browser job refuses an ambient DATABRICKS_TOKEN: it holds no workspace token, only App bearers")
         return 2
+    expected = environ.get(DIGEST_ENV, "").strip()
+    if not expected or not hmac.compare_digest(expected, profile_digest(profile, environ.get("GITHUB_RUN_ID", ""))):
+        print(
+            f"::error::{profile.client} and {profile.client}-validate do not hold the same validation profile "
+            "(client, host, App, catalog, identity map); nothing was minted"
+        )
+        return 2
     bearers: dict[str, str] = {}
     proof = Proof()
     for role, names in BEARERS.items():
@@ -349,45 +385,6 @@ def operators(
         print("::error::operators needs --github-env or a command after --")
         return 2
     _append_env(Path(args.github_env), session_env)
-    return 0
-
-
-def _health(url: str, token: str) -> tuple[int, object]:
-    request = urllib.request.Request(f"{url}/api/health", headers={"Authorization": f"Bearer {token}"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - the App's https origin
-            return int(response.status), json.loads(response.read().decode("utf-8") or "{}")
-    except urllib.error.HTTPError as exc:
-        return int(exc.code), None
-    except (urllib.error.URLError, OSError, ValueError):
-        return 0, None
-
-
-def app_sha(
-    args: argparse.Namespace,
-    environ: Mapping[str, str],
-    health: Callable[[str, str], tuple[int, object]] = _health,
-    sleep: Callable[[float], None] = time.sleep,
-) -> int:
-    url = environ.get("MIP_APP_URL", "").strip().rstrip("/")
-    token = environ.get(args.token_env, "").strip()
-    if not url.startswith("https://") or not token:
-        print(f"::error::app-sha needs MIP_APP_URL and {args.token_env}")
-        return 2
-    status, body = 0, None
-    for attempt in range(args.attempts):
-        status, body = health(url, token)
-        if status == 200:
-            break
-        if attempt + 1 < args.attempts:
-            sleep(args.interval)
-    if status != 200 or not isinstance(body, dict):
-        print(f"::error::the deployed App's authenticated health did not answer 200 (last status {status})")
-        return 2
-    if body.get("git_sha") != args.git_sha:
-        print("::error::the deployed App does not run this run's commit; dispatch nightly.yml on the deployed sha")
-        return 2
-    print(f"deployed App git sha matches {args.git_sha} (identity: {args.token_env})")
     return 0
 
 
@@ -451,16 +448,18 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--github-env")
         if name == "session":
             command.add_argument("--databrickscfg", required=True)
+            command.add_argument("--github-output")
         else:
             command.add_argument("command_argv", nargs=argparse.REMAINDER)
     token = sub.add_parser("token")
     token.add_argument("--databrickscfg", required=True)
     token.add_argument("--github-env", required=True)
-    sha = sub.add_parser("app-sha")
-    sha.add_argument("--token-env", required=True)
-    sha.add_argument("--git-sha", required=True)
-    sha.add_argument("--attempts", type=int, default=10)
-    sha.add_argument("--interval", type=float, default=15.0)
+    for name in ("app-sha", "install-class"):
+        app = sub.add_parser(name)
+        app.add_argument("--token-env", required=True)
+        app.add_argument(*(("--git-sha",) if name == "app-sha" else ("--github-output",)), required=True)
+        app.add_argument("--attempts", type=int, default=10)
+        app.add_argument("--interval", type=float, default=15.0)
     return parser
 
 
@@ -481,6 +480,8 @@ def main(argv: Sequence[str] | None = None, *, factory: WorkspaceFactory = _work
             return remint(args, environ, factory)
         if args.command == "operators":
             return operators(args, environ, factory)
+        if args.command == "install-class":
+            return install_class(args, environ)
         return app_sha(args, environ)
     except ProfileRefusal as refusal:
         print("validation profile refused:", file=sys.stderr)

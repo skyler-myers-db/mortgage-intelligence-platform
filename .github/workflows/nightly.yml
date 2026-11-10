@@ -18,14 +18,25 @@ run-name: nightly client=${{ inputs.client }} sha=${{ github.sha }}
 # `environment:<client>` is unreachable: it exchanges those secrets for
 # per-run App bearers, none in `admins`, and calls the App API.
 #
-# Authority. nightly holds no Databricks admin power and writes only product
-# rows through the App API: campaigns, approvals and their audit rows under a
-# per-run marker, archived again at the end. What needs more lives in
-# scripts/deploy.sh or with an operator (docs/deployment.md, "Live validation
-# per client"): the silver, gold and FRED refreshes (data phase); the AI
-# Gateway inference-table grants, the verifier boundary, the exact proof
-# ledger and the Growth Agent evaluation (release phase, agentic tier); the
-# real-infra kill drill (operator-run, tools/kill_drill/run_drill.sh).
+# Authority. Every identity nightly uses is proven, before any test, not to
+# be in the workspace `admins` group (tools/clients/validation_session.py);
+# metastore admin, account admin and MODIFY or MANAGE grants are kept out by
+# the owner's grants (docs/deployment.md, "Live validation per client", owner
+# action 3), not checked here. nightly writes product rows only through the
+# App API, and the validator, read-only, opens Genie conversations directly
+# (the Genie suites). Through the App API it writes campaigns under a per-run
+# marker, archived again at the end; outreach drafts and approvals of real
+# leads, with their audit rows, which stay (an approval is a decision
+# record: nothing is ever sent); and Genie turns. The App API mutation suites
+# run only on an App whose app_env is dev or sandbox (install-class); a prod
+# App skips them. Lead outcomes, call dispositions and loan-officer
+# assignments are never written. What needs more runs in scripts/deploy.sh at
+# deploy time, with an operator, or is a listed gap (docs/deployment.md, "Live
+# validation per client"): the silver, gold and FRED refreshes (data phase);
+# the verifier boundary and the Growth Agent evaluation (release phase,
+# agentic tier); the delayed AI Gateway inference-table grant retry and the
+# rolling exact-proof refresh (gaps); the real-infra kill drill (operator-run,
+# tools/kill_drill/run_drill.sh).
 #
 # It catches:
 #   - SQL<->Python parity drift (tests/integration/test_sql_python_parity.py)
@@ -317,7 +328,8 @@ jobs:
     name: SQL<->Python + Lakebase + Genie live
     needs: check-validate-environment
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The parity suites, the Genie suites and the Genie semantic scorecard.
+    timeout-minutes: 120
     # The validator's environment and federation subject. Only a validator
     # job may request the ID token, and only this environment's subject
     # reaches the validator: never the deployer's.
@@ -325,6 +337,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      # The per-run digest of <client>-validate's validation profile; the
+      # browser job refuses to mint unless <client> holds the same values.
+      profile_digest: ${{ steps.session.outputs.profile_digest }}
     env:
       LAKEBASE_INTEGRATION: '1'
     steps:
@@ -343,7 +359,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt --only-binary=:all:
       - name: Collect the validator's validation profile
         # Generated (tools/clients/validation_profile.collect_env("validator")):
         # each public name from vars by value, each name from secrets by value,
@@ -366,7 +382,9 @@ jobs:
           --secrets-out "$RUNNER_TEMP/mip-validate-secrets.json"
       - name: Prove the GitHub OIDC validator identity and open its session
         # Masks first; then, read-only, the validator (never in admins) and the
-        # App's URL, SQL warehouse and Genie space; exports a short-lived token.
+        # App's URL, SQL warehouse and Genie space; exports a short-lived token
+        # and the profile's per-run digest (the job output profile_digest).
+        id: session
         env:
           MIP_VALIDATE_ENVIRONMENT: ${{ inputs.client }}-validate
         run: >-
@@ -376,6 +394,7 @@ jobs:
           --environment "$MIP_VALIDATE_ENVIRONMENT"
           --databrickscfg "$HOME/.databrickscfg"
           --github-env "$GITHUB_ENV"
+          --github-output "$GITHUB_OUTPUT"
       - name: Fail fast unless the deployed App runs this commit
         run: python -m tools.clients.validation_session app-sha --token-env MIP_BEARER_TOKEN --git-sha "$GITHUB_SHA"
       - name: SQL <-> Python parity
@@ -438,6 +457,29 @@ jobs:
         # exercising the hardened space.
         if: always()
         run: pytest -q tests/integration/test_genie_regression.py
+      - name: Remint the validator token before the Genie scorecard
+        run: python -m tools.clients.validation_session token --databrickscfg "$HOME/.databrickscfg" --github-env "$GITHUB_ENV"
+      - name: Genie semantic eval scorecard (deployed app)
+        # The validator asks the App (its token is the App bearer) and runs
+        # each question's canonical SQL itself: tools/genie_eval.py fails a
+        # canonical question unless DATABRICKS_HOST, DATABRICKS_TOKEN and
+        # DATABRICKS_WAREHOUSE_ID are set, and renders its catalog from
+        # MIP_DEFAULT_CATALOG. The validator session exports all four.
+        run: |
+          python tools/wait_app_ready.py \
+            --base "$MIP_APP_URL" \
+            --token "$MIP_BEARER_TOKEN" \
+            --timeout-s 600 \
+            --interval-s 20 \
+            --breakers warehouse,lakebase,genie \
+            --genie-probe-question "Summarize the current Module 0 mortgage lead opportunity and cite the trusted assets."
+          python tools/genie_eval.py \
+            --base "$MIP_APP_URL" \
+            --token "$MIP_BEARER_TOKEN" \
+            --timeout 120 \
+            --attempts 4 \
+            --retry-backoff-s 20 \
+            --pace-s 2
       - name: Remove the session files
         if: always()
         run: rm -f "$HOME/.databrickscfg" "$RUNNER_TEMP/mip-validate-vars.json" "$RUNNER_TEMP/mip-validate-secrets.json"
@@ -446,8 +488,9 @@ jobs:
     name: Playwright (real-UC golden path)
     needs: parity-live
     runs-on: ubuntu-latest
-    # Three browsers, the App API workflow contracts, a 10-minute App warm-up,
-    # then the serialized real-UC and procurement browser matrices.
+    # The App API workflow contracts, three browsers, then the serialized
+    # real-UC and procurement browser matrices (parity-live's Genie scorecard
+    # already waited for the App to warm up).
     timeout-minutes: 90
     environment: ${{ inputs.client }}
     # The client's deploy environment, for the operator M2M secrets the
@@ -456,9 +499,13 @@ jobs:
     # deploy-only name. Its only credentials are per-run App bearers minted
     # from the reserved operator identities' M2M secrets, and it calls the App
     # API (the normal operator's bearer reads the App's URL once). The secrets
-    # live only in the env of the steps that mint, never on disk and never in
-    # an npm or Playwright step. npm runs here, never in a job that can
-    # request an ID token, and runs no install script.
+    # are bound only in the env of the steps that mint, never on disk and
+    # never in an npm or Playwright step's env. npm runs here only, never in a
+    # job that can request an ID token, with no install script, and only
+    # after the first mint, the App API suites and their archive. The remint
+    # before the browser suites and the always() reconcile run after npm
+    # package code has run, which could tamper with the checkout they execute:
+    # a residual risk the lockfile limits and does not remove.
     permissions:
       contents: read
     env:
@@ -485,11 +532,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-          npm --prefix frontend ci --ignore-scripts --no-audit --no-fund
-      - name: Install Playwright browsers
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium firefox webkit
+          pip install -r requirements-dev.txt --only-binary=:all:
       - name: Collect the browser job's validation profile
         # Generated (tools/clients/validation_profile.collect_env("validator")):
         # the public and identifying names only. The three operator M2M
@@ -527,6 +570,7 @@ jobs:
             ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
             ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
           MIP_BROWSER_ENVIRONMENT: ${{ inputs.client }}
+          MIP_VALIDATE_PROFILE_DIGEST: ${{ needs.parity-live.outputs.profile_digest }}
         run: >-
           python -m tools.clients.validation_session operators
           --vars-json "$RUNNER_TEMP/mip-validate-vars.json"
@@ -625,12 +669,23 @@ jobs:
           PY
       - name: Recheck the deployed commit with the browser identity
         run: python -m tools.clients.validation_session app-sha --token-env MIP_NON_ADMIN_BEARER_TOKEN --git-sha "$GITHUB_SHA"
+      - name: Read the install class the App reports
+        # The App API suites refuse any App whose app_env is not dev or
+        # sandbox; a prod App skips them (a listed gap) instead of failing
+        # every run, and an unknown app_env refuses.
+        id: install-class
+        run: python -m tools.clients.validation_session install-class --token-env MIP_ADMIN_BEARER_TOKEN --github-output "$GITHUB_OUTPUT"
       - name: App API workflow contracts
-        # Product rows through the App API only, under the run marker: the App
-        # service principal performs every Lakebase transaction. The direct
-        # Delta scratch proofs (lifecycle replay, treatment cap) and the
-        # system-lineage read are not here: they need more than the App API
-        # (docs/deployment.md, "Live validation per client").
+        # Product rows through the App API only: campaigns under the run
+        # marker, outreach drafts and approvals (never sent) and their audit
+        # rows; the App service principal performs every Lakebase transaction.
+        # Deselected: the audit-snapshot reader (beyond the validator's
+        # reads) and the lead outcome, disposition and assignment replay,
+        # which writes a funded-loan outcome on a real lead that no cleanup
+        # undoes. The direct Delta scratch proofs (lifecycle replay, treatment
+        # cap) and the system-lineage read are not here: they need more than
+        # the App API (docs/deployment.md, "Live validation per client").
+        if: steps.install-class.outputs.app_api_mutation == 'run'
         env:
           MIP_LIVE_MUTATION_OK: '1'
         run: |
@@ -642,7 +697,8 @@ jobs:
             tests/integration/test_lakebase_idempotency_live.py \
             tests/integration/test_lakebase_concurrency_live.py \
             tests/integration/test_two_operator_recovery_live.py \
-            --deselect tests/integration/test_lakebase_idempotency_live.py::test_live_saved_holdout_and_household_dedup_exclude_non_treatment_borrowers
+            --deselect tests/integration/test_lakebase_idempotency_live.py::test_live_saved_holdout_and_household_dedup_exclude_non_treatment_borrowers \
+            --deselect tests/integration/test_lakebase_idempotency_live.py::test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip
       - name: Always archive run-marked live campaign fixtures
         # Mints its own bearers, so a failed earlier step never strands this
         # run's fixtures; product rows through the App API only.
@@ -656,6 +712,7 @@ jobs:
             ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
             ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
           MIP_BROWSER_ENVIRONMENT: ${{ inputs.client }}
+          MIP_VALIDATE_PROFILE_DIGEST: ${{ needs.parity-live.outputs.profile_digest }}
         run: >-
           python -m tools.clients.validation_session operators
           --vars-json "$RUNNER_TEMP/mip-validate-vars.json"
@@ -664,37 +721,13 @@ jobs:
           --
           python -m tools.cleanup_live_campaign_fixtures
           --run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"
-      - name: Remint per-run App bearers before the Genie scorecard
-        env:
-          MIP_CLIENT_SECRET__DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
-          MIP_CLIENT_SECRET__DATABRICKS_OPERATOR2_CLIENT_SECRET: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}
-          MIP_CLIENT_SECRET__DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
-          MIP_CLIENT_VARS_MISFILED: >-
-            ${{ vars.DATABRICKS_CLIENT_SECRET && 'DATABRICKS_CLIENT_SECRET' || '' }}
-            ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
-            ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
-          MIP_BROWSER_ENVIRONMENT: ${{ inputs.client }}
-        run: >-
-          python -m tools.clients.validation_session operators
-          --vars-json "$RUNNER_TEMP/mip-validate-vars.json"
-          --secrets-json "$RUNNER_TEMP/mip-validate-secrets.json"
-          --environment "$MIP_BROWSER_ENVIRONMENT"
-          --github-env "$GITHUB_ENV"
-      - name: Genie semantic eval scorecard (deployed app)
-        run: |
-          export DATABRICKS_TOKEN="$MIP_BEARER_TOKEN"
-          python tools/wait_app_ready.py \
-            --base "$MIP_APP_URL" \
-            --timeout-s 600 \
-            --interval-s 20 \
-            --breakers warehouse,lakebase,genie \
-            --genie-probe-question "Summarize the current Module 0 mortgage lead opportunity and cite the trusted assets."
-          python tools/genie_eval.py \
-            --base "$MIP_APP_URL" \
-            --timeout 120 \
-            --attempts 4 \
-            --retry-backoff-s 20 \
-            --pace-s 2
+      - name: Install the frontend with no install script
+        # The first npm step: every earlier mint, App API write and archive ran
+        # before any npm package code.
+        run: npm --prefix frontend ci --ignore-scripts --no-audit --no-fund
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium firefox webkit
       - name: Remint per-run App bearers before the browser suites
         env:
           MIP_CLIENT_SECRET__DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
@@ -705,6 +738,7 @@ jobs:
             ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
             ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
           MIP_BROWSER_ENVIRONMENT: ${{ inputs.client }}
+          MIP_VALIDATE_PROFILE_DIGEST: ${{ needs.parity-live.outputs.profile_digest }}
         run: >-
           python -m tools.clients.validation_session operators
           --vars-json "$RUNNER_TEMP/mip-validate-vars.json"
@@ -743,6 +777,7 @@ jobs:
             ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
             ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
           MIP_BROWSER_ENVIRONMENT: ${{ inputs.client }}
+          MIP_VALIDATE_PROFILE_DIGEST: ${{ needs.parity-live.outputs.profile_digest }}
         run: >-
           python -m tools.clients.validation_session operators
           --vars-json "$RUNNER_TEMP/mip-validate-vars.json"
@@ -837,7 +872,7 @@ jobs:
         # validator session (tools/clients) also needs PyYAML.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt --only-binary=:all:
       - name: Install jq + lsof (runner usually has both; belt & braces)
         run: |
           sudo apt-get update -qq
@@ -940,7 +975,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt --only-binary=:all:
       - name: Collect the validator's validation profile
         env:
           MIP_CLIENT_VAR__MIP_CLIENT: ${{ vars.MIP_CLIENT }}
@@ -1020,7 +1055,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt --only-binary=:all:
       - name: Collect the validator's validation profile
         env:
           MIP_CLIENT_VAR__MIP_CLIENT: ${{ vars.MIP_CLIENT }}

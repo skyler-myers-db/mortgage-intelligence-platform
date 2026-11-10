@@ -21,6 +21,7 @@ import pytest
 from tests.fixtures.client_profiles import IDENTITY_IDS, demo_profile, split_contexts
 from tools.clients import dispatch_acks as acks
 from tools.clients import dispatch_protections as protections
+from tools.clients import validation_app as va
 from tools.clients import validation_profile as vp
 from tools.clients import validation_session as vs
 from tools.clients.errors import ProfileRefusal
@@ -201,11 +202,18 @@ class FakeClient:
         self.apps = SimpleNamespace(get=lambda name: app)
 
 
+def _validate_digest(run_id: str = "", **overrides: str | None) -> str:
+    """parity-live's output: the per-run digest of the <client>-validate profile."""
+
+    return vp.profile_digest(vp.resolve(*_contexts("validator", **overrides), environment=ENVIRONMENT, kind="validator"), run_id)
+
+
 def _operator_env(**extra: str) -> dict[str, str]:
-    """A minting step's own env: the three operator secrets, bound one by one."""
+    """A minting step's own env: the three operator secrets, bound one by one, and parity-live's digest."""
 
     secrets = _contexts("browser")[1]
-    return {f"MIP_CLIENT_SECRET__{name}": secrets[name] for name in vp.COLLECTS["operators"]} | extra
+    bound = {f"MIP_CLIENT_SECRET__{name}": secrets[name] for name in vp.COLLECTS["operators"]}
+    return bound | {vs.DIGEST_ENV: _validate_digest()} | extra
 
 
 def _bearer_owner(token: str) -> str:
@@ -245,6 +253,7 @@ def test_the_session_is_the_validator_never_an_admin_and_exports_the_app_resourc
     assert IDENTITY_IDS["deployer"] not in cfg and oct(Path(args.databrickscfg).stat().st_mode)[-3:] == "600"
     assert calls == [{"profile": "mip-validator", "config_file": args.databrickscfg}]
     env = _env_lines(args)
+    assert set(env) == set(vs.SESSION_EXPORTS)
     assert env["DATABRICKS_TOKEN"] == env["MIP_BEARER_TOKEN"] == "validator-token-EXAMPLE"
     assert (env["DATABRICKS_WAREHOUSE_ID"], env["GENIE_SPACE_ID"], env["DATABRICKS_HOST"]) == ("wh-EXAMPLE", "space-EXAMPLE", HOST)
     assert env["MIP_APP_URL"] == env["MIP_DEPLOYED_APP_URL"] and env["MIP_APP_NAME"] == "mip-app"
@@ -283,6 +292,34 @@ def test_the_session_refuses_without_an_id_token_or_with_ambient_credentials_bef
 
     assert vs.session(_files(tmp_path, "validator"), environ, _factory(calls)) == 2
     assert calls == [], "no Databricks client was ever built"
+
+
+def test_the_session_refuses_a_catalog_the_live_suites_do_not_read_before_any_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The live suites read ``mip.`` literally: against another catalog they would read another install's ``mip``."""
+
+    calls: list[dict[str, Any]] = []
+    args = _files(tmp_path, "validator", MIP_DEFAULT_CATALOG="lender_two")
+
+    assert vs.session(args, OIDC_ENV, _factory(calls)) == 2
+    assert "catalog_is_the_one_the_live_suites_read=false" in capsys.readouterr().out
+    assert calls == [] and not Path(args.databrickscfg).exists() and _env_lines(args) == {}
+
+
+def test_the_session_exports_the_profiles_per_run_digest_the_browser_profile_matches(tmp_path: Path) -> None:
+    args = _files(tmp_path, "validator")
+    args.github_output = str(tmp_path / "github_output")
+
+    assert vs.session(args, {**OIDC_ENV, "GITHUB_RUN_ID": "77"}, _factory([])) == 0
+
+    (line,) = Path(args.github_output).read_text(encoding="utf-8").splitlines()
+    name, digest = line.split("=", 1)
+    browser = vp.resolve(*_contexts("browser"), environment=ENVIRONMENTS["browser"], kind="browser")
+    assert name == "profile_digest" and digest == vp.profile_digest(browser, "77") == _validate_digest("77")
+    assert digest != _validate_digest("78"), "salted with the run id: no stable fingerprint"
+    for value in (HOST, *IDENTITY_IDS.values()):
+        assert value not in line
 
 
 def test_a_missing_validate_profile_refuses_before_any_databricks_call(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -379,6 +416,28 @@ def test_an_operator_bearer_that_is_a_workspace_admin_or_another_identity_export
         assert value not in out
 
 
+@pytest.mark.parametrize(
+    "digest",
+    [None, "", _validate_digest(DATABRICKS_HOST="https://dbc-other.cloud.databricks.com"), _validate_digest(MIP_APP_NAME="mip-other"), _validate_digest("other-run")],
+    ids=["missing", "empty", "other-host", "other-app", "other-run"],
+)
+def test_the_browser_job_mints_nothing_unless_client_holds_the_validate_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], digest: str | None
+) -> None:
+    """<client>-validate is filled by hand: one run must never mix two installs' evidence."""
+
+    children: list[dict[str, str]] = []
+    environ = _operator_env()
+    if digest is None:
+        environ.pop(vs.DIGEST_ENV)
+    else:
+        environ[vs.DIGEST_ENV] = digest
+
+    assert vs.operators(_browser_files(tmp_path), environ, _factory([]), runner=_mint_runner(children, [])) == 2
+    assert children == [] and _env_lines(_browser_files(tmp_path)) == {}
+    assert "do not hold the same validation profile" in capsys.readouterr().out
+
+
 def test_the_browser_job_refuses_an_ambient_workspace_token(tmp_path: Path) -> None:
     children: list[dict[str, str]] = []
 
@@ -430,6 +489,17 @@ def test_the_validate_environment_must_exist_with_its_protections(monkeypatch: p
     assert "is not in the listing" in out and "github_environment --apply" in out
 
 
+def test_a_missing_or_drifted_environment_refuses_even_with_both_exact_acks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ack stands only for an unreadable environment: GitHub would create a missing one unprotected."""
+
+    both = f"{acks.protections_ack('fictional-demo', ENVIRONMENT, SHA)} {acks.protections_ack('fictional-demo', 'fictional-demo', SHA)}"
+    missing = protections.Result(protections.DRIFT, ("github: the fictional-demo-validate environment is not in the listing",))
+    drifted = protections.Result(protections.DRIFT, ("required_reviewers: expected the maintainer",))
+
+    for result in (missing, drifted):
+        assert _check(monkeypatch, result, ack=both)[0] == 2
+
+
 def test_unreadable_protections_need_the_exact_ack_per_environment_for_this_client_and_sha(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     unreadable = protections.Result(protections.UNREADABLE, cause="HTTP 403")
     validate = acks.protections_ack("fictional-demo", ENVIRONMENT, SHA)
@@ -456,3 +526,40 @@ def test_both_environments_nightly_names_are_read(monkeypatch: pytest.MonkeyPatc
 
     assert vs.check_environment(argparse.Namespace(client="fictional-demo"), {"GITHUB_SHA": SHA, "GITHUB_ACTOR_ID": "42"}) == 2
     assert read == ["fictional-demo", ENVIRONMENT]
+
+
+# ------------------------------------------------------------ the install class
+
+
+@pytest.mark.parametrize(
+    ("answers", "code", "decision"),
+    [
+        ([(200, {"app_env": "sandbox"})], 0, "run"),
+        ([(200, {"app_env": "dev"})], 0, "run"),
+        ([(503, None), (200, {"app_env": "prod"})], 0, "skip"),
+        ([(200, {"app_env": "staging"})], 2, None),
+        ([(200, {})], 2, None),
+        ([(403, None)] * 3, 2, None),
+    ],
+    ids=["sandbox", "dev", "prod-after-warm-up", "unknown", "absent", "never-200"],
+)
+def test_the_install_class_runs_the_mutation_suites_only_on_dev_or_sandbox(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], answers: list[Any], code: int, decision: str | None
+) -> None:
+    replies = iter(answers)
+    output = tmp_path / "github_output"
+    args = argparse.Namespace(token_env="MIP_ADMIN_BEARER_TOKEN", github_output=str(output), attempts=3, interval=0)
+    environ = {"MIP_APP_URL": "https://mip-app-0000.example.databricksapps.com", "MIP_ADMIN_BEARER_TOKEN": "bearer-EXAMPLE"}
+
+    assert va.install_class(args, environ, admin_health=lambda url, token: next(replies), sleep=lambda s: None) == code
+    written = output.read_text(encoding="utf-8") if output.exists() else ""
+    assert written == (f"{va.MUTATION_OUTPUT}={decision}\n" if decision else "")
+    out = capsys.readouterr().out
+    assert "databricksapps" not in out and "bearer-EXAMPLE" not in out and "staging" not in out
+
+
+def test_the_install_class_is_a_session_command_reading_the_admin_health() -> None:
+    args = vs._parser().parse_args(["install-class", "--token-env", "MIP_ADMIN_BEARER_TOKEN", "--github-output", "out"])
+
+    assert (args.command, args.token_env, args.github_output, args.attempts) == ("install-class", "MIP_ADMIN_BEARER_TOKEN", "out", 10)
+    assert {"dev", "sandbox"} == va.MUTATION_APP_ENVS and {"prod"} == va.SKIP_APP_ENVS

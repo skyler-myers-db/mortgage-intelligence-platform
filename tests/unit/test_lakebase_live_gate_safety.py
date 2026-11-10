@@ -36,7 +36,7 @@ def test_nightly_documents_public_api_write_read_proof_after_read_probe() -> Non
     )
     assert read_pos < mutation_pos < campaign_pos
     # M1-PR8: the read path (parity-live) runs before the browser job's App API writes.
-    assert "the App\n        # service principal performs every Lakebase transaction" in text
+    assert "the App service principal performs every Lakebase transaction" in text
 
 
 def test_post_activation_probe_accepts_actor_audit_page_contract(
