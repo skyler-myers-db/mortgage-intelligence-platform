@@ -560,6 +560,7 @@ def test_the_engine_projects_collect_exactly_their_specs() -> None:
         "queue-clearance.cross-engine.fixture.spec.ts": (True, False, False),
         "genie-pagehide.cross-engine.fixture.spec.ts": (True, True, False),
         "menu-presence-exit.cross-engine.fixture.spec.ts": (True, True, False),
+        "hygiene-asset-cancel.cross-engine.fixture.spec.ts": (True, True, False),
         "pinned-focus.webkit.fixture.spec.ts": (True, False, True),
         "forced-colors.firefox.fixture.spec.ts": (False, True, True),
         "lead-queue.fixture.spec.ts": (False, False, False),
@@ -576,5 +577,6 @@ def test_the_engine_projects_collect_exactly_their_specs() -> None:
         "forced-colors.firefox",
         "genie-pagehide.cross-engine",
         "menu-presence-exit.cross-engine",
+        "hygiene-asset-cancel.cross-engine",
     ):
         assert (FRONTEND / "tests" / "e2e" / "fixture" / f"{spec}.fixture.spec.ts").is_file(), spec
