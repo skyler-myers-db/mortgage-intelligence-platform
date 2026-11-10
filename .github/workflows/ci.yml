@@ -110,10 +110,13 @@ jobs:
         # current measured suite baseline and should only move upward.
         # MIP_REQUIRE_FIXTURE_CONTRACT=1: the e2e fixture contract test FAILS
         # (instead of skipping) if Node is missing or too old here.
+        # The second-client portability proof runs once, in its own job below.
         env:
           MIP_REQUIRE_FIXTURE_CONTRACT: '1'
         run: |
           pytest -q -n auto --dist=loadscope \
+            --ignore=tests/unit/test_client_portability_integrity.py \
+            --ignore=tests/unit/test_client_portability_proof.py \
             --cov=backend \
             --cov-report=term-missing:skip-covered \
             --cov-report=xml:coverage.xml \
@@ -194,6 +197,36 @@ jobs:
             coverage.xml
             coverage/html
           if-no-files-found: ignore
+
+  client-portability-proof:
+    # M3-PR4: a second, synthetic client (tests/fixtures/clients/acme.env)
+    # onboards with zero code edits. The proof replays deploy-dev.yml's plan
+    # and release dispatches offline with --dry-run, against a stub CLI and a
+    # stub account API that record the authority each call needs, and fails
+    # on a client literal, an account-admin need in CI or a log leak (its
+    # planted positive controls prove each check can fail). backend-tests
+    # ignores both modules, so they run once per push
+    # (tests/unit/test_ci_client_portability_job.py pins both sides).
+    name: client portability proof (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: pytest (the portability proof)
+        run: >-
+          pytest -rfE -p no:cacheprovider --durations=10
+          tests/unit/test_client_portability_integrity.py
+          tests/unit/test_client_portability_proof.py
 
   frontend-tests:
     name: frontend (lint + test + build)
