@@ -902,8 +902,9 @@ jobs:
     # css-06 item 3). MIP_CROSS_ENGINE=1 makes playwright.config.ts run ONLY
     # fixture-webkit (*.cross-engine / *.webkit specs: focus()-driven
     # clearance walks, Genie pagehide) and fixture-firefox-forced (Firefox
-    # with forced colors: *.firefox specs and genie-pagehide), replacing the
-    # manual Firefox forced-colors pass. A known engine defect is a test.fixme
+    # with forced colors: *.firefox specs, genie-pagehide, menu-presence-exit
+    # and hygiene-asset-cancel), replacing the manual Firefox forced-colors
+    # pass. A known engine defect is a test.fixme
     # naming its owner lane and finding id, never a silent skip. No secrets;
     # every page is synthetic fixture data.
     # Runs in the pinned image (see playwright-offline), which carries WebKit
