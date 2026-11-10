@@ -13,7 +13,9 @@ job ``client-portability-proof`` runs both):
   the account admin's work is human-run (attack G15);
 * every one-character substitution of the lender record or the accepted
   exposure is refused under the old pin, or changes the profile digest the
-  owner's exact profile ack covers, and the exposure plan's own ack.
+  owner's exact profile ack covers, and the exposure plan's own ack;
+* the proof's real-checkout check sees an untracked file and an ignored
+  build artifact (its positive control).
 
 The owner hardware-key attestation layer is deferred (M1-PR5): the integrity
 here is main's exact-digest pin and acks. Nothing signs or verifies a
@@ -23,6 +25,7 @@ signature.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -177,3 +180,33 @@ def test_every_one_character_exposure_tamper_changes_both_acks(values: dict[str,
         with pytest.raises(ExposureRefusal):
             load_policy({EXPOSURE_ENV: tampered, "MIP_GENIE_SPACE_NAME": values["MIP_GENIE_SPACE_NAME"]}, ack=original_exposure)
     assert resolved_count > 20
+
+
+# --- the real-checkout check ---------------------------------------------------------------
+
+
+def _git(repo: Path, *argv: str) -> None:
+    subprocess.run(["git", *argv], cwd=repo, check=True, capture_output=True)
+
+
+def test_the_checkout_state_sees_an_untracked_file_and_an_ignored_build_artifact(tmp_path: Path) -> None:
+    """Positive control for the proof's last test: what a run would leave in a checkout changes its state."""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / ".gitignore").write_text("sql/_rendered/\n.env.local\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "-c", "user.name=Proof", "-c", "user.email=proof@example.invalid", "commit", "-qm", "base")
+    clean = checks.checkout_state(repo)
+
+    (repo / "sql" / "_rendered").mkdir(parents=True)
+    (repo / "sql" / "_rendered" / "a.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    rendered = checks.checkout_state(repo)
+    (repo / ".env.local").write_text("MIP_CLIENT='client-two'\n", encoding="utf-8")
+    profiled = checks.checkout_state(repo)
+    (repo / "stray.txt").write_text("x\n", encoding="utf-8")
+
+    assert clean["git status"] == rendered["git status"] == profiled["git status"] == ""
+    assert clean != rendered != profiled
+    assert checks.checkout_state(repo)["git status"] == "?? stray.txt\n"
