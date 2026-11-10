@@ -25,8 +25,14 @@ handover gave it. Without ``--ack-plan`` it prints the revert plan's digest
 and changes nothing.
 
 ``--verify`` is read-only: nothing the plan would move is still the legacy
-owner's, and every pipeline-managed dataset has an exact, unexpired interim
-owner pair in the client's profile.
+owner's, every pipeline-managed dataset the legacy owner still owns has an
+exact, unexpired interim owner pair in the client's profile, and every
+pipeline-managed dataset, whoever owns it, is owned by its pipeline's live
+run_as (tools/clients/handover_pipeline_owner.py). Spike S4: no ALTER can
+re-own a pipeline dataset; its owner follows the pipeline's run_as, so after
+the release it is the jobs identity's for good. Run it again after the
+release: with the release postflight's live run_as check, that proves the
+end state.
 
 The metastore, Delta Sharing, foreign and system catalogs and System-user
 objects are never touched. Printed lines carry codes, counts and digests;
@@ -46,6 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.clients import handover_journal as journals
+from tools.clients.handover_pipeline_owner import owner_codes
 from tools.clients.handover_uc_plan import (
     HandoverRefused,
     UcPlan,
@@ -192,7 +199,7 @@ def revert(workspace: Any, journal: journals.Journal, *, ack: str) -> dict[str, 
 
 
 def verify(workspace: Any, install: Install) -> list[str]:
-    """Value-free refusal codes: nothing left to move, every pipeline dataset paired exactly."""
+    """Value-free refusal codes: nothing left to move, every pipeline dataset paired and run_as-owned."""
 
     current = plan(workspace, install)
     codes = [refusal.code for refusal in current.refusals]
@@ -200,7 +207,7 @@ def verify(workspace: Any, install: Install) -> list[str]:
     for row in current.document["pipeline_managed"]:
         if install.pairs.verdict(full_name=row["full_name"], owner=row["owner"]) != MATCH:
             codes.append("interim_pair_missing")
-    return codes
+    return codes + owner_codes(workspace, current.pipeline_datasets)
 
 
 def _profile_install() -> Install:

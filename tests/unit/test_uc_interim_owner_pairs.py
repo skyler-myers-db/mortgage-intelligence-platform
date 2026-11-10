@@ -1,8 +1,9 @@
 """Interim owner pairs: exact matches only, at most 14 days ahead, an expired pair refuses (M2-PR8).
 
-Spike S4 is owed, so the ownership handover leaves the pipeline-managed
-datasets with their owner and the client's profile names each one in an exact
-``(full_name, owner, expires_at)`` pair. The approved-owner policy admits that
+No ALTER can re-own a pipeline-managed dataset (spike S4), so the ownership
+handover leaves them with their owner, the pipeline's run_as, and the client's
+profile names each one in an exact ``(full_name, owner, expires_at)`` pair
+until the release moves the pipeline's run_as. The approved-owner policy admits that
 owner for exactly that object; a case variant, another object, an expired
 pair or a pair beyond 14 days does not pass.
 """
