@@ -5838,8 +5838,13 @@ def test_deploy_dev_carries_no_salesforce_input() -> None:
     settings to the schema is a follow-up a Salesforce client needs.
     """
 
-    assert "SALESFORCE" not in DEPLOY_DEV.read_text(encoding="utf-8")
-    assert not [name for name in FIELD_CLASS if name.startswith("SALESFORCE")]
+    # The one Salesforce-named profile field is the App's binding switch
+    # (MIP_SALESFORCE_BINDINGS, off or on; spike S2b): no credential and no
+    # connector setting, so it is the only Salesforce name the workflow binds.
+    switch = "MIP_SALESFORCE_BINDINGS"
+    assert "SALESFORCE" not in DEPLOY_DEV.read_text(encoding="utf-8").replace(switch, "")
+    assert [name for name in FIELD_CLASS if "SALESFORCE" in name] == [switch]
+    assert FIELD_CLASS[switch] is FieldClass.PUBLIC
 
 
 def test_deploy_script_provisions_runtime_secrets_presence_only() -> None:

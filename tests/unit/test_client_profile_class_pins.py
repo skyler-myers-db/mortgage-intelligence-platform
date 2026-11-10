@@ -40,6 +40,8 @@ EXPECTED_PUBLIC = frozenset(
         "MIP_APP_ENV",
         "MIP_AGENTIC_TIER",
         "MIP_SCHEDULED_REFRESH",
+        # Spike S2b: the App's optional Salesforce secret bindings (off when unset).
+        "MIP_SALESFORCE_BINDINGS",
         "MIP_REVIEW_MODE",
         "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
         "MIP_PRESENTER_MODE",

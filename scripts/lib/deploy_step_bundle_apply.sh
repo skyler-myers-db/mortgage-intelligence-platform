@@ -233,9 +233,12 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     "$APP_RESOURCE_BINDING_PAYLOAD" \
     "$APP_RESOURCE_BINDING_AFTER"
   printf '%s\n' "$BUNDLE_SUMMARY_JSON" > "$APP_RESOURCE_BINDING_SUMMARY"
+  # The profile's MIP_SALESFORCE_BINDINGS (preflight, spike S2b) selects the
+  # bundle's optional Salesforce bindings; the bundle declares them all.
   "$PYTHON" -m tools.databricks.app_resource_bindings build \
     --bundle-summary "$APP_RESOURCE_BINDING_SUMMARY" \
     --app-name "$_GRANTS_APP_NAME" \
+    --salesforce-bindings "${MIP_SALESFORCE_BINDINGS:?the preflight resolves MIP_SALESFORCE_BINDINGS}" \
     "${OTEL_RESOURCE_BINDING_ARGS[@]}" \
     --out "$APP_RESOURCE_BINDING_PAYLOAD"
 else

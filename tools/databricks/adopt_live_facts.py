@@ -443,8 +443,17 @@ def treatment_reader(workspace: Any, catalog: str) -> Callable[[str, str], list[
 
 
 def reviewed_bindings() -> list[dict[str, object]]:
-    """The profile's reviewed App bindings: the client target's bundle summary, after the binds."""
+    """The profile's reviewed App bindings: the client target's bundle summary, after the binds.
 
+    The bundle's optional Salesforce secret bindings count only when the
+    profile's ``MIP_SALESFORCE_BINDINGS`` is ``on`` (spike S2b,
+    tools/databricks/app_optional_bindings.py), as the release applies them.
+    """
+
+    from tools.databricks.app_optional_bindings import (
+        salesforce_bindings_from_env,
+        select_bindings,
+    )
     from tools.databricks.app_rollback_resource_contract import reviewed_app_resource_contract
 
     private = ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY")
@@ -470,4 +479,8 @@ def reviewed_bindings() -> list[dict[str, object]]:
         raise AdoptLiveRefused(
             "bindings_differ", f"the bundle summary failed (exit {result.returncode})"
         )
-    return reviewed_app_resource_contract(json.loads(result.stdout))
+    reviewed = reviewed_app_resource_contract(json.loads(result.stdout))
+    try:
+        return select_bindings(reviewed, salesforce=salesforce_bindings_from_env())
+    except ValueError as exc:
+        raise AdoptLiveRefused("bindings_differ", str(exc)) from None

@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from tools.databricks.app_optional_bindings import salesforce_bindings_on, select_bindings
 from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
 _RESOURCE_REFERENCE_RE = re.compile(
@@ -62,10 +63,18 @@ def build_resource_binding_payload(
     summary: dict[str, Any],
     *,
     app_name: str,
+    salesforce_bindings: bool = False,
     otel_header_secret_scope: str = "",
     otel_header_secret_key: str = "",
 ) -> dict[str, Any]:
-    """Return the exact source-free App create/update body."""
+    """Return the exact source-free App create/update body.
+
+    The bundle declares every binding; ``salesforce_bindings`` (the profile's
+    ``MIP_SALESFORCE_BINDINGS``, spike S2b; off, the profile's default, when
+    a caller omits it) decides whether the three optional Salesforce secret
+    bindings are among the ones applied
+    (tools/databricks/app_optional_bindings.py). The CLI has no default.
+    """
 
     resources = summary.get("resources")
     if not isinstance(resources, dict):
@@ -84,6 +93,7 @@ def build_resource_binding_payload(
     bindings = _resolve_value(configured_bindings, resources)
     if not isinstance(bindings, list):  # defensive: recursive resolver preserves lists
         raise ValueError("resolved App resource bindings are invalid")
+    bindings = select_bindings(bindings, salesforce=salesforce_bindings)
     if bool(otel_header_secret_scope.strip()) != bool(otel_header_secret_key.strip()):
         raise ValueError("OTLP header secret scope and key must be configured together")
     if otel_header_secret_scope:
@@ -232,6 +242,9 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--bundle-summary", type=Path, required=True)
     build.add_argument("--app-name", required=True)
     build.add_argument("--out", type=Path, required=True)
+    # Required, with no default: a call site that forgot the profile's switch
+    # never builds a binding set silently (spike S2b).
+    build.add_argument("--salesforce-bindings", choices=("off", "on"), required=True)
     build.add_argument("--otel-header-secret-scope", default="")
     build.add_argument("--otel-header-secret-key", default="")
 
@@ -273,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = build_resource_binding_payload(
             _load_object(args.bundle_summary),
             app_name=args.app_name,
+            salesforce_bindings=salesforce_bindings_on(args.salesforce_bindings),
             otel_header_secret_scope=args.otel_header_secret_scope,
             otel_header_secret_key=args.otel_header_secret_key,
         )

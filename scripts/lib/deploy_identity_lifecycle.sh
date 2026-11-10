@@ -62,6 +62,20 @@ deployment_control_value() {
   printf '%s' "${value:-$default_value}"
 }
 
+# The App's optional Salesforce secret bindings (spike S2b): the client
+# profile's MIP_SALESFORCE_BINDINGS, off when unset. The release's binding
+# payload, the window plan's and the App payload read this one export, so a
+# client without the connector never gains its three bindings. Pure: it also
+# runs in DRY_RUN.
+resolve_salesforce_bindings_switch() {
+  MIP_SALESFORCE_BINDINGS="$(deployment_control_value MIP_SALESFORCE_BINDINGS off)"
+  if [[ "$MIP_SALESFORCE_BINDINGS" != "off" && "$MIP_SALESFORCE_BINDINGS" != "on" ]]; then
+    echo "${RED}[deploy] MIP_SALESFORCE_BINDINGS must be off or on.${RST}" >&2
+    exit 2
+  fi
+  export MIP_SALESFORCE_BINDINGS
+}
+
 # deployment_control_value under the rule every Python reader of the two
 # pinned lender names applies (pinned_inputs in backend/schemas/
 # lender_identity_record.py, the client profile, bundle_env.py and the App

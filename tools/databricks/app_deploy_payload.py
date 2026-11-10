@@ -34,6 +34,10 @@ from backend.schemas.lender_identity_record import (  # noqa: E402
     present_env,
     reviewed_lender_identity_from_env,
 )
+from tools.databricks.app_optional_bindings import (  # noqa: E402
+    SWITCH_ENV as SALESFORCE_BINDINGS_ENV,
+)
+from tools.databricks.app_optional_bindings import salesforce_bindings_on  # noqa: E402
 from tools.databricks.lakebase_instance_contract import (  # noqa: E402
     DEFAULT_LAKEBASE_INSTANCE_NAME,
     validated_lakebase_instance_name,
@@ -169,6 +173,14 @@ SALESFORCE_REQUIRED_VARS = (
 )
 SALESFORCE_SECRET_ENVS = frozenset(
     {"SALESFORCE_CLIENT_SECRET", "SALESFORCE_PASSWORD", "SALESFORCE_SECURITY_TOKEN"}
+)
+# A configured connector whose secrets the profile leaves unbound (spike S2b):
+# a valueFrom naming an unbound resource would not fail the deployment, only
+# start the App with that env var unset, so the payload never names one.
+SALESFORCE_UNBOUND_NOTICE = (
+    "Salesforce notice: the connector's inputs are set but MIP_SALESFORCE_BINDINGS is off, so its "
+    "salesforce-* secrets are not bound and delivery reports salesforce_not_configured; set "
+    "MIP_SALESFORCE_BINDINGS=on in the client profile to bind them."
 )
 PREVIOUS_SECRET_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_SECRET_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
@@ -536,7 +548,12 @@ def build_payload(
     salesforce_configured = all(
         _salesforce_input(name, dotenv) for name in SALESFORCE_REQUIRED_VARS
     )
-    if salesforce_configured:
+    # The profile's switch decides whether the App binds the secrets at all
+    # (tools/databricks/app_optional_bindings.py); off is the default.
+    salesforce_bound = salesforce_bindings_on(_env_value(SALESFORCE_BINDINGS_ENV, dotenv))
+    if salesforce_configured and not salesforce_bound:
+        print(SALESFORCE_UNBOUND_NOTICE, file=sys.stderr)
+    if salesforce_configured and salesforce_bound:
         for name in sorted(SALESFORCE_SECRET_ENVS):
             if name == "SALESFORCE_SECURITY_TOKEN" and not _salesforce_input(name, dotenv):
                 continue
