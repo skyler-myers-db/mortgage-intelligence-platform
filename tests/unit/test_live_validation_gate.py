@@ -22,6 +22,7 @@ DEPLOY_PROD = ROOT / ".github" / "workflows" / "deploy-prod.yml"
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 RELEASE = "a" * 40
 OTHER = "b" * 40
+CLIENT = "client-one"
 ALL_GREEN = dict.fromkeys(gate.REQUIRED_JOBS, "success")
 
 
@@ -279,6 +280,7 @@ def _raw(run_id: int, sha: str, conclusion: str | None, age_days: float, **extra
         "html_url": f"https://github.com/o/r/actions/runs/{run_id}",
         "head_branch": extra.get("head_branch", "main"),
         "event": extra.get("event", "workflow_dispatch"),
+        "display_title": extra.get("display_title", f"nightly client={CLIENT} sha={sha}"),
     }
 
 
@@ -415,3 +417,81 @@ def test_the_customer_deploy_and_package_paths_never_call_github() -> None:
         assert "live_validation_gate" not in text and "api.github.com" not in text, rel
     for path in (ROOT / "scripts" / "lib").glob("*.sh"):
         assert "live_validation_gate" not in path.read_text(encoding="utf-8"), path.name
+
+
+# ---------------------------------------------------------- per-client evidence (M1-PR8)
+
+
+def _listing(*entries: dict[str, object]):
+    def fetch(path: str) -> object:
+        if path.startswith("actions/runs/"):
+            return {"jobs": [{"name": name, "conclusion": "success"} for name in gate.REQUIRED_JOBS]}
+        return {"workflow_runs": list(entries)}
+
+    return fetch
+
+
+def _evaluate(*entries: dict[str, object], client: str | None = CLIENT) -> gate.Verdict:
+    return gate.evaluate(RELEASE, fetch=_listing(*entries), now=NOW, diff=same_code(), client=client)
+
+
+def test_the_run_name_shape_is_the_workflows() -> None:
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8"))
+
+    assert workflow["run-name"] == "nightly client=${{ inputs.client }} sha=${{ github.sha }}"
+    rendered = workflow["run-name"].replace("${{ inputs.client }}", CLIENT).replace("${{ github.sha }}", RELEASE)
+    assert gate.Run(1, RELEASE, "success", NOW, "u", rendered).evidence() == (CLIENT, RELEASE)
+
+
+def test_this_clients_green_run_on_its_own_sha_passes() -> None:
+    result = _evaluate(_raw(1, RELEASE, "success", 1))
+
+    assert (result.status, result.client, result.refused) == ("PASS", CLIENT, {})
+    assert f"client: {CLIENT}" in gate.render(result)
+
+
+def test_another_clients_green_run_is_refused_as_cross_client_evidence() -> None:
+    other = _raw(1, RELEASE, "success", 1, display_title=f"nightly client=client-two sha={RELEASE}")
+    result = _evaluate(other)
+
+    assert (result.status, result.reason, result.refused) == ("FAIL", "no_green_run", {"cross_client": 1})
+    assert result.fix == f"dispatch deploy-dev.yml (client={CLIENT}) on {RELEASE}, then nightly.yml (client={CLIENT}) on the same sha"
+    assert "refused evidence: 1 cross-client run(s)" in gate.render(result)
+    # Without --client the same run is evidence: the selection, not the verdict, refused it.
+    assert _evaluate(other, client=None).status == "PASS"
+
+
+def test_a_run_name_naming_another_sha_is_refused_as_cross_sha_evidence() -> None:
+    forged = _raw(1, RELEASE, "success", 1, display_title=f"nightly client={CLIENT} sha={OTHER}")
+
+    for client in (CLIENT, None):
+        result = _evaluate(forged, client=client)
+        assert (result.status, result.reason, result.refused) == ("FAIL", "no_green_run", {"cross_sha": 1})
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["live validation (on demand)", f"nightly client=Client-One sha={RELEASE}", f"nightly client={CLIENT} sha={RELEASE} extra", ""],
+)
+def test_a_run_without_the_per_client_run_name_is_never_evidence(title: str) -> None:
+    result = _evaluate(_raw(1, RELEASE, "success", 1, display_title=title))
+
+    assert (result.status, result.reason, result.refused) == ("FAIL", "no_green_run", {"untitled": 1})
+
+
+def test_another_clients_later_red_run_never_blocks_and_this_clients_does() -> None:
+    mine = _raw(1, RELEASE, "success", 3)
+    theirs = _raw(2, RELEASE, "failure", 1, display_title=f"nightly client=client-two sha={RELEASE}")
+
+    assert _evaluate(mine, theirs).status == "PASS"
+    later = _evaluate(mine, _raw(3, RELEASE, "failure", 1))
+    assert (later.status, later.reason) == ("FAIL", "later_failure")
+
+
+def test_a_malformed_client_key_is_refused_before_any_api_call() -> None:
+    def fetch(path: str) -> object:
+        raise AssertionError("no API call")
+
+    result = gate.evaluate(RELEASE, fetch=fetch, now=NOW, client="Client One")
+
+    assert (result.status, result.exit_code) == ("API_ERROR", 2)

@@ -1,22 +1,33 @@
-"""Contracts for the live-UC validation workflow.
+"""Contracts for nightly.yml, the per-client live validation (M1-PR8).
 
-Live validation is a release-readiness gate over Databricks assets, not a daily
-meter burn. It must be manual-only. It is parked until a client environment is
-selected (M1-PR7): its first job refuses every dispatch, and it runs no bundle
-job, because the only bundle target left is the live install.
+Live validation is a dispatch-only release gate, one client per run. Every job
+that reaches a workspace runs in the client's ``<client>-validate`` GitHub
+Environment, never in ``<client>`` (the deployer's federation subject). The
+validator jobs authenticate as the client's ``<prefix>-validator`` through
+GitHub OIDC; the browser job holds no ID token and calls the App API with
+per-run bearers of the reserved operator identities. No job holds Databricks
+admin power, and the only writes are product rows through the App API.
+
+Most contracts walk the parsed workflow rather than grep its text.
 """
 
 from __future__ import annotations
 
 import re
-import subprocess
-import textwrap
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import yaml
 
+from tools import live_validation_gate as gate
+from tools.clients import validation_profile as vp
+from tools.clients import workflow_contexts as contexts
+
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
+DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
+DEPLOYMENT_DOC = REPO / "docs" / "deployment.md"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
 LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "tests" / "support" / "liveCampaignProof.ts"
 LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "tests" / "support" / "liveCampaignProof.test.ts"
@@ -24,376 +35,512 @@ LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regr
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
 ECONOMICS_SCATTER_SPEC = REPO / "frontend" / "tests" / "e2e" / "economics_scatter.spec.ts"
 
-
-def _workflow_run_block(step_name: str) -> str:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    step = text.index(f"- name: {step_name}")
-    run = text.index("        run: |", step)
-    end = text.find("\n      - name:", run + 1)
-    return textwrap.dedent(text[run + len("        run: |\n") : end if end != -1 else None])
-
-
-def _recorded_mint_environments(
-    tmp_path: Path,
-    *,
-    step_name: str,
-    credentials: dict[str, str],
-) -> list[dict[str, str]]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "mint-env.log"
-    recorder = bin_dir / "python"
-    recorder.write_text(
-        "#!/usr/bin/env bash\n"
-        "{\n"
-        "  echo '=== child ==='\n"
-        "  /usr/bin/env | /usr/bin/sort\n"
-        '} >> "$CHILD_ENV_LOG"\n',
-        encoding="utf-8",
-    )
-    recorder.chmod(0o755)
-    result = subprocess.run(
-        ["bash", "-c", _workflow_run_block(step_name)],
-        cwd=REPO,
-        env={
-            "PATH": f"{bin_dir}:/usr/bin:/bin",
-            "CHILD_ENV_LOG": str(log),
-            **credentials,
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return [
-        dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
-        for block in log.read_text(encoding="utf-8").split("=== child ===\n")
-        if block.strip()
-    ]
-
-
-def test_live_validation_is_manual_only() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    assert "workflow_dispatch:" in text
-    assert "\n  schedule:" not in text
-    assert "cron:" not in text
-
-
-def test_live_validation_triggers_stay_exactly_workflow_dispatch() -> None:
-    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
-    triggers = workflow.get("on", workflow.get(True))
-
-    assert list(triggers) == ["workflow_dispatch"]
-
-
-def test_the_release_gate_jobs_and_git_sha_checks_exist() -> None:
-    """tools/live_validation_gate.py requires these three jobs to succeed, and a
-    green run certifies its own commit only through the two --git-sha checks."""
-
-    from tools import live_validation_gate
-
-    text = NIGHTLY.read_text(encoding="utf-8")
-    workflow = yaml.safe_load(text)
-    names = {job.get("name") for job in workflow["jobs"].values()}
-
-    assert set(live_validation_gate.REQUIRED_JOBS) <= names
-    assert NIGHTLY.name == live_validation_gate.WORKFLOW_FILE
-    assert text.count('--git-sha "$GITHUB_SHA"') == 2
-    assert text.count("python -m tools.verify_deployed_app_contract") >= 2
-    assert "tools/live_validation_gate.py" in text.split("\non:", 1)[0]
-
-
-def test_no_step_addresses_a_bundle_target_or_writes_a_pat_profile() -> None:
-    """M0-PR3: the bundle validate and refresh-job steps, their personal-access-token
-    profile and the CI root-leaf pins left with the CI staging install. The only
-    remaining bundle target is the live install, whose jobs CI must never run;
-    the triggers and both --git-sha checks stay as they were."""
-
-    text = NIGHTLY.read_text(encoding="utf-8")
-    workflow = yaml.safe_load(text)
-
-    assert not re.search(r"\bdatabricks\s+bundle\b", text)
-    assert not re.search(r"(?m)^\s*echo \"token\s*=", text), "no PAT written into a CLI profile"
-    assert ".databrickscfg" not in text
-    assert not [name for name in workflow["env"] if name.startswith("BUNDLE_VAR_bundle_")], "no bundle-root pins"
-    assert list(workflow.get("on", workflow.get(True))) == ["workflow_dispatch"]
-    assert text.count('--git-sha "$GITHUB_SHA"') == 2
-
-
-GUARD_JOB = "parked"
-CATALOG_ENV = ("MIP_DEFAULT_CATALOG", "MIP_LAKEBASE_SYNC_CATALOG", "BUNDLE_VAR_uc_catalog", "BUNDLE_VAR_lakebase_catalog_name")
-# A status check function that lets a job run after a failed need (`!cancelled()` included).
+VALIDATE_ENVIRONMENT = "${{ inputs.client }}-validate"
+# The deployer's federation subject; only a job with no ID token may name it.
+DEPLOY_ENVIRONMENT = "${{ inputs.client }}"
+BROWSER_JOB = "playwright-e2e-live"
+VALIDATOR_JOBS = ("parity-live", "kill-drill-simulated", "genie-fuzz-standard", "genie-fuzz-deep")
+WORKSPACE_JOBS = (*VALIDATOR_JOBS, BROWSER_JOB)
+GUARD_JOBS = ("check-dispatch", "check-validate-environment")
+EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.S)
+CONTEXT_NAME = re.compile(r"\b(secrets|vars)\.([A-Z][A-Z0-9_]*)")
+# A status check function that lets a job run after a failed need.
 STATUS_FUNCTION = re.compile(r"\b(?:always|failure|cancelled)\s*\(")
 
 
-def _needs(job: dict) -> set[str]:
+def _text() -> str:
+    return NIGHTLY.read_text(encoding="utf-8")
+
+
+def _workflow() -> dict[str, Any]:
+    return yaml.safe_load(_text())
+
+
+def _jobs() -> dict[str, dict[str, Any]]:
+    return _workflow()["jobs"]
+
+
+def _step(job: str, name: str) -> dict[str, Any]:
+    (step,) = [step for step in _jobs()[job]["steps"] if step.get("name") == name]
+    return step
+
+
+def _runs(job: str) -> list[tuple[str, str]]:
+    return [(step.get("name", step.get("uses", "")), step.get("run", "")) for step in _jobs()[job]["steps"]]
+
+
+def _index(job: str, needle: str) -> int:
+    """The position of the first step of ``job`` whose name or run holds ``needle``."""
+
+    return next(i for i, (name, run) in enumerate(_runs(job)) if needle in name or needle in run)
+
+
+def _needs(job: dict[str, Any]) -> set[str]:
     needs = job.get("needs") or []
     return {needs} if isinstance(needs, str) else set(needs)
 
 
-def test_every_job_waits_on_the_parked_guard() -> None:
-    """M0-PR3: live validation is parked until M1-PR8 rebuilds it per client environment.
+def _closure(jobs: dict[str, dict[str, Any]], name: str) -> set[str]:
+    direct = _needs(jobs[name])
+    return direct.union(*(_closure(jobs, parent) for parent in direct)) if direct else set()
 
-    The guard job's one step fails, and every other job needs it, directly or
-    transitively, so a dispatch skips every job that reads or writes a
-    workspace. The issue filer does not need it, so a parked dispatch files no
-    failure issue.
+
+def _strings(node: object) -> Iterator[str]:
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield str(key)
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _strings(item)
+
+
+def _context_names(node: object) -> set[tuple[str, str]]:
+    """Every (context, NAME) an expression under ``node`` reads, by value or by presence."""
+
+    found: set[tuple[str, str]] = set()
+    for text in _strings(node):
+        for expression in EXPRESSION.findall(text):
+            found.update(CONTEXT_NAME.findall(expression))
+    return found
+
+
+def _pytest_files() -> dict[str, set[str]]:
+    """job -> every tests/... path a pytest step of that job runs."""
+
+    found: dict[str, set[str]] = {}
+    for name in _jobs():
+        for _step_name, run in _runs(name):
+            if "pytest" in run:
+                found.setdefault(name, set()).update(re.findall(r"tests/integration/[a-z0-9_]+\.py", run))
+    return found
+
+
+# ---------------------------------------------------------------- dispatch, client and sha
+
+
+def test_live_validation_is_dispatch_only_and_names_its_client_and_sha() -> None:
+    workflow = _workflow()
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert list(triggers) == ["workflow_dispatch"]
+    assert "\n  schedule:" not in _text() and "cron:" not in _text()
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"client", "protections_unverified_ack", "run_deep_genie_fuzz"}
+    assert inputs["client"]["required"] is True and inputs["client"]["type"] == "string"
+    # The release gate matches evidence on this run-name (tools/live_validation_gate.RUN_NAME).
+    assert workflow["run-name"] == "nightly client=${{ inputs.client }} sha=${{ github.sha }}"
+    rendered = workflow["run-name"].replace("${{ inputs.client }}", "client-one").replace("${{ github.sha }}", "a" * 40)
+    assert gate.RUN_NAME.fullmatch(rendered)
+
+
+def test_nightly_shares_the_clients_deployment_lane() -> None:
+    """deploy-dev.yml's deploy job holds the same group, so nightly never validates mid-deploy."""
+
+    deploy = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]["deploy"]
+    concurrency = _workflow()["concurrency"]
+
+    assert concurrency["group"] == deploy["concurrency"]["group"] == "mip-client-${{ inputs.client }}"
+    assert concurrency["cancel-in-progress"] is False
+
+
+# ---------------------------------------------------------------- identity and environment
+
+
+def test_only_validator_jobs_hold_an_id_token_and_each_runs_in_the_validate_environment() -> None:
+    """No job can exchange a GitHub ID token for the deployer.
+
+    The deployer's one federation policy trusts exactly ``environment:<client>``.
+    The validator jobs, the only ones with ``id-token: write``, run in
+    ``<client>-validate``; the browser job runs in ``<client>``, where the
+    credential sink writes the operator M2M secrets
+    (tools/databricks/m2m_oauth_github.py refuses a ``-validate``
+    environment), and requests no ID token, so it reaches no identity by OIDC.
     """
 
-    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+    workflow = _workflow()
     jobs = workflow["jobs"]
-    guard = jobs[GUARD_JOB]
 
-    assert list(jobs)[0] == GUARD_JOB, "the first job"
-    (step,) = guard["steps"]
-    assert "::error::live validation is parked until M1-PR8 rebuilds it per client environment." in step["run"]
-    assert step["run"].rstrip().endswith("exit 1")
-    assert not guard.get("needs") and "if" not in guard
-    # A refused guard must fail its job: continue-on-error (job or step) or a
-    # step-level `if` would report success and let every job run past it
-    # (post-W5 review, mutants C5/C6/C9).
-    assert "continue-on-error" not in guard, "a refused guard would pass"
-    assert "continue-on-error" not in step and "if" not in step
-    assert "permissions" not in guard and "environment" not in guard
-
-    def closure(name: str) -> set[str]:
-        direct = _needs(jobs[name])
-        return direct.union(*(closure(parent) for parent in direct)) if direct else set()
-
+    assert workflow["permissions"] == {"contents": "read"}, "no workflow-level ID token"
+    assert {name for name, job in jobs.items() if "environment" in job} == set(WORKSPACE_JOBS)
+    for name in VALIDATOR_JOBS:
+        assert jobs[name]["environment"] == VALIDATE_ENVIRONMENT, name
+    assert jobs[BROWSER_JOB]["environment"] == DEPLOY_ENVIRONMENT
+    with_id_token = {name for name, job in jobs.items() if (job.get("permissions") or {}).get("id-token") == "write"}
+    assert with_id_token == set(VALIDATOR_JOBS)
     for name, job in jobs.items():
-        if name in {GUARD_JOB, "notify-on-failure"}:
+        if job.get("environment") == DEPLOY_ENVIRONMENT:
+            assert job["permissions"] == {"contents": "read"}, f"{name} could become the deployer"
+    sink = (REPO / "tools" / "databricks" / "m2m_oauth_github.py").read_text(encoding="utf-8")
+    assert "never holds an M2M secret" in sink
+    for name, job in jobs.items():
+        if "environment" not in job:
+            assert not [ref for ref in _context_names(job) if ref[0] == "secrets"] or name == "check-dispatch", name
+
+
+def test_no_job_authenticates_as_the_deployer_or_binds_a_deploy_only_name() -> None:
+    """Walks every job: only the validation profile's names are bound, each one by one.
+
+    The deployer's id, any workspace token, the account principal, the agentic
+    identities and every signing key are deploy-only; check-dispatch reads the
+    repository scope by presence only, never a value.
+    """
+
+    allowed = set(vp.KINDS["browser"])
+    text = _text()
+    assert "toJSON(secrets)" not in text and "toJSON(vars)" not in text
+    for name, job in _jobs().items():
+        if name == "check-dispatch":
             continue
-        assert GUARD_JOB in closure(name), name
-        # A job-level status function runs the job after a failed or skipped
-        # need, so `needs` alone would not stop it once the guard refuses
-        # (post-W5 review, mutant N7). Only the issue filer may use one.
-        assert not STATUS_FUNCTION.search(str(job.get("if", ""))), f"{name} runs past a refused guard"
+        names = {context_name for _context, context_name in _context_names(job)}
+        assert names <= allowed, (name, sorted(names - allowed))
+    for forbidden in (
+        "DATABRICKS_TOKEN }}",
+        "MIP_CI_DEPLOYER_CLIENT_ID }}",
+        "DATABRICKS_ACCOUNT_CLIENT_SECRET }}",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET }}",
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET }}",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}",
+    ):
+        assert forbidden not in text, forbidden
+    # No Databricks CLI, no CLI profile with a token, no auth override in a step env.
+    assert "databricks/setup-cli" not in text
+    assert not re.search(r"(?m)^\s+databricks\s", text)
+    assert not re.search(r"(?m)^\s*echo\s+[\"']?token\s*=", text) and "token = " not in text
+    for name in _jobs():
+        for step in _jobs()[name]["steps"]:
+            for variable in ("DATABRICKS_TOKEN", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET", "DATABRICKS_AUTH_TYPE"):
+                assert variable not in (step.get("env") or {}), (name, step.get("name"), variable)
+
+
+def test_each_collect_step_is_the_generated_validation_profile_block() -> None:
+    """Generated by tools/clients/validation_profile.collect_env; the operator secrets never reach a file."""
+
+    validator = vp.collect_env("validator")
+    operators = vp.collect_env("operators")
+    for name in WORKSPACE_JOBS:
+        (collect,) = [step for step in _jobs()[name]["steps"] if "workflow_contexts collect" in step.get("run", "")]
+        assert {key: str(value).split() for key, value in collect["env"].items()} == {
+            key: value.split() for key, value in validator.items()
+        }, name
+    minting = [step for step in _jobs()[BROWSER_JOB]["steps"] if "validation_session operators" in step.get("run", "")]
+    assert len(minting) == 5
+    for step in minting:
+        bound = {key: str(value).split() for key, value in step["env"].items() if key.startswith("MIP_CLIENT_")}
+        assert bound == {key: value.split() for key, value in operators.items()}, step["name"]
+    for name in set(_jobs()) - {"check-dispatch"}:
+        for step in _jobs()[name]["steps"]:
+            if "validation_session operators" not in step.get("run", ""):
+                assert not any(f"secrets.{secret}" in str(step.get("env")) for secret in vp.OPERATOR_SECRETS.values())
+
+
+def test_every_validator_job_proves_the_validator_session_before_any_test() -> None:
+    """tools/clients/validation_session.session refuses a validator in admins, and the deployer."""
+
+    for name in VALIDATOR_JOBS:
+        session = _index(name, "validation_session session")
+        first_test = min(i for i, (_n, run) in enumerate(_runs(name)) if "pytest" in run or "run_drill.sh" in run)
+        assert _index(name, "workflow_contexts collect") < session < first_test, name
+        assert '--environment "$MIP_VALIDATE_ENVIRONMENT"' in _runs(name)[session][1]
+        assert _step(name, _runs(name)[session][0])["env"] == {"MIP_VALIDATE_ENVIRONMENT": VALIDATE_ENVIRONMENT}
+    source = (REPO / "tools" / "clients" / "validation_session.py").read_text(encoding="utf-8")
+    assert '"me_not_in_admins"' in source and '"me_is_the_validator"' in source
+    assert 'f"{role}_not_in_admins"' in source
+
+
+def test_every_workspace_job_refuses_debug_logging_first_and_removes_its_session_files() -> None:
+    for name in WORKSPACE_JOBS:
+        steps = _jobs()[name]["steps"]
+        assert steps[0]["name"] == "Refuse step debug logging" and steps[0]["if"] == "${{ runner.debug == '1' }}"
+        last = steps[-1]
+        assert last["name"] == "Remove the session files" and last["if"] == "always()"
+        assert '"$RUNNER_TEMP/mip-validate-secrets.json"' in last["run"]
+        if name in VALIDATOR_JOBS:
+            assert '"$HOME/.databrickscfg"' in last["run"]
+
+
+# ---------------------------------------------------------------- the dispatch refusals
+
+
+def test_check_dispatch_holds_deploy_devs_refusals() -> None:
+    deploy = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]["check-dispatch"]["steps"]
+    nightly = _jobs()["check-dispatch"]
+
+    assert [step["name"] for step in nightly["steps"]] == [
+        "Refuse step debug logging",
+        "Refuse a malformed client key",
+        "Refuse a profile name set at repository or organization level",
+    ]
+    assert "environment" not in nightly and "permissions" not in nightly and "if" not in nightly
+    assert not any("uses" in step for step in nightly["steps"]), "no checkout"
+    debug, key, scope = nightly["steps"]
+    assert debug["run"] == deploy[0]["run"].replace("deploy-dev.yml", "nightly.yml") and debug["if"] == deploy[0]["if"]
+    for line in deploy[1]["run"].splitlines()[:8]:
+        assert line in key["run"], line
+    assert {name: value.split() for name, value in scope["env"].items()} == {
+        name: value.split() for name, value in contexts.repository_scope_env().items()
+    }
+    assert scope["run"] == deploy[2]["run"]
+
+
+def test_the_validate_environment_is_checked_before_any_job_names_it() -> None:
+    """GitHub creates an unknown environment, unprotected, the first time a job names it."""
+
+    jobs = _jobs()
+    check = jobs["check-validate-environment"]
+
+    assert _needs(check) == {"check-dispatch"} and "environment" not in check
+    assert check["permissions"] == {"contents": "read", "actions": "read"}
+    install, refuse = check["steps"][2:]
+    assert install["run"].split() == "python -m pip install --require-hashes --only-binary=:all: -r requirements-deploy.hashes.txt".split()
+    assert refuse["run"] == 'python -m tools.clients.validation_session check-environment --client "$MIP_DISPATCH_CLIENT"'
+    assert refuse["env"]["MIP_DISPATCH_PROTECTIONS_ACK"] == "${{ inputs.protections_unverified_ack }}"
+    for name in WORKSPACE_JOBS:
+        assert {"check-dispatch", "check-validate-environment"} <= _closure(jobs, name), name
+        assert not STATUS_FUNCTION.search(str(jobs[name].get("if", ""))), f"{name} runs past a refused check"
     notify = jobs["notify-on-failure"]
-    assert GUARD_JOB not in _needs(notify) and GUARD_JOB not in notify["if"]
-    assert _needs(notify) and all(f"needs.{need}.result == 'failure'" in notify["if"] for need in _needs(notify))
-
-    env = workflow["env"]
-    assert env["BUNDLE_VAR_uc_catalog"] == env["MIP_DEFAULT_CATALOG"], "the bundle reads the checked name"
-    assert env["BUNDLE_VAR_lakebase_catalog_name"] == env["MIP_LAKEBASE_SYNC_CATALOG"]
+    assert not set(GUARD_JOBS) & _needs(notify), "a refused dispatch files no issue"
+    assert all(f"needs.{need}.result == 'failure'" in notify["if"] for need in _needs(notify))
 
 
-def test_the_header_says_the_workflow_is_parked_and_what_replaces_it() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    header = " ".join(line.lstrip("# ") for line in text.split("\non:", 1)[0].splitlines())
-    workflow = yaml.safe_load(text)
+# ---------------------------------------------------------------- the browser job
 
-    assert "Parked until M1-PR8 rebuilds it per client environment." in header
-    assert "M1-PR8 rebuilds this workflow per client under a non-admin validator identity." in header
-    assert "tools/live_validation_gate.py" in header
-    assert _needs(workflow["jobs"]["kill-drill-simulated"]) == {GUARD_JOB}
-    assert _needs(workflow["jobs"]["parity-live"]) == {GUARD_JOB}
+
+def test_the_playwright_job_has_no_id_token_and_npm_runs_no_install_script() -> None:
+    jobs = _jobs()
+    browser = jobs[BROWSER_JOB]
+
+    assert browser["permissions"] == {"contents": "read"}
+    npm = [run for _name, run in _runs(BROWSER_JOB) if re.search(r"\bnpm\b", run)]
+    assert npm and all("npm --prefix frontend ci --ignore-scripts" in run for run in npm)
+    assert "npm install" not in _text()
+    for name, job in jobs.items():
+        if name == BROWSER_JOB:
+            continue
+        for step in job["steps"]:
+            assert "setup-node" not in step.get("uses", ""), name
+            assert not re.search(r"\b(?:npm|npx)\b", step.get("run", "")), (name, step.get("name"))
+
+
+def test_the_browser_job_mints_reserved_operator_bearers_before_any_app_call() -> None:
+    mint = _index(BROWSER_JOB, "Mint per-run App bearers for the reserved operator identities")
+    for needle in (
+        "Recover abandoned live campaign fixtures",
+        "Authenticated non-admin smoke (M2M)",
+        "App API workflow contracts",
+        "Run real-UC Playwright specs",
+    ):
+        assert mint < _index(BROWSER_JOB, needle), needle
+    assert _step(BROWSER_JOB, "Mint per-run App bearers for the reserved operator identities")["run"].endswith('--github-env "$GITHUB_ENV"')
+    assert set(vp.OPERATOR_SECRETS) == {"normal", "operator2", "admin"}
 
 
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
-    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
-
-    assert int(workflow["jobs"]["playwright-e2e-live"]["timeout-minutes"]) >= 90
-
-
-def test_live_validation_proves_source_bound_app_before_expensive_mutations() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    resolve_pos = text.index("- name: Resolve source-bound Gateway runtime contract")
-    app_proof_pos = text.index(
-        "- name: Fail fast unless the exact app commit and Gateway binding are deployed"
-    )
-    grant_pos = text.index("- name: Reconcile delayed AI Gateway inference-table grants")
-    exact_proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
-
-    assert resolve_pos < app_proof_pos < grant_pos < exact_proof_pos
-    app_proof_block = text[app_proof_pos:grant_pos]
-    assert "python -m tools.verify_deployed_app_contract" in app_proof_block
-    assert '--git-sha "$GITHUB_SHA"' in app_proof_block
-    assert "MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" in app_proof_block
-    assert '--rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"' in app_proof_block
-
-
-def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    assert "secrets.MIP_AI_GATEWAY_ENDPOINT" not in text
-    assert "secrets.MIP_AI_GATEWAY_INFERENCE_TABLE" not in text
-    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in text
-    assert (
-        "MIP_AI_GATEWAY_PROOF_VERIFY_KEY: " "${{ vars.MIP_AI_GATEWAY_PROOF_VERIFY_KEY }}"
-    ) in text
-    assert text.count("vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") == 2
-    assert text.count("-m tools.databricks.export_gateway_runtime_contract") == 2
-
-
-def test_live_validation_gateway_proof_uses_only_verifier_derived_auth() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    start = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
-    end = text.index("\n      - name:", start + 1)
-    block = text[start:end]
-
-    assert block.count("--require-verifier-derived-auth") == 2
-    assert block.count('--warehouse-id "$DATABRICKS_WAREHOUSE_ID"') == 2
-    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
-    assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
-    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
-    assert block.count('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"') == 2
-    assert block.count('--lakebase-database "$LAKEBASE_DATABASE"') == 2
-
-
-def test_simulated_drills_never_receive_static_lakebase_secrets() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    start = text.index("\n  kill-drill-simulated:")
-    end = text.index("\n  kill-drill-real-infra:", start)
-    block = text[start:end]
-
-    for name in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD"):
-        assert f"secrets.{name}" not in block
-    assert "LAKEBASE_HOST=invalid.host.example.com" in block
-    assert "LAKEBASE_USER=mip-simulated-drill" in block
-    assert "LAKEBASE_PASSWORD=drill-invalid-password" in block
-
-
-def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    job_pos = text.index("\n  playwright-e2e-live:")
-    next_job_pos = text.index("\n  kill-drill-simulated:", job_pos + 1)
-    job = text[job_pos:next_job_pos]
-
-    resolve_pos = job.index("- name: Resolve source-bound Gateway runtime contract")
-    mint_pos = job.index("- name: Mint per-run Playwright Bearer tokens")
-    recheck_pos = job.index(
-        "- name: Recheck deployed commit and Gateway binding with the browser identity"
-    )
-    mutations_pos = job.index("- name: Low-volume deployed workflow contracts")
-
-    assert resolve_pos < mint_pos < recheck_pos < mutations_pos
-    recheck_block = job[recheck_pos:mutations_pos]
-    assert "python -m tools.verify_deployed_app_contract" in recheck_block
-    assert "--token-env MIP_NON_ADMIN_BEARER_TOKEN" in recheck_block
-    assert '--git-sha "$GITHUB_SHA"' in recheck_block
-    assert '--rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"' in recheck_block
-    assert "DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}" in recheck_block
-    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in recheck_block
+    assert int(_jobs()[BROWSER_JOB]["timeout-minutes"]) >= 90
 
 
 def test_live_browser_smoke_never_logs_untrusted_response_bodies() -> None:
-    block = _workflow_run_block("Authenticated non-admin smoke (M2M)")
+    block = _step(BROWSER_JOB, "Authenticated non-admin smoke (M2M)")["run"]
 
-    assert "body=" not in block
-    assert "session!r" not in block
-
-
-def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    prepare_pos = text.index("- name: Prepare bundle sync inputs")
-    export_pos = text.index("- name: Export live Databricks test env")
-    block = text[prepare_pos:export_pos]
-
-    assert "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1" in block
-    assert 'python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"' in block
+    assert "body=" not in block and "session!r" not in block
+    assert '"operator_b": os.environ["MIP_OPERATOR2_BEARER_TOKEN"]' in block
 
 
-def test_live_validation_uses_the_same_optional_gateway_resource_families() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
+# ---------------------------------------------------------------- what nightly may write
 
-    assert "MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}" in text
-    for name in (
-        "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY",
-        "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE",
-        "MIP_AI_GATEWAY_TABLE_PREFIX",
+
+APP_API_SUITES = (
+    "tests/integration/test_campaign_audit_workflow_live.py",
+    "tests/integration/test_lakebase_idempotency_live.py",
+    "tests/integration/test_lakebase_concurrency_live.py",
+    "tests/integration/test_two_operator_recovery_live.py",
+)
+
+
+def test_no_job_mutates_lakebase_delta_or_grants_directly() -> None:
+    """The only writes are product rows through the App API; the App SP performs every transaction."""
+
+    # Every key and value of the parsed workflow: what runs, never a comment
+    # (check-dispatch reads the repository scope by presence only).
+    text = "\n".join(_strings({name: job for name, job in _jobs().items() if name != "check-dispatch"}))
+    for forbidden in (
+        "secrets.LAKEBASE",
+        "verify_ai_gateway_exact_proof",
+        "grant_ai_gateway_inference_table",
+        "cleanup_lifecycle_replay_scratch",
+        "cleanup_campaign_treatment_scratch",
+        "MIP_LIVE_SCRATCH_SUFFIX",
+        "test_lifecycle_delta_replay_live",
+        "test_campaign_treatment_at_cap_live",
+        "test_lineage_manifest_live",
+        "run_agent_eval",
+        "tools.databricks.",
+        "psql",
+        "--target warehouse-real",
+        "--target lakebase-real",
     ):
-        assert f"{name}: ${{{{ vars.{name} }}}}" in text
+        assert forbidden not in text, forbidden
+    mutation = _step(BROWSER_JOB, "App API workflow contracts")
+    assert mutation["env"] == {"MIP_LIVE_MUTATION_OK": "1"}
+    assert [step for job in _jobs().values() for step in job["steps"] if "MIP_LIVE_MUTATION_OK" in str(step)] == [mutation]
+    assert set(re.findall(r"tests/integration/[a-z0-9_]+\.py", mutation["run"])) == set(APP_API_SUITES)
+    for suite in APP_API_SUITES:
+        source = (REPO / suite).read_text(encoding="utf-8")
+        assert "MIP_APP_URL" in source, suite
+        for direct in ("psycopg", "LAKEBASE_HOST", "LAKEBASE_PASSWORD", "generate_database_credential"):
+            assert direct not in source, (suite, direct)
+    # Its one warehouse reader inspects the audit snapshot, beyond the validator's reads.
+    assert "--deselect tests/integration/test_lakebase_idempotency_live.py::test_live_saved_holdout_and_household_dedup_exclude_non_treatment_borrowers" in mutation["run"]
 
 
-def test_live_validation_mints_admin_token_for_every_admin_proof() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
+def test_the_lakebase_read_path_is_ddl_free_and_precedes_the_app_api_writes() -> None:
+    jobs = _jobs()
 
-    assert "skip_admin_degraded_proof:" not in text
-    assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in text
-    assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
-    assert "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
-    assert "DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}" in text
-    assert (
-        "DATABRICKS_OPERATOR2_CLIENT_SECRET: " "${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}"
-    ) in text
-    assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in text
-    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
-    assert "DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in text
-    assert "Operator A, operator B, admin, and verifier M2M client IDs must be distinct" in text
-    assert "campaign-audit" in text
-    assert "Growth Agent audit" in text
-    assert "exit 1" in text
+    read = _step("parity-live", "Lakebase post-activation read path")
+    assert read["run"] == "pytest -q tests/integration/test_lakebase_round_trip.py"
+    assert "parity-live" in _closure(jobs, BROWSER_JOB)
+    files = _pytest_files()
+    assert "tests/integration/test_lakebase_round_trip.py" in files["parity-live"]
+    assert not set(APP_API_SUITES) & (set().union(*files.values()) - files[BROWSER_JOB])
 
 
-def test_segment_intersection_parity_inherits_fail_fast_live_credentials() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
+def test_simulated_drills_never_receive_static_lakebase_secrets() -> None:
+    job = _jobs()["kill-drill-simulated"]
+    export = _step("kill-drill-simulated", "Export simulated drill env")["run"]
 
-    export_pos = text.index("- name: Export live Databricks test env")
-    next_step_pos = text.index("\n      - name:", export_pos + 1)
-    export_block = text[export_pos:next_step_pos]
-    intersection_pos = text.index(
-        "pytest tests/integration/test_segment_intersection_parity.py -q --tb=short"
+    assert not [ref for ref in _context_names(job) if ref[1].startswith("LAKEBASE")]
+    for line in ("LAKEBASE_HOST=invalid.host.example.com", "LAKEBASE_USER=mip-simulated-drill", "LAKEBASE_PASSWORD=drill-invalid-password"):
+        assert line in export
+    targets = re.findall(r"--target ([a-z-]+)", " ".join(run for _n, run in _runs("kill-drill-simulated")))
+    assert targets == ["genie", "token", "warehouse-sim", "lakebase-sim"]
+
+
+def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation() -> None:
+    marker = _step(BROWSER_JOB, "Derive governed live campaign run marker")["run"]
+    assert 'str.maketrans("0123456789", "abcdefghij")' in marker and "MIP_LIVE_CAMPAIGN_RUN_MARKER=" in marker
+
+    recovery = _index(BROWSER_JOB, "Recover abandoned live campaign fixtures")
+    assert _index(BROWSER_JOB, "Mint per-run App bearers") < recovery < _index(BROWSER_JOB, "Authenticated non-admin smoke")
+    assert "--all-run-markers" in _runs(BROWSER_JOB)[recovery][1]
+    mutation = _step(BROWSER_JOB, "App API workflow contracts")["run"]
+    assert mutation.index("--all-run-markers") < mutation.index("pytest -q")
+
+    archive = _step(BROWSER_JOB, "Always archive run-marked live campaign fixtures")
+    assert archive["if"] == "always()"
+    assert "validation_session operators" in archive["run"] and "--github-env" not in archive["run"]
+    assert archive["run"].split(" -- ", 1)[1].split() == (
+        'python -m tools.cleanup_live_campaign_fixtures --run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"'.split()
     )
+    reconcile = _step(BROWSER_JOB, "Always reconcile live browser campaign fixtures")
+    assert reconcile["if"] == "always()" and reconcile["run"].endswith("--all-run-markers")
+    assert _index(BROWSER_JOB, "Run real-UC Playwright specs") < _index(BROWSER_JOB, "Always reconcile live browser")
 
-    for secret in (
-        "DATABRICKS_HOST",
-        "DATABRICKS_TOKEN",
-        "DATABRICKS_WAREHOUSE_ID",
-        "GENIE_SPACE_ID",
-    ):
-        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in export_block
-        assert secret in export_block
-    assert "Missing required secrets" in export_block
-    assert "exit 1" in export_block
-    assert export_pos < intersection_pos
+
+# ---------------------------------------------------------------- the release gate and the header
+
+
+def test_the_release_gate_jobs_and_git_sha_checks_exist() -> None:
+    """tools/live_validation_gate.py needs these three jobs green; the two app-sha checks certify the commit."""
+
+    names = {job.get("name") for job in _jobs().values()}
+    assert set(gate.REQUIRED_JOBS) <= names
+    assert NIGHTLY.name == gate.WORKFLOW_FILE
+    checks = [
+        (job, run)
+        for job in _jobs()
+        for _name, run in _runs(job)
+        if run.startswith("python -m tools.clients.validation_session app-sha")
+    ]
+    assert checks == [
+        ("parity-live", 'python -m tools.clients.validation_session app-sha --token-env MIP_BEARER_TOKEN --git-sha "$GITHUB_SHA"'),
+        (BROWSER_JOB, 'python -m tools.clients.validation_session app-sha --token-env MIP_NON_ADMIN_BEARER_TOKEN --git-sha "$GITHUB_SHA"'),
+    ]
+    assert _index("parity-live", "app-sha") < _index("parity-live", "test_sql_python_parity")
+    assert _index(BROWSER_JOB, "app-sha") < _index(BROWSER_JOB, "App API workflow contracts")
+
+
+def _header() -> str:
+    return " ".join(line.lstrip("# ") for line in _text().split("\non:", 1)[0].splitlines())
+
+
+def test_the_header_states_the_corrected_authority() -> None:
+    header = _header()
+
+    assert "nightly holds no Databricks admin power and writes only product rows through the App API" in header
+    assert "tools/live_validation_gate.py --client <key>" in header
+    assert "read-only" not in header and "Parked" not in header and "admin PAT" not in header
+
+
+# Each protection that left nightly with its home on main. A home is the
+# step file that runs it under the deployer in scripts/deploy.sh.
+HOMES = {
+    "tools.databricks.grant_ai_gateway_inference_table": "deploy_step_agentic_cutover.sh",
+    "tools.databricks.verify_ai_gateway_exact_proof": "deploy_step_agentic_cutover.sh",
+    "tools.databricks.verify_verifier_identity_boundary": "deploy_verifier_gateway_lifecycle.sh",
+    "tools.databricks.run_agent_eval": "deploy_step_agent_eval_and_smoke.sh",
+    "reconcile_reviewed_function_execute_grants": "deploy_governed_phases_lifecycle.sh",
+}
+# Each one with no home yet: never silently dropped, listed in docs/deployment.md.
+GAPS = (
+    "tests/integration/test_lifecycle_delta_replay_live.py",
+    "tests/integration/test_campaign_treatment_at_cap_live.py",
+    "tests/integration/test_lineage_manifest_live.py",
+    "test_live_saved_holdout_and_household_dedup_exclude_non_treatment_borrowers",
+    "--target warehouse-real",
+    "--target lakebase-real",
+)
+
+
+def test_each_protection_that_left_nightly_has_a_home_or_a_listed_gap() -> None:
+    text = _text()
+    for command, home in HOMES.items():
+        assert command not in text, command
+        assert command in (REPO / "scripts" / "lib" / home).read_text(encoding="utf-8"), (command, home)
+    doc = DEPLOYMENT_DOC.read_text(encoding="utf-8")
+    section = doc[doc.index("## Live validation per client") :]
+    section = section[: section.find("\n## ", 1)]
+    for gap in GAPS:
+        assert gap in section, gap
+    for command, home in HOMES.items():
+        assert command in section and home in section, command
+
+
+# ---------------------------------------------------------------- the live browser suites
 
 
 def test_live_playwright_executes_live_hardening_and_excludes_mocked_console() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    console_text = CONSOLE_LAYOUT_SPEC.read_text(encoding="utf-8")
+    run = _step(BROWSER_JOB, "Run real-UC Playwright specs")["run"]
 
-    job_pos = text.index("\n  playwright-e2e-live:")
-    next_job_pos = text.index("\n  kill-drill-simulated:", job_pos + 1)
-    job_block = text[job_pos:next_job_pos]
-    run_pos = job_block.index("- name: Run real-UC Playwright specs")
-    next_step_pos = job_block.index("\n      - name:", run_pos + 1)
-    run_block = job_block[run_pos:next_step_pos]
-    run_commands = "\n".join(
-        line for line in run_block.splitlines() if not line.lstrip().startswith("#")
-    )
-
-    assert "E2E_LIVE: '1'" in job_block
-    assert "tests/e2e/live_hardening_regressions.spec.ts" in run_block
-    assert "tests/e2e/layout-stability.spec.ts" in run_block
-    assert "tests/e2e/console-layout.spec.ts" not in run_block
-    assert "--list" not in run_commands
-    assert "E2E_LAYOUT_MOCK" not in run_block
-    assert "page.route('**/api/**'" in console_text
+    assert _jobs()[BROWSER_JOB]["env"]["E2E_LIVE"] == "1"
+    assert "tests/e2e/live_hardening_regressions.spec.ts" in run and "tests/e2e/layout-stability.spec.ts" in run
+    assert "tests/e2e/console-layout.spec.ts" not in run and "--list" not in run and "E2E_LAYOUT_MOCK" not in run
+    assert "page.route('**/api/**'" in CONSOLE_LAYOUT_SPEC.read_text(encoding="utf-8")
 
 
-def test_mocked_economics_canary_is_explicitly_separate_from_real_uc_proof() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
+def test_mocked_canaries_are_explicitly_separate_from_real_uc_proof() -> None:
+    real = _step(BROWSER_JOB, "Run real-UC Playwright specs")
+    scatter = _step(BROWSER_JOB, "Run mocked economics scatter response-shape canary")
+    layout = _step(BROWSER_JOB, "Run mocked Genie proof layout canary")
     spec = ECONOMICS_SCATTER_SPEC.read_text(encoding="utf-8")
-    real_block = _workflow_run_block("Run real-UC Playwright specs")
-    mocked_block = _workflow_run_block("Run mocked economics scatter response-shape canary")
 
-    assert "ECONOMICS_SCATTER_MOCKED" not in real_block
-    assert "ECONOMICS_SCATTER_MOCKED: '1'" in text
-    assert "--grep '^mocked response-shape canary:'" in mocked_block
-    assert "test.skip(" in spec
-    assert "!MOCKED_POINTS_CANARY" in spec
+    assert "env" not in real and scatter["env"] == {"ECONOMICS_SCATTER_MOCKED": "1"}
+    assert layout["env"] == {"GENIE_PROOF_LAYOUT_MOCKED": "1"}
+    assert "--grep '^mocked response-shape canary:'" in scatter["run"]
+    assert "test.skip(" in spec and "!MOCKED_POINTS_CANARY" in spec
+
+
+def test_live_failure_artifacts_stay_off_unless_an_operator_enables_them() -> None:
+    uploads = [step for job in _jobs().values() for step in job["steps"] if "upload-artifact" in step.get("uses", "")]
+
+    assert uploads and all("env.E2E_LIVE_FAILURE_ARTIFACTS == '1'" in step["if"] for step in uploads)
 
 
 def test_real_genie_browser_proof_executes_bound_native_follow_up() -> None:
     spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
 
-    # The interactive surfaces ask through the async lifecycle, so the POST
-    # that carries {question, conversation_id} is `/genie/message/submit`, not
-    # the retired blocking `/genie/message`. The proof still has to read that
-    # request body and bind it to the first native conversation.
     assert "genie/message/submit" in spec
     assert "submit.request().postDataJSON()" in spec
     assert "followUpRequest.conversation_id" in spec
@@ -405,403 +552,79 @@ def test_live_genie_campaign_action_archives_the_exact_created_campaign() -> Non
     spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
     proof = LIVE_CAMPAIGN_PROOF.read_text(encoding="utf-8")
     proof_test = LIVE_CAMPAIGN_PROOF_TEST.read_text(encoding="utf-8")
-    action_pos = spec.index(
-        "ask-genie: dynamic chart, proof drawer, and governed action confirmation"
-    )
-    next_test_pos = spec.index("\n  test(", action_pos + 1)
-    action_block = spec[action_pos:next_test_pos]
+    action_pos = spec.index("ask-genie: dynamic chart, proof drawer, and governed action confirmation")
+    action_block = spec[action_pos : spec.index("\n  test(", action_pos + 1)]
 
-    assert "export async function archiveLiveCampaign" in proof
-    assert "export async function reconcileGenieCampaignAction" in proof
-    assert "Authorization: `Bearer ${options.adminBearer}`" in proof
-    assert "expected_status: currentStatus" in proof
-    assert "final GET ${confirmed.status()}" in proof
-    assert "assertExpectedNameAfterCleanup" in proof
-    assert "const actionRequest = page.waitForRequest" in action_block
-    assert "LIVE_CAMPAIGN_RUN_MARKER" in action_block
-    assert "submittedRequest.postDataJSON()" in action_block
-    assert "typeof actionPayload.campaign_id === 'string'" in action_block
-    assert "finally" in action_block
-    assert "reconcileGenieCampaignAction(page.request, {" in action_block
-    assert "archiveLiveCampaign(page.request, {" in action_block
-    assert "expectedName: `Genie strategy draft ${LIVE_CAMPAIGN_RUN_MARKER}`" in action_block
+    for needle in (
+        "export async function archiveLiveCampaign",
+        "export async function reconcileGenieCampaignAction",
+        "Authorization: `Bearer ${options.adminBearer}`",
+        "expected_status: currentStatus",
+        "final GET ${confirmed.status()}",
+        "assertExpectedNameAfterCleanup",
+    ):
+        assert needle in proof, needle
+    for needle in (
+        "const actionRequest = page.waitForRequest",
+        "LIVE_CAMPAIGN_RUN_MARKER",
+        "submittedRequest.postDataJSON()",
+        "typeof actionPayload.campaign_id === 'string'",
+        "finally",
+        "reconcileGenieCampaignAction(page.request, {",
+        "archiveLiveCampaign(page.request, {",
+        "expectedName: `Genie strategy draft ${LIVE_CAMPAIGN_RUN_MARKER}`",
+    ):
+        assert needle in action_block, needle
     assert "AUTH_HEADERS['X-MIP-Live-Campaign-Run-Marker']" in spec
-    assert "response lost" in proof_test
-    assert "response(503" in proof_test
-    assert "truncated response" in proof_test
-    assert "campaign marker was not persisted" in proof_test
-
-
-def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    resolve_pos = text.index("- name: Resolve deployed app URL")
-    bearer_pos = text.index("- name: Mint per-run Playwright Bearer tokens")
-    run_pos = text.index("- name: Run real-UC Playwright specs")
-    resolve_block = text[resolve_pos:bearer_pos]
-    bearer_block = text[bearer_pos:run_pos]
-
-    assert "Missing DATABRICKS_HOST or DATABRICKS_TOKEN" in resolve_block
-    assert "exit 1" in resolve_block
-    assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in bearer_block
-    assert "DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET" in bearer_block
-    assert "DATABRICKS_VERIFIER_CLIENT_ID" in bearer_block
-    for left, right in (
-        ("DATABRICKS_CLIENT_ID", "DATABRICKS_OPERATOR2_CLIENT_ID"),
-        ("DATABRICKS_CLIENT_ID", "DATABRICKS_ADMIN_CLIENT_ID"),
-        ("DATABRICKS_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
-        ("DATABRICKS_OPERATOR2_CLIENT_ID", "DATABRICKS_ADMIN_CLIENT_ID"),
-        ("DATABRICKS_OPERATOR2_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
-        ("DATABRICKS_ADMIN_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
-    ):
-        assert f'[ "${left}" = "${right}" ]' in bearer_block
-    assert "Missing required M2M OAuth secret(s)" in bearer_block
-    assert "--github-env MIP_BEARER_TOKEN" in bearer_block
-    assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in bearer_block
-    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in bearer_block
-    assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in bearer_block
-    assert "exit 1" in bearer_block
-    assert "continue-on-error" not in resolve_block
-    assert "continue-on-error" not in bearer_block
-    assert resolve_pos < bearer_pos < run_pos
-
-
-def test_live_playwright_mint_children_receive_only_the_selected_identity() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    start = text.index("- name: Mint per-run Playwright Bearer tokens")
-    end = text.index("\n      - name:", start + 1)
-    block = text[start:end]
-    function = block[
-        block.index("mint_m2m_token()") : block.index(
-            "          }", block.index("mint_m2m_token()")
-        )
-        + 11
-    ]
-
-    assert "export -n DATABRICKS_TOKEN" in function
-    for secret in (
-        "DATABRICKS_CLIENT_SECRET",
-        "DATABRICKS_OPERATOR2_CLIENT_SECRET",
-        "DATABRICKS_ADMIN_CLIENT_SECRET",
-        "DATABRICKS_VERIFIER_CLIENT_SECRET",
-    ):
-        assert secret in function
-    assert 'export DATABRICKS_CLIENT_ID="$client_id"' in function
-    assert 'export DATABRICKS_CLIENT_SECRET="$client_secret"' in function
-    assert 'python tools/oauth_m2m_mint.py "$@"' in function
-    assert "--client-secret-env" not in block
-
-
-def test_live_playwright_mint_subshells_enforce_identity_isolation(tmp_path: Path) -> None:
-    credentials = {
-        "DATABRICKS_HOST": "https://workspace.example",
-        "DATABRICKS_TOKEN": "deployer-pat",
-        "DATABRICKS_CLIENT_ID": "operator-a",
-        "DATABRICKS_CLIENT_SECRET": "operator-a-secret",
-        "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
-        "DATABRICKS_OPERATOR2_CLIENT_SECRET": "operator-b-secret",
-        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
-        "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret",
-        "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
-        "DATABRICKS_VERIFIER_CLIENT_SECRET": "verifier-secret",
-    }
-    children = _recorded_mint_environments(
-        tmp_path,
-        step_name="Mint per-run Playwright Bearer tokens",
-        credentials=credentials,
-    )
-
-    assert len(children) == 4
-    expected = (
-        ("operator-a", "operator-a-secret"),
-        ("operator-b", "operator-b-secret"),
-        ("admin", "admin-secret"),
-        ("verifier", "verifier-secret"),
-    )
-    for child, (client_id, secret) in zip(children, expected, strict=True):
-        assert child["DATABRICKS_CLIENT_ID"] == client_id
-        assert child["DATABRICKS_CLIENT_SECRET"] == secret
-        assert child["DATABRICKS_HOST"] == credentials["DATABRICKS_HOST"]
-        assert "DATABRICKS_TOKEN" not in child
-        for role_name in ("OPERATOR2", "ADMIN", "VERIFIER"):
-            assert f"DATABRICKS_{role_name}_CLIENT_ID" not in child
-            assert f"DATABRICKS_{role_name}_CLIENT_SECRET" not in child
-
-
-def test_agent_eval_remint_children_receive_only_the_selected_identity() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    start = text.index("- name: Remint per-run Bearers immediately before Agent Evaluation")
-    end = text.index("\n      - name:", start + 1)
-    block = text[start:end]
-
-    assert "mint_m2m_token()" in block
-    assert "export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in block
-    assert "export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in block
-    assert 'export DATABRICKS_CLIENT_ID="$client_id"' in block
-    assert 'export DATABRICKS_CLIENT_SECRET="$client_secret"' in block
-    assert 'python tools/oauth_m2m_mint.py "$@"' in block
-    assert "--client-secret-env" not in block
-
-
-def test_agent_eval_remint_subshells_enforce_identity_isolation(tmp_path: Path) -> None:
-    credentials = {
-        "DATABRICKS_HOST": "https://workspace.example",
-        "DATABRICKS_CLIENT_ID": "operator-a",
-        "DATABRICKS_CLIENT_SECRET": "operator-a-secret",
-        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
-        "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret",
-    }
-    children = _recorded_mint_environments(
-        tmp_path,
-        step_name="Remint per-run Bearers immediately before Agent Evaluation",
-        credentials=credentials,
-    )
-
-    assert len(children) == 2
-    assert children[0]["DATABRICKS_CLIENT_ID"] == "operator-a"
-    assert children[0]["DATABRICKS_CLIENT_SECRET"] == "operator-a-secret"
-    assert children[1]["DATABRICKS_CLIENT_ID"] == "admin"
-    assert children[1]["DATABRICKS_CLIENT_SECRET"] == "admin-secret"
-    for child in children:
-        assert "DATABRICKS_ADMIN_CLIENT_ID" not in child
-        assert "DATABRICKS_ADMIN_CLIENT_SECRET" not in child
-
-
-def test_live_gate_runs_two_operator_recovery_contract() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    assert "tests/integration/test_lakebase_concurrency_live.py" in text
-    assert "tests/integration/test_two_operator_recovery_live.py" in text
-    assert "tests/integration/test_lifecycle_delta_replay_live.py" in text
-    assert "tests/integration/test_campaign_treatment_at_cap_live.py" in text
-    assert '"operator_b": os.environ["MIP_OPERATOR2_BEARER_TOKEN"]' in text
-
-
-def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    step_pos = text.index("- name: Low-volume deployed workflow contracts")
-    next_step_pos = text.index("\n      - name:", step_pos + 1)
-    block = text[step_pos:next_step_pos]
-
-    assert "MIP_LIVE_MUTATION_OK: '1'" in block
-    assert "DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}" in block
-    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in block
-    assert "DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}" in block
-    assert "tests/integration/test_lifecycle_delta_replay_live.py" in block
-    assert "tests/integration/test_campaign_treatment_at_cap_live.py" in block
-    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in block
-    assert (
-        "MIP_LIFECYCLE_REPLAY_REVIEW_SHA256: "
-        "${{ vars.MIP_LIFECYCLE_REPLAY_REVIEW_SHA256 }}" in text
-    )
-    assert "tools.databricks.cleanup_lifecycle_replay_scratch" in block
-    assert "tools.databricks.cleanup_campaign_treatment_scratch" in block
-    assert "--stale-older-than-hours 2" in block
-
-    lifecycle_cleanup_pos = text.index(
-        "- name: Always clean deterministic lifecycle replay scratch tables"
-    )
-    lifecycle_cleanup_next = text.index("\n      - name:", lifecycle_cleanup_pos + 1)
-    lifecycle_cleanup_block = text[lifecycle_cleanup_pos:lifecycle_cleanup_next]
-    assert "if: always()" in lifecycle_cleanup_block
-    assert "tools.databricks.cleanup_lifecycle_replay_scratch" in lifecycle_cleanup_block
-    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in lifecycle_cleanup_block
-
-    cleanup_pos = text.index("- name: Always clean deterministic treatment scratch table")
-    cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
-    cleanup_block = text[cleanup_pos:cleanup_next]
-    assert "if: always()" in cleanup_block
-    assert "tools.databricks.cleanup_campaign_treatment_scratch" in cleanup_block
-    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in cleanup_block
-
-
-def test_nightly_binds_live_reviewed_function_owner_variable() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    assert "MIP_REVIEWED_FUNCTION_OWNER: ${{ vars.MIP_REVIEWED_FUNCTION_OWNER }}" in text
-    resolve_pos = text.index("- name: Resolve source-bound Gateway runtime contract")
-    export_pos = text.index(
-        "python -m tools.databricks.export_gateway_runtime_contract",
-        resolve_pos,
-    )
-    assert resolve_pos < export_pos
-
-
-def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    workflow = yaml.safe_load(text)
-
-    assert workflow["concurrency"]["group"] == "mip-dev-live-state"
-    marker_block = _workflow_run_block("Derive governed live campaign run marker")
-    assert 'str.maketrans("0123456789", "abcdefghij")' in marker_block
-    assert "MIP_LIVE_CAMPAIGN_RUN_MARKER=" in marker_block
-
-    mutation_block = _workflow_run_block("Low-volume deployed workflow contracts")
-    assert "tools.cleanup_live_campaign_fixtures" in mutation_block
-    assert "--all-run-markers" in mutation_block
-    assert mutation_block.index("--all-run-markers") < mutation_block.index("pytest -q")
-
-    mint_pos = text.index("- name: Mint per-run Playwright Bearer tokens")
-    recovery_pos = text.index("- name: Recover abandoned live campaign fixtures")
-    smoke_pos = text.index("- name: Authenticated non-admin smoke (M2M)")
-    recovery_block = _workflow_run_block("Recover abandoned live campaign fixtures")
-    assert mint_pos < recovery_pos < smoke_pos
-    assert "tools.cleanup_live_campaign_fixtures" in recovery_block
-    assert "--all-run-markers" in recovery_block
-
-    cleanup_pos = text.index("- name: Always archive run-marked live campaign fixtures")
-    cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
-    cleanup_block = text[cleanup_pos:cleanup_next]
-    assert "if: always()" in cleanup_block
-    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in cleanup_block
-    assert (
-        "DATABRICKS_ADMIN_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"
-    ) in cleanup_block
-    assert cleanup_block.count("tools/oauth_m2m_mint.py") == 2
-    assert "tools.cleanup_live_campaign_fixtures" in cleanup_block
-    assert '--run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"' in cleanup_block
-    assert "unset MIP_CLEANUP_OWNER_BEARER_TOKEN" in cleanup_block
-
-    browser_pos = text.index("- name: Run real-UC Playwright specs")
-    browser_cleanup_pos = text.index("- name: Always reconcile live browser campaign fixtures")
-    browser_cleanup_next = text.index("\n      - name:", browser_cleanup_pos + 1)
-    browser_cleanup = text[browser_cleanup_pos:browser_cleanup_next]
-    assert browser_pos < browser_cleanup_pos
-    assert "if: always()" in browser_cleanup
-    assert browser_cleanup.count("tools/oauth_m2m_mint.py") == 2
-    assert "--all-run-markers" in browser_cleanup
-
-
-def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-
-    remint_pos = text.index("- name: Remint per-run Bearers immediately before Agent Evaluation")
-    eval_pos = text.index("- name: Growth Agent evaluation with admin identity proof")
-    next_step_pos = text.index("\n      - name:", eval_pos + 1)
-    remint_block = text[remint_pos:eval_pos]
-    eval_block = text[eval_pos:next_step_pos]
-
-    assert "--github-env MIP_BEARER_TOKEN" in remint_block
-    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in remint_block
-    assert "DATABRICKS_ADMIN_CLIENT_ID" in remint_block
-    assert "Per-run admin M2M bearer was not minted" in eval_block
-    assert "exit 1" in eval_block
-    assert "python -m tools.databricks.run_agent_eval" in eval_block
-    assert "MIP_ADMIN_BEARER_TOKEN" in eval_block
-    assert '--token "$MIP_BEARER_TOKEN"' not in eval_block
-    assert '--admin-token "$MIP_ADMIN_BEARER_TOKEN"' not in eval_block
-    assert '--admin-token "$MIP_BEARER_TOKEN"' not in eval_block
-    assert remint_pos < eval_pos
-
-
-def test_ai_gateway_proof_uses_dedicated_verifier_m2m_identity() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
-    next_step_pos = text.index("\n      - name:", proof_pos + 1)
-    proof_block = text[proof_pos:next_step_pos]
-
-    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in proof_block
-    assert "unset DATABRICKS_TOKEN" in proof_block
-    assert "secrets.DATABRICKS_VERIFIER_CLIENT_ID" in proof_block
-    assert "secrets.DATABRICKS_VERIFIER_CLIENT_SECRET" in proof_block
-    assert "secrets.DATABRICKS_ADMIN_CLIENT_ID" not in proof_block
-    assert "dedicated AI Gateway verifier" in proof_block
-
-
-def test_verifier_boundary_uses_its_own_identity_and_precedes_exact_proof() -> None:
-    text = NIGHTLY.read_text(encoding="utf-8")
-    boundary_pos = text.index("- name: Prove the verifier's effective authorization boundary")
-    proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
-    block = text[boundary_pos:proof_pos]
-
-    assert boundary_pos < proof_pos
-    assert "-m tools.databricks.verify_verifier_identity_boundary" in block
-    assert "DATABRICKS_AUTH_TYPE: pat" in block
-    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in block
-    assert (
-        "DATABRICKS_VERIFIER_CLIENT_ID: "
-        "${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
-    )
-    assert (
-        "DATABRICKS_VERIFIER_CLIENT_SECRET: "
-        "${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
-    )
-    assert "DATABRICKS_CLIENT_ID:" not in block
-    assert "DATABRICKS_CLIENT_SECRET:" not in block
-    assert (
-        '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in block
-    )
-    assert '--expected-application-id "$DATABRICKS_CLIENT_ID"' not in block
-    assert "secrets.DATABRICKS_ACCOUNT_ID" in block
-    assert "unset DATABRICKS_TOKEN" not in block
-    assert "--protected-service-principal-id" in block
-    assert "--forbidden-relation" not in block
-    assert "--obsolete-endpoint" not in block
-    assert "--allow-attested-app-401" in block
-    assert "Missing required verifier-boundary input" in block
+    for needle in ("response lost", "response(503", "truncated response", "campaign marker was not persisted"):
+        assert needle in proof_test, needle
 
 
 def test_native_genie_browser_gate_requires_live_governed_turn_and_visible_trust() -> None:
     text = REAL_DATA_SPEC.read_text(encoding="utf-8")
-
-    native_pos = text.index(
-        "ask-genie: native Conversation API turn renders governed proof and feedback"
-    )
-    next_test_pos = text.index("\n  test(", native_pos + 1)
-    native_block = text[native_pos:next_test_pos]
+    native_pos = text.index("ask-genie: native Conversation API turn renders governed proof and feedback")
+    native_block = text[native_pos : text.index("\n  test(", native_pos + 1)]
     helper_pos = text.index("async function expectLiveGenieUi")
-    helper_end = text.index("\n}\n\ntype MapDrillTarget", helper_pos) + 2
-    helper_block = text[helper_pos:helper_end]
+    helper_block = text[helper_pos : text.index("\n}\n\ntype MapDrillTarget", helper_pos) + 2]
     turn_helper_block = text[text.index("function expectLiveGenieTurn") : helper_pos]
 
-    assert "NATIVE_GENIE_CONVERSATION_QUESTION" in native_block
-    assert "expect(payload.source" in native_block
-    assert ").toBe('genie')" in native_block
-    assert "expectLiveGenieTurn(payload" in native_block
-    assert "conversation_id" in turn_helper_block
-    assert "genie_status" in turn_helper_block
-    assert "toBe('COMPLETED')" in turn_helper_block
-    assert "genie-feedback-up" in helper_block
-    assert "genie-feedback-down" in helper_block
-    assert "Answer source: Databricks Genie Conversation API" in helper_block
-    assert "Public Preview reasoning returned by the API must render" in helper_block
-    assert "completed native turn must expose public API reasoning summaries" in turn_helper_block
-    assert "completed native turn must expose follow-up suggestions" in turn_helper_block
-    assert "proof must preserve the same public reasoning summaries" in turn_helper_block
-    assert "API follow-up suggestions must render as actions" in helper_block
+    for needle in ("NATIVE_GENIE_CONVERSATION_QUESTION", "expect(payload.source", ").toBe('genie')", "expectLiveGenieTurn(payload"):
+        assert needle in native_block, needle
+    for needle in (
+        "conversation_id",
+        "genie_status",
+        "toBe('COMPLETED')",
+        "completed native turn must expose public API reasoning summaries",
+        "completed native turn must expose follow-up suggestions",
+        "proof must preserve the same public reasoning summaries",
+    ):
+        assert needle in turn_helper_block, needle
+    for needle in (
+        "genie-feedback-up",
+        "genie-feedback-down",
+        "Answer source: Databricks Genie Conversation API",
+        "Public Preview reasoning returned by the API must render",
+        "API follow-up suggestions must render as actions",
+    ):
+        assert needle in helper_block, needle
     assert "test.skip(" not in native_block
 
 
 def test_deterministic_genie_has_no_native_reasoning_or_follow_ups() -> None:
     text = REAL_DATA_SPEC.read_text(encoding="utf-8")
-
     canonical_pos = text.index("genie FAB returns a non-empty answer and source chip opens lineage")
-    next_test_pos = text.index("\n  test(", canonical_pos + 1)
-    canonical_block = text[canonical_pos:next_test_pos]
+    canonical_block = text[canonical_pos : text.index("\n  test(", canonical_pos + 1)]
 
     assert ").toBe('trusted_sql')" in canonical_block
-    # A recognized-shape turn is recomputed deterministically but leads with
-    # the live turn's narrative, so it legitimately carries that turn's real
-    # reasoning trace and follow-ups (backend `_adapt_genie_response`). The
-    # rule the proof must still pin is anti-fabrication: Genie-authored fields
-    # only ever appear when a live turn actually produced them.
+    # Genie-authored fields only ever appear when a live turn produced them.
     assert "canonicalPayload.genie_status && canonicalPayload.message_id" in canonical_block
-    assert (
-        "a deterministic answer with no live turn must not expose reasoning summaries"
-        in canonical_block
-    )
-    assert (
-        "a deterministic answer with no live turn must not fabricate proof reasoning"
-        in canonical_block
-    )
-    assert (
-        "a deterministic answer with no live turn must not claim Genie follow-ups"
-        in canonical_block
-    )
-    assert (
-        "a deterministic answer with no live turn must not render a reasoning disclosure"
-        in canonical_block
-    )
+    for needle in (
+        "a deterministic answer with no live turn must not expose reasoning summaries",
+        "a deterministic answer with no live turn must not fabricate proof reasoning",
+        "a deterministic answer with no live turn must not claim Genie follow-ups",
+        "a deterministic answer with no live turn must not render a reasoning disclosure",
+    ):
+        assert needle in canonical_block, needle
     assert "test.skip(" not in canonical_block
 
 
@@ -809,32 +632,38 @@ def test_live_browser_specs_pin_campaign_role_segment_and_catalog_proofs() -> No
     real_data = REAL_DATA_SPEC.read_text(encoding="utf-8")
     hardening = LIVE_HARDENING_SPEC.read_text(encoding="utf-8")
 
-    assert "/api/v1/admin/capabilities?live=1" in real_data
-    assert (
-        "a claimable Supervisor capability must produce the AI campaign recommendation" in real_data
-    )
-    assert "recommendation.performance_status" in real_data
-    assert "campaign response must carry governed evidence" in real_data
-    assert "clicking a lineage asset must open its exact Catalog Explorer destination" in real_data
-
-    role_pos = hardening.index(
-        "admin and non-admin identities enforce navigation and activity boundaries"
-    )
-    next_test_pos = hardening.index("\ntest(", role_pos + 1)
-    role_block = hardening[role_pos:next_test_pos]
-    assert "/api/session" in role_block
-    assert "/api/audit/my-events?limit=8" in role_block
-    assert "/api/audit/events?limit=1" in role_block
-    assert "non-admin global activity lookup must fail closed" in role_block
-    assert "admin global activity lookup" in role_block
-    assert "toHaveURL(/\\/admin-config$/)" in role_block
+    for needle in (
+        "/api/v1/admin/capabilities?live=1",
+        "a claimable Supervisor capability must produce the AI campaign recommendation",
+        "recommendation.performance_status",
+        "campaign response must carry governed evidence",
+        "clicking a lineage asset must open its exact Catalog Explorer destination",
+    ):
+        assert needle in real_data, needle
+    role_pos = hardening.index("admin and non-admin identities enforce navigation and activity boundaries")
+    role_block = hardening[role_pos : hardening.index("\ntest(", role_pos + 1)]
+    for needle in (
+        "/api/session",
+        "/api/audit/my-events?limit=8",
+        "/api/audit/events?limit=1",
+        "non-admin global activity lookup must fail closed",
+        "admin global activity lookup",
+        "toHaveURL(/\\/admin-config$/)",
+    ):
+        assert needle in role_block, needle
     assert "test.skip(" not in role_block
+    segment_pos = hardening.index("segment any/all API counts are de-duplicated and intersection-safe")
+    segment_block = hardening[segment_pos : hardening.index("\ntest(", segment_pos + 1)]
+    for needle in ("itm + equity - allMode", "new Set(borrowerIds).size", "live proof requires a nonempty ITM/equity intersection"):
+        assert needle in segment_block, needle
 
-    segment_pos = hardening.index(
-        "segment any/all API counts are de-duplicated and intersection-safe"
-    )
-    next_test_pos = hardening.index("\ntest(", segment_pos + 1)
-    segment_block = hardening[segment_pos:next_test_pos]
-    assert "itm + equity - allMode" in segment_block
-    assert "new Set(borrowerIds).size" in segment_block
-    assert "live proof requires a nonempty ITM/equity intersection" in segment_block
+
+def test_the_failure_issue_names_the_client_and_never_a_refused_dispatch() -> None:
+    notify = _jobs()["notify-on-failure"]
+
+    assert _needs(notify) == {"parity-live", BROWSER_JOB, "kill-drill-simulated", "genie-fuzz-standard"}
+    assert notify["permissions"] == {"contents": "read", "issues": "write"}
+    (step,) = notify["steps"]
+    assert step["env"] == {"MIP_DISPATCH_CLIENT": "${{ inputs.client }}"}
+    assert "live validation (${client})" in step["with"]["script"]
+    assert "environment" not in notify

@@ -29,13 +29,14 @@ def test_nightly_documents_public_api_write_read_proof_after_read_probe() -> Non
     text = NIGHTLY.read_text(encoding="utf-8")
 
     read_pos = text.index("- name: Lakebase post-activation read path")
-    mutation_pos = text.index("- name: Low-volume deployed workflow contracts")
+    mutation_pos = text.index("- name: App API workflow contracts")
     campaign_pos = text.index(
         "tests/integration/test_campaign_audit_workflow_live.py",
         mutation_pos,
     )
     assert read_pos < mutation_pos < campaign_pos
-    assert "service principal performs the underlying database transaction" in text
+    # M1-PR8: the read path (parity-live) runs before the browser job's App API writes.
+    assert "the App\n        # service principal performs every Lakebase transaction" in text
 
 
 def test_post_activation_probe_accepts_actor_audit_page_contract(

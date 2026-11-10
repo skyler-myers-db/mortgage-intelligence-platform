@@ -6,7 +6,7 @@ This repo runs five workflows:
 |---|---|---|
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`deps-report.yml`](deps-report.yml) | `schedule` (Mondays 13:17 UTC) + `workflow_dispatch` | **GITHUB_TOKEN only:** contents and actions read in `report`, issues write in `publish`. Edits one `dependency-report` issue in place; never pushes, opens no branch or pull request. |
-| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | **Parked:** its first job refuses every dispatch until M1-PR8 rebuilds it per client environment. Otherwise required — see below. |
+| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | **One client per dispatch (M1-PR8):** the validator jobs run in `<client>-validate` with GitHub OIDC (`id-token: write`) for the client's non-admin validator service principal, which has no stored credential; the browser job runs in `<client>` with no ID token and calls the App API with per-run bearers of the reserved operator identities. No job authenticates as the deployer or holds Databricks admin power. |
 | [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` only | **One client environment per dispatch (M1-PR7):** the `build` job holds no ID token; the `deploy` job runs in the client's GitHub Environment with GitHub OIDC (`id-token: write`) for the client's deployer service principal, which has no stored credential, and reads the whole client profile from that environment's variables and secrets. |
 | [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **GITHUB_TOKEN (actions: read) only, for the live-validation age check. Non-deploying scaffold gate only.** |
 
@@ -16,10 +16,12 @@ fixtures that explicitly install in-process repositories where needed.
 No real workspace is touched.
 
 **`deploy-dev.yml` deploys one client environment per dispatch (M1-PR7);
-`nightly.yml` stays parked.** `nightly.yml` addressed the CI staging install,
-whose workspace was deleted on 2026-10-29: its first job, `parked`, refuses
-every dispatch until M1-PR8 rebuilds it per client under a non-admin
-validator identity. `deploy-dev.yml` takes `client` (the client's GitHub
+`nightly.yml` validates one client per dispatch (M1-PR8).** `nightly.yml`
+takes `client`, names its run `nightly client=<client> sha=<sha>` (the
+release gate's `--client` evidence), and reads only the client's
+environments; docs/deployment.md, "Live validation per client", holds its
+jobs, identities, the protections that moved to `scripts/deploy.sh` and the
+owner actions. `deploy-dev.yml` takes `client` (the client's GitHub
 Environment) and `phase` (`plan`, `release`, `data`, `adopt` or `unadopt`);
 docs/deployment.md, "CI deploy (deploy-dev.yml): one client environment per
 dispatch", holds its jobs, its preflight and every variable and secret a
@@ -99,12 +101,14 @@ succeeded. A FAIL names the fix: dispatch `deploy-dev.yml` on that commit
 `deploy-dev.yml` reads none of the repository-level names below: since M1-PR7
 it reads its client's environment only, and no repository- or
 organization-level secret or variable may carry a client profile field name
-(GitHub would merge it into the environment's contexts). The table is the
-parked `nightly.yml`'s until M1-PR8.
+(GitHub would merge it into the environment's contexts). Since M1-PR8
+`nightly.yml` reads none of them either: it reads the client's environments
+only, and its `check-dispatch` refuses a repository-level profile name the
+same way.
 
-The table lists what the parked `nightly.yml` names under **Settings →
-Secrets and variables → Actions → Repository secrets**; nothing reads them
-while it is parked. Each row that is a profile field or alias name
+The table lists what the retired, parked `nightly.yml` named under
+**Settings → Secrets and variables → Actions → Repository secrets**; nothing
+reads them now. Each row that is a profile field or alias name
 (`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_HOST`, every
 `*_CLIENT_ID` and `*_CLIENT_SECRET`,
 `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
@@ -148,7 +152,7 @@ any historical `MIP_AI_GATEWAY_ENDPOINT` or
 `MIP_AI_GATEWAY_INFERENCE_TABLE` repository secrets; the workflow deliberately
 does not consume them.
 
-## Repository variables (the parked nightly.yml)
+## Repository variables (the retired, parked nightly.yml)
 
 `deploy-dev.yml` reads none of these. It reads only its client environment's
 own variables and secrets, each profile name bound one by one
@@ -161,15 +165,15 @@ the environment omits. So each profile name in the table below, and every
 repository-level secret above that is a profile field or alias
 (`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, the client ids and secrets and
 the signing keys), is deleted before the first per-client dispatch;
-the parked `nightly.yml` that names them is rebuilt per client by M1-PR8.
+`nightly.yml`, rebuilt per client by M1-PR8, reads none of them.
 
 `MIP_ADMIN_EMAILS`, `MIP_ADMIN_GROUP_NAME` and `MIP_APPROVER_GROUP_NAME` are
 identifying profile fields: a client environment holds them as **secrets**,
 never as variables at any scope (a variable prints in clear in a public run
 log).
 
-The "Defaults to" values below are `nightly.yml`'s fallbacks, which are the
-live install's names. `deploy-dev.yml` has no fallback: every install name is
+The "Defaults to" values below were the parked `nightly.yml`'s fallbacks,
+which are the live install's names; the rebuilt workflow has none. `deploy-dev.yml` has no fallback: every install name is
 a variable of the client's environment (M1-PR7). Its deployer is the profile's
 `MIP_IDENTITY_IDS_JSON.deployer` (a secret), federated with subject
 `repo:<owner>/<repo>:environment:<client>`.
@@ -187,7 +191,7 @@ a variable of the client's environment (M1-PR7). Its deployer is the profile's
 | `MIP_GENIE_SPACE_NAME` | Human-readable governed Genie space title. | Defaults to `Mortgage Lead Intelligence`; use an environment-qualified title when several spaces share an account. |
 | `MIP_RUNTIME_SECRET_SCOPE` | Databricks secret scope for App runtime bindings. | Defaults to `mip-runtime`; isolate it per deployment. |
 | `MIP_APP_ROLLBACK_SECRET_SCOPE` | Databricks secret scope for signed last-good App state. | Defaults to `mip-app-rollback`; isolate it per deployment. |
-| `MIP_REVIEWED_FUNCTION_OWNER` | Exact owner returned unanimously by the live reviewed UC function inventory. | Set only from the deployed catalog after the deployer's authenticated owner capture succeeds. Nightly pins this value and rejects owner drift. |
+| `MIP_REVIEWED_FUNCTION_OWNER` | Exact owner returned unanimously by the live reviewed UC function inventory. | Set only from the deployed catalog after the deployer's authenticated owner capture succeeds. The deploy's agentic tier reads it; `nightly.yml` no longer does (M1-PR8). |
 | `MIP_LIFECYCLE_REPLAY_REVIEW_SHA256` | SHA-256 of the committed canonical lifecycle replay MERGE sequence. | Regenerate `docs/validation/lifecycle-replay-sql-2026-07-29.json` with `python -m tests.integration.test_lifecycle_delta_replay_live --catalog <catalog> --out <artifact>` and update this variable only after independent governance review. Before any Delta DDL, the live test validates the artifact's self-digest and requires both runtime SQL and this variable to equal that committed review. |
 
 Optional non-secret Gateway family variables are `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`
@@ -206,9 +210,9 @@ deploy and nightly jobs export and verify them from live immutable resources.
 |---|---|---|
 | `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `MIP_APP_NAME` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
 
-`nightly.yml` still reads the historical `LAKEBASE_DATABASE` secret as a
-temporary compatibility fallback, but new installations should use the
-non-secret repository/environment variable above. The app and live tests use
+`nightly.yml` reads neither `MIP_APP_URL` nor the historical
+`LAKEBASE_DATABASE` secret since M1-PR8: the App's URL comes from the App
+itself, and the App resolves Lakebase. The app and live tests use
 workspace-identity Lakebase credentials, not static database passwords.
 
 ## No-secret jobs (run on every PR)

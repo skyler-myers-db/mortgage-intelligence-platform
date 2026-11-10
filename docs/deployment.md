@@ -974,7 +974,8 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
    resource uses the bundle's own warehouse.
    `deploy-dev.yml` runs one client environment's phase per manual dispatch
-   (M1-PR7), and `nightly.yml` stays parked until M1-PR8. The command of
+   (M1-PR7), and `nightly.yml` validates one client per dispatch (M1-PR8,
+   "Live validation per client"). The command of
    record is `./scripts/deploy.sh -t client`, which `deploy-dev.yml` runs.
    Before the first deployment into an isolated workspace, run:
 
@@ -1061,7 +1062,8 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
 - Locally they are local deploy controls in `.env.local`. They are client
   profile fields: public, so in CI they are variables of the client's GitHub
   Environment, which `deploy-dev.yml` reads whole through the
-  resolve-client-profile action (M1-PR7); `nightly.yml` stays parked.
+  resolve-client-profile action (M1-PR7); `nightly.yml` reads none of them
+  (M1-PR8).
 - The App reads the same three names as settings
   (`backend/config/cotality_source_settings.py`), canonical when unset, with
   the same refusals. `app_deploy_payload.py` sends a name to the App only when
@@ -4255,6 +4257,114 @@ keys, and the profile digest `MIP_CLIENT_PROFILE_SHA256`. It uses the same
 plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
 [docs/clients/github-environment.md](clients/github-environment.md).
 
+## Live validation per client
+
+`nightly.yml` (`live validation (on demand)`) validates one client per
+manual dispatch (M1-PR8): `gh workflow run nightly.yml --ref main -f
+client=<client>`. Its run-name is `nightly client=<client> sha=<sha>`, and
+`python -m tools.live_validation_gate --client <client>` accepts only a
+green run whose run-name names that client and the run's own head sha: a
+run of another client (cross-client) or naming another sha (cross-sha) is
+refused, and so is a run from before M1-PR8 (no such run-name). Without
+`--client` (as `deploy-prod.yml` and `tools/release_readiness.py` call it
+today) any client's titled run counts. It is never scheduled.
+
+**Identities.** No job authenticates as the deployer, holds a workspace
+PAT, or holds Databricks admin power, and the only writes are product rows
+through the App API: campaigns, approvals and their audit rows under a
+per-run marker, archived at the end, with the App's service principal
+performing every Lakebase transaction.
+
+| Job | Environment | ID token | Identity |
+|---|---|---|---|
+| `check-dispatch` | none | no | none: refuses step debug logging, a malformed client key and any profile name set at repository or organization level, exactly as `deploy-dev.yml` does |
+| `check-validate-environment` | none | no | `GITHUB_TOKEN` (`actions: read`): `<client>` and `<client>-validate` must exist with their review mode's protections before any job names them |
+| `parity-live`, `kill-drill-simulated`, `genie-fuzz-standard`, `genie-fuzz-deep` | `<client>-validate` | yes | the client's `<prefix>-validator`, through GitHub OIDC with the subject `repo:<org>/<repo>:environment:<client>-validate`; `python -m tools.clients.validation_session session` refuses it in `admins` (`me_not_in_admins`) or as any other identity (`me_is_the_validator`) before any test |
+| `playwright-e2e-live` | `<client>` | no | per-run App bearers of the reserved operator identities `normal`, `operator2` and `admin` (the App's admin role, a workspace USER), minted from their M2M secrets; each bearer must be its role's identity and not in `admins` (`<role>_bearer_is_its_identity`, `<role>_not_in_admins`) |
+
+The browser job runs in `<client>` because the credential sink writes the
+operator M2M secrets there only (tools/databricks/m2m_oauth_github.py
+refuses a `-validate` environment); it requests no ID token, so the
+deployer's federation subject `environment:<client>` is unreachable. The
+secrets are bound only in the steps that mint
+(`tools/clients/validation_profile.collect_env("operators")`), never written
+to disk and never in an npm or Playwright step; npm runs as `npm ci
+--ignore-scripts` in this job only. Each job reads its names one by one
+(`tools/clients/validation_profile.py`): `MIP_CLIENT`, `MIP_APP_NAME` and
+`MIP_DEFAULT_CATALOG` (variables), `DATABRICKS_HOST` and
+`MIP_IDENTITY_IDS_JSON` (secrets), and in the minting steps
+`DATABRICKS_CLIENT_SECRET`, `DATABRICKS_OPERATOR2_CLIENT_SECRET` and
+`DATABRICKS_ADMIN_CLIENT_SECRET`. The App's URL, SQL warehouse and Genie
+space come from the App itself (`apps.get`), never from a stored id. When
+`GITHUB_TOKEN` cannot read an environment's protections (spike S8(a)), the
+dispatch input `protections_unverified_ack` must hold, for each unreadable
+environment, the exact ack the refusal prints (the `protections_unverified`
+digest over the client, that environment and the run's sha).
+
+**What left nightly, and its home.** Each runs under the deployer in
+`./scripts/deploy.sh`:
+
+| Protection | Home (`scripts/lib/`) |
+|---|---|
+| `tools.databricks.grant_ai_gateway_inference_table` (the delayed inference-table grants) | `deploy_step_agentic_cutover.sh` (release phase, agentic tier) |
+| `tools.databricks.verify_ai_gateway_exact_proof` (the exact proof ledger, a direct Lakebase write) | `deploy_step_agentic_cutover.sh` (release phase, agentic tier) |
+| `tools.databricks.verify_verifier_identity_boundary` | `deploy_verifier_gateway_lifecycle.sh` (release phase, agentic tier) |
+| `tools.databricks.run_agent_eval` (the Growth Agent evaluation) | `deploy_step_agent_eval_and_smoke.sh` (release phase, agentic tier) |
+| `reconcile_reviewed_function_execute_grants` (grant reconciliation) | `deploy_governed_phases_lifecycle.sh` (data phase, after every gold-touching job) |
+
+The silver, gold and FRED refresh runs and the bundle validate left before
+M1-PR8 (M0-PR3); the data phase runs the refreshes.
+
+**Gaps: no home yet.** These need more than the validator's reads or the
+App API, so nightly no longer runs them, and nothing else does yet. Until a
+reviewed home exists they are an operator's to run by hand against a
+non-live install, never the live one:
+
+- `tests/integration/test_lifecycle_delta_replay_live.py` and
+  `tests/integration/test_campaign_treatment_at_cap_live.py` create, merge
+  into and drop scratch Delta tables in the governed `audit` schema;
+- `tests/integration/test_lineage_manifest_live.py` reads
+  `system.access.table_lineage`;
+- `test_live_saved_holdout_and_household_dedup_exclude_non_treatment_borrowers`
+  (in `test_lakebase_idempotency_live.py`, deselected) reads the
+  `audit.campaign_treatment_snapshot` table;
+- the real-infra kill drills, `tools/kill_drill/run_drill.sh` with
+  `--target warehouse-real` and `--target lakebase-real`, stop and start the
+  warehouse and the Lakebase instance (CAN_MANAGE).
+
+**Owner actions before the first dispatch (spike S8(c)).**
+
+1. Create the `<prefix>-validator` service principal with
+   `python -m tools.clients.bootstrap_account` (no secret, USER assignment,
+   never in `admins` or the data-owners group) and its one federation policy
+   with the subject `repo:<org>/<repo>:environment:<client>-validate`.
+2. Create `<client>-validate` with the review mode's protections
+   (`python -m tools.clients.github_environment --apply` creates both
+   environments) and fill it with the five names above: `MIP_CLIENT`,
+   `MIP_APP_NAME` and `MIP_DEFAULT_CATALOG` as variables, `DATABRICKS_HOST`
+   and `MIP_IDENTITY_IDS_JSON` as secrets, the same values `<client>` holds.
+   It holds no M2M secret. The tool fills `<client>` only today, so this
+   step is by hand until it fills the validation subset too.
+3. Grant the validator read-only access, nothing more: CAN_USE on the App
+   and on its SQL warehouse; CAN_RUN on the governed Genie space; USE
+   CATALOG, USE SCHEMA and SELECT on the schemas the parity suites read
+   (`gold`, the metric views, `silver`, `raw` and `audit`, and the raw
+   Cotality source through its owner); EXECUTE on the scoring functions they
+   call (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`,
+   `fn_rate_spread`, `fn_estimated_upb`, `fn_bounded_mortgage_rate`). Never
+   MODIFY, MANAGE, ALL PRIVILEGES or CAN_MANAGE. The plan's "SELECT on gold
+   and metric views" undercounts what the parity suites read.
+4. The spike: a second environment-subject federation policy works for the
+   validator; CAN_USE lets the validator, and the normal operator, read the
+   App's URL and resources; and the read grants survive the deploy's
+   reconciliations (the reviewed-function EXECUTE verify covers
+   `fn_build_cohort`, `fn_segment_counts` and `fn_lead_queue_url` only, and
+   the Genie space ACL checks).
+
+A dispatch before these exist refuses in `check-validate-environment` (no
+environment) or in the validator session (no validation profile, no
+federation policy), before any test.
+
 ## Jobs identity and pinned job parameters (M2-PR5)
 
 The App holds `CAN_MANAGE_RUN` on four bundle jobs (`mip_sync_lifecycle_state`,
@@ -4400,8 +4510,8 @@ whole client profile (public fields as variables, identifying and secret
 fields as secrets; tools/clients/schema.py), and `phase` is the
 `scripts/deploy.sh --phase` the run executes. Nothing client-specific lives in
 the workflow, and only a manual `workflow_dispatch` reaches it. `nightly.yml`
-stays parked until M1-PR8 rebuilds it per client under a non-admin validator
-identity. M1-PR2 replaced the bundle's `dev` and `prod` targets with the one
+validates one client per dispatch under a non-admin validator identity
+(M1-PR8, "Live validation per client"). M1-PR2 replaced the bundle's `dev` and `prod` targets with the one
 host-less `client` target, rooted at the client profile's deployer and client
 key.
 
@@ -4822,7 +4932,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `origin`, or of the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
    names are fixed per role (`IDENTITY_DEFAULTS`). Before M2-PR2 they were
    repository-level, and in this repository they belong to the CI install:
-   the parked `nightly.yml` reads them; `deploy-dev.yml` reads none, and its
+   the parked `nightly.yml` read them until M1-PR8 (it now reads the three
+   operator secrets from the client's environment only); `deploy-dev.yml`
+   reads none, and its
    `check-dispatch` refuses every dispatch while one is set (owner step 3). A
    live identity bootstrap therefore needs its own reviewed sink: another
    repository named by `MIP_M2M_GITHUB_REPOSITORY`, plus a reviewed way to
@@ -4858,8 +4970,7 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    filled from them
    (tools/clients/environment.py, "Scope precondition"). `check-dispatch`
    refuses every dispatch until they are gone and names each one it finds;
-   the parked `nightly.yml` that still reads some of them waits for M1-PR8
-   anyway. Delete the retired `dev` environment's variables too: no dispatch
+   `nightly.yml`'s `check-dispatch` refuses them the same way (M1-PR8). Delete the retired `dev` environment's variables too: no dispatch
    may name it, and its identifying values must not stay variables. The old
    environment-level `DATABRICKS_CLIENT_ID` (2026-07-20) and the
    repository-level pairs (2026-07-26) are such entries: the client ids now
@@ -4877,34 +4988,23 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    A first install's bootstrap warehouse (`DATABRICKS_WAREHOUSE_ID`) is no
    client profile field, so `deploy-dev.yml` carries none and a first install
    through CI refuses at the preflight until that field exists (a follow-up).
-   (`GENIE_SPACE_ID` is no deploy input since M1-PR3; `nightly.yml` still
-   names it for its live checks.)
-5. Set no repository-level profile name for `nightly.yml` while
-   `deploy-dev.yml` is in use. Every profile name lives in the client's
-   environment only (`gh variable set --env <client>` for a public field,
-   `gh secret set --env <client>` for an identifying or secret one, as in
-   step 3). `nightly.yml` has no `environment:` and reads repository-level
-   names, but the ones it reads that are profile fields or aliases
-   (`MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
-   `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
-   `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_AGENT_PROXY_SECRET_SCOPE`,
-   `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX`,
-   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`, `LAKEBASE_DATABASE`, the secrets
-   `DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_HOST`, `DATABRICKS_ACCOUNT_ID`,
-   `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`,
-   `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, every `*_CLIENT_SECRET`, and
-   every `*_CLIENT_ID` identity alias) make `check-dispatch` refuse every
-   dispatch (step 3). `nightly.yml` is parked until M1-PR8, which rebuilds
-   it per client environment with its own validator identity and federation
-   subject; its repository-level names wait for that PR. Its other names
-   (such as `DATABRICKS_WAREHOUSE_ID`, `GENIE_SPACE_ID` and
-   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`) are no profile names and are not
-   refused, but nothing reads them while it is parked. The repository-level
+   (`GENIE_SPACE_ID` is no deploy input since M1-PR3; since M1-PR8
+   `nightly.yml` reads the App's Genie space from the App itself.)
+5. Set no repository-level profile name. Every profile name lives in the
+   client's environments only (`gh variable set --env <client>` for a public
+   field, `gh secret set --env <client>` for an identifying or secret one, as
+   in step 3). Since M1-PR8 `nightly.yml` reads the client's `<client>` and
+   `<client>-validate` environments only ("Live validation per client"), and
+   its `check-dispatch` refuses a repository- or organization-level profile
+   name exactly as `deploy-dev.yml`'s does. The names the parked workflow
+   read that are no profile names (such as `DATABRICKS_WAREHOUSE_ID`,
+   `GENIE_SPACE_ID`, `MIP_APP_URL` and `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`)
+   are read by nothing now; delete them. The repository-level
    `DATABRICKS_TOKEN` is dead with the deleted CI workspace; do not mint
    another one. After the first green `deploy-dev.yml` run, set the
    repository variable `MIP_REVIEWED_FUNCTION_OWNER` (no profile name) to
-   `<deployer-application-id>`, the reviewed functions' new owner, or the
-   rebuilt nightly reports owner drift.
+   `<deployer-application-id>`, the reviewed functions' new owner (the
+   deploy's agentic tier reads it; `nightly.yml` no longer does).
 6. The AI Gateway proof-key registry (the proof-key rotation in "Per-run M2M
    identities"). The registry (`app_deployment_lease_support.key_registry`)
    is `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` (comma-separated, oldest
@@ -4990,9 +5090,10 @@ hold for it, never against the live install.
 
 4. After the owner's dispatch and approval (owner step 8), watch
    `deploy-dev.yml` to green.
-5. Dispatch `nightly.yml` on the same sha and watch it. It needs M1-PR8
-   first: until then its `parked` job refuses, and its repository-level
-   names stay unset (owner step 5).
+5. Dispatch `nightly.yml` with `client=<client>` on the same sha and watch
+   it. It needs the validator's owner actions first ("Live validation per
+   client"); until then `check-validate-environment` or the validator session
+   refuses, before any test.
 6. Repair stale `frontend/tests/e2e/real_data.spec.ts` assertions in a PR if
    it is red, then repeat 4-5; record the green run URL in the audit
    report; re-dispatch `deploy-prod.yml` and expect PASS.
