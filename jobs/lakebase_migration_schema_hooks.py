@@ -18,6 +18,7 @@ from jobs.lakebase_migration_contracts import (
     _SAFE_SCHEMA_HOOK_PG_CATALOG_ROUTINES,
     _SQL_FUNCTION_CALL_RE,
     _SQL_STRING_LITERAL_RE,
+    _managed_event_trigger_drift,
     _ManagedEventTriggerContractRow,
 )
 
@@ -789,23 +790,20 @@ def _postflight_event_trigger_inventory(
 
     expected_names = set(_MANAGED_EVENT_TRIGGER_CONTRACT)
     actual_names = set(actual)
-    drifted = sorted(
-        name
-        for name in expected_names & actual_names
-        if actual[name] != _MANAGED_EVENT_TRIGGER_CONTRACT[name]
-    )
+    # One reviewed provider revision in full (_MANAGED_EVENT_TRIGGER_VARIANTS).
+    drifted, mixed = _managed_event_trigger_drift(actual)
     forbidden_acls = sorted(
         name
         for name in expected_names & actual_names
         if actual_acls[name] not in _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS
     )
-    if expected_names != actual_names or duplicate_names or drifted or forbidden_acls:
+    if expected_names != actual_names or duplicate_names or drifted or mixed or forbidden_acls:
         raise RuntimeError(
             f"Lakebase {principal_label} global event-trigger inventory mismatch: "
             f"missing={sorted(expected_names - actual_names)}, "
             f"unexpected={sorted(actual_names - expected_names)}, "
             f"duplicates={sorted(duplicate_names)}, drifted={drifted}, "
-            f"forbidden_acls={forbidden_acls}"
+            f"mixed_revisions={mixed}, forbidden_acls={forbidden_acls}"
         )
 
 
