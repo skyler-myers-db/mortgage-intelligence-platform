@@ -13,10 +13,12 @@ refuses:
 * ``create_set_mismatch``: the plan's creates are not exactly the bundle's
   keys minus the keys the state now binds. A child ``permissions`` or
   ``grants`` create counts too: an adoption changes no grant;
-* ``dashboard_recreate`` and ``dashboard_move`` (attack O9): spike S4 has not
-  shown whether a dashboard ``parent_path`` change updates in place, so a
-  dashboard recreate, and any dashboard entry whose ``parent_path`` changes
-  whatever its action, refuses;
+* ``dashboard_recreate`` and ``dashboard_move`` (attack O9): spike S4 measured
+  that ``parent_path`` is ``spec:immutable`` in the direct engine, so a change
+  plans ``recreate`` (a new id, the old dashboard trashed); a dashboard
+  recreate, and any dashboard entry whose ``parent_path`` changes whatever its
+  action, refuses. The CLI plans no change between ``/Users/...`` and
+  ``/Workspace/Users/...`` spellings of one folder;
 * ``rename_collision``: an update that renames a resource (the plan changes one
   of its name fields, the development-mode prefix dropping, say) to a name
   that already exists. The new name is looked up with the create's own
@@ -54,13 +56,14 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
         ),
         "dashboard_recreate": (
             "the plan after the adoption recreates a dashboard, losing its id, history and "
-            "shares. Spike S4 is owed: keep MIP_DASHBOARD_PARENT_PATH at the dashboards' live "
-            "folder, permanently for this install until S4 proves an in-place move"
+            "shares. Spike S4: a dashboard cannot move in place, so keep "
+            "MIP_DASHBOARD_PARENT_PATH at the dashboards' live folder, permanently for this "
+            "install"
         ),
         "dashboard_move": (
-            "the plan after the adoption changes a dashboard's parent_path. Spike S4 is owed, so "
-            "a move is assumed to recreate it: keep MIP_DASHBOARD_PARENT_PATH at the dashboards' "
-            "live folder, permanently for this install until S4 proves an in-place move"
+            "the plan after the adoption changes a dashboard's parent_path. Spike S4: the field "
+            "is immutable, so a move recreates the dashboard; keep MIP_DASHBOARD_PARENT_PATH at "
+            "the dashboards' live folder, permanently for this install"
         ),
         "rename_collision": (
             "the plan after the adoption renames this resource to a name that already exists "
