@@ -22,8 +22,10 @@ wait until that run is RUNNING and wrote its armed marker),
 admits and re-checks blue again after that arm, journals ``window_open`` and
 only then stops the App, identity-pinned.
 ``cancel-deadman`` cancels that run once the journal is closed. ``start`` journals
-``window_starting``, starts, and records the deployment the start created
-(a rerun resumes from the App's pending deployment, never a second start).
+``window_starting`` with the App's deployment ids (the baseline), starts,
+finds the one new id the start created (it shows about 100 s later, spike S7)
+and records it (a rerun finds it against the journaled baseline, never a
+second start).
 ``await`` waits for exactly that
 deployment to be terminal, requires SUCCEEDED and proves blue's restore
 source, the folder's unchanged full-tree digest, the snapshot's equal digest
@@ -60,6 +62,7 @@ from tools.databricks.app_release_contract import ReleaseContractError
 from tools.databricks.app_rollback_record_contract import _load_record, _text
 from tools.databricks.app_start_deployment import (
     StartProofError,
+    deployment_ids,
     env_names,
     last_deployment_is,
     prove_start_deployment,
@@ -258,9 +261,10 @@ def start_window(
 ) -> str:
     """Journal the intent, start the App, journal the deployment the start created.
 
-    ``window_starting`` is written before ``apps start``, so a start whose id
-    was never journaled is not mistaken for "never started": a rerun resumes
-    from the App's pending deployment and never starts a second time. Within
+    ``window_starting`` is written before ``apps start``, with the App's
+    deployment ids, so a start whose id was never journaled is not mistaken
+    for "never started": a rerun finds it as the one id outside that
+    baseline and never starts a second time. Within
     ``DEADMAN_GUARD_S`` of the job deadline (the start and re-pin budgets
     and a slack) the dead-man owns the start (M0-PR9): the run journals no
     intent and leaves the window open for it, so the two never both start
@@ -277,15 +281,19 @@ def start_window(
     if not resumed and deadline is not None and clock() >= deadline - DEADMAN_GUARD_S:
         raise RuntimeError("the job deadline is too close: the dead-man owns this window's start")
     if not resumed:
+        baseline = deployment_ids(workspace, app_name=app_name)
         current = journal.write(
             workspace,
             app_name=app_name,
             expected=current,
-            changes={"state": "window_starting"},
+            changes={"state": "window_starting", "start_baseline_ids": sorted(baseline)},
             assert_lease_held=assert_lease_held,
         )
+    baseline = frozenset((current or {}).get("start_baseline_ids") or ())
     try:
-        created = (resume_start if resumed else start_app)(workspace, app_name=app_name)
+        created = (resume_start if resumed else start_app)(
+            workspace, app_name=app_name, baseline=baseline
+        )
         journal.write(
             workspace,
             app_name=app_name,

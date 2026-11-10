@@ -1,11 +1,17 @@
 """An adopted core blue the core release can restore, offline (M2-PR7b).
 
 ``CoreWorld`` is adopt-live's World (tests/fixtures/adopt_live_world.py)
-after its adoption, with an Apps API that can also deploy, start and update:
-a deploy records the payload and becomes the active deployment from the
-payload's own source and env-name set, its ``/src/`` snapshot a byte copy of
-that source at deploy time (as adopt-live proves of the live App), a start
-snapshots the active source the same way, and an update replaces the bindings. Every call is recorded in
+after its adoption, with an Apps API that can also deploy, start and update,
+in the shape spike S7 measured (tests/fixtures/measured_apps.py): a deploy
+records the payload and becomes the active deployment from the payload's own
+source and env-name set, its ``/src/`` snapshot a byte copy of that source at
+deploy time (as adopt-live proves of the live App). A start answers with no
+deployment and snapshots the default source (the last active deployment's
+folder) with the newest deployment's env-name set into a new deployment
+that shows only ``HIDDEN_READS`` reads later, pending for one GET, then
+active IN_PROGRESS until its first poll settles it (``start_final``; a
+FAILED one stays active). A STOPPED App's GET has no active deployment, and
+an update replaces the bindings only. Every call is recorded in
 ``apps.mutations``. ``serves`` and ``converge_treatment`` are the injected checks the
 core tools take, recording what they were asked. Every value is synthetic.
 """
@@ -22,6 +28,7 @@ from databricks.sdk.service.workspace import ObjectType
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.adopt_live_world import DIST, World, make_repo
+from tests.fixtures.measured_apps import HIDDEN_READS, StartVisibility
 from tools.databricks import blue_restore_proof as proof
 
 GREEN_SHA = "c" * 40
@@ -52,16 +59,43 @@ class CoreApps:
         return SimpleNamespace(deployment_id=new, status=SimpleNamespace(state="SUCCEEDED"))
 
     def start(self, name: str) -> SimpleNamespace:
+        """The measured start: an empty response; the new deployment shows reads later."""
+
         self.mutations.append("start")
         world = self.world
-        active = world.deployment(world.active)
         new = f"deployment-started-{len(world.deployments)}"
-        world.add_deployment(new, source=active.source_code_path, env_names=list(world.env_names))
-        world.snapshot_source(new, active.source_code_path)
-        world.compute = "ACTIVE"
-        return SimpleNamespace(response=SimpleNamespace(pending_deployment=SimpleNamespace(deployment_id=new)))
+        newest = world.deployment(world.deployments[-1])
+        source = world.deployment(world.active).source_code_path  # the default source
+        world.pending_start = (new, source, [str(item.name) for item in newest.env_vars])
+        world.snapshot_source(new, source)
+        world.in_flight = StartVisibility(new, hidden=world.start_hidden_reads)
+        world.compute = "STARTING"
+        return SimpleNamespace(
+            response=SimpleNamespace(
+                compute_status=SimpleNamespace(state="STARTING"),
+                active_deployment=None,
+                pending_deployment=None,
+            )
+        )
+
+    def get(self, name: str) -> SimpleNamespace:
+        self.world.tick(is_get=True)
+        app = self.reads.get(name)
+        if self.world.in_flight is not None and not self.world.in_flight.never:
+            app.active_deployment = None  # measured: nothing active until the start's id is
+        return app
+
+    def list_deployments(self, name: str, **kwargs: Any) -> list[SimpleNamespace]:
+        self.world.tick(is_get=False)
+        return self.reads.list_deployments(name, **kwargs)
+
+    def get_deployment(self, name: str, deployment_id: str) -> SimpleNamespace:
+        self.world.settle(deployment_id)
+        return self.reads.get_deployment(name, deployment_id)
 
     def update(self, name: str, app: Any) -> None:
+        """Bindings only: a default_source_code_path in the App is ignored (S7-2)."""
+
         self.mutations.append("update")
         self.world.resources = [item.as_dict() for item in app.resources]
 
@@ -70,6 +104,12 @@ class CoreApps:
 class CoreWorld(World):
     sources: dict[str, str] = field(default_factory=dict)
     env_sets: dict[str, list[str]] = field(default_factory=dict)
+    states: dict[str, str] = field(default_factory=dict)
+    # A start in flight (measured_apps): what it creates, and how the API shows it.
+    pending_start: tuple[str, str, list[str]] | None = None
+    in_flight: StartVisibility | None = None
+    start_hidden_reads: int = HIDDEN_READS
+    start_final: str = "SUCCEEDED"
     treatments: list[str] = field(default_factory=list)
     health_calls: list[str] = field(default_factory=list)
 
@@ -79,6 +119,7 @@ class CoreWorld(World):
 
     def deployment(self, deployment_id: str) -> SimpleNamespace:
         base = super().deployment(deployment_id)
+        base.status.state = self.states.get(deployment_id, base.status.state)
         if deployment_id in self.sources:
             base.source_code_path = self.sources[deployment_id]
             base.env_vars = [
@@ -87,11 +128,47 @@ class CoreWorld(World):
             ]
         return base
 
-    def add_deployment(self, deployment_id: str, *, source: str, env_names: list[str]) -> None:
+    def add_deployment(
+        self, deployment_id: str, *, source: str, env_names: list[str], active: bool = True
+    ) -> None:
         self.deployments.append(deployment_id)
         self.sources[deployment_id] = source
         self.env_sets[deployment_id] = env_names
-        self.active = deployment_id
+        if active:
+            self.active = deployment_id
+
+    def tick(self, *, is_get: bool) -> None:
+        """One read of a start in flight: hidden, then listed or pending, then active (S7)."""
+
+        start = self.in_flight
+        if start is None:
+            return
+        phase = start.read(is_get=is_get)
+        if phase == "hidden":
+            return
+        if phase == "compute_only":
+            self.compute = "ACTIVE"
+            return
+        if self.pending_start is not None:
+            new, source, names = self.pending_start
+            self.pending_start = None
+            self.add_deployment(new, source=source, env_names=names, active=False)
+            self.states[new] = "IN_PROGRESS"
+            self.compute = "ACTIVE"
+        if phase == "pending":
+            self.pending = SimpleNamespace(deployment_id=start.deployment_id)
+        elif phase == "active":
+            self.pending, self.active, self.in_flight = None, start.deployment_id, None
+
+    def settle(self, deployment_id: str) -> None:
+        """A poll of the start's deployment: it is active by now, and terminal at this poll."""
+
+        if self.in_flight is not None and self.in_flight.deployment_id == deployment_id:
+            if self.pending_start is not None:
+                return  # never shown: not readable yet
+            self.pending, self.active, self.in_flight = None, deployment_id, None
+        if self.states.get(deployment_id) == "IN_PROGRESS":
+            self.states[deployment_id] = self.start_final
 
     def snapshot_source(self, deployment_id: str, source: str) -> None:
         """The platform's ``/src/`` snapshot of ``source`` for ``deployment_id``: every file, copied now."""

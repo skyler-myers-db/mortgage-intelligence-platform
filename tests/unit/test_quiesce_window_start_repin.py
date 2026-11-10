@@ -1,7 +1,8 @@
 """The window closes on the deployment ``apps start`` creates, proven and re-pinned (M0-PR8).
 
-The fake Apps API takes spike S7's worst case: a start creates a NEW
-deployment id from the App's default source. With the same source, bytes and
+The fake Apps API is the one spike S7 measured (tests/fixtures/measured_apps.py):
+a start creates a NEW deployment id from the App's default source, shows it
+only reads later, and a STOPPED App's GET has no active deployment. With the same source, bytes and
 env names the window closes and the signed record names the new id (with its
 predecessor); a changed source path, snapshot digest or env-name set refuses,
 keeps the App stopped and leaves the journal open for the dead-man. The
@@ -14,7 +15,6 @@ deploys once; a WR3 window stops once and re-pins once.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+from tests.fixtures.measured_apps import virtual_start_clock
 from tests.fixtures.quiesce_window_estate import (
     APP_NAME,
     BLUE_ARTIFACT,
@@ -104,7 +105,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
         "app_resource_contract",
         lambda *_a, **_k: validated_app_resource_contract(APP_RESOURCES),
     )
-    monkeypatch.setattr(starts, "time", SimpleNamespace(sleep=lambda _s: None, monotonic=time.monotonic))
+    virtual_start_clock(monkeypatch)  # the start's 5 s polls cost no real time
 
 
 def _signed_blue(estate: Estate) -> dict[str, Any]:
@@ -406,30 +407,38 @@ def test_any_failure_in_the_proof_stops_the_started_app_and_journals_the_refusal
     assert estate.apps.compute == "STOPPED" and estate.apps.stops == 2, "stopped again"
 
 
-def test_a_start_whose_pending_id_is_unreadable_is_stopped_and_never_started_twice() -> None:
-    estate = _estate(StartBehaviour(readable_pending_id=False))
+def test_a_start_whose_deployment_never_shows_is_stopped_and_never_started_twice() -> None:
+    estate = _estate(StartBehaviour(never_visible=True))
     _open(estate)
 
-    with pytest.raises(RuntimeError, match="start_unreadable"):
+    with pytest.raises(RuntimeError, match="start_timeout"):
         _start(estate)
     entry = journal.read(estate.workspace, app_name=APP_NAME)
-    assert entry["state"] == "window_refused" and entry["refusal"] == "start_unreadable"
+    assert entry["state"] == "window_refused" and entry["refusal"] == "start_timeout"
     assert (estate.apps.starts, estate.apps.stops, estate.apps.compute) == (1, 2, "STOPPED")
     with pytest.raises(RuntimeError, match="no restorable window"):
         _start(estate)
     assert estate.apps.starts == 1, "a refused window is the dead-man's, never started again"
 
 
-def test_a_start_journaled_only_as_its_intent_resumes_from_the_pending_deployment() -> None:
-    estate = _estate()
-    opened = _open(estate)
-    journal.write(
+def _intent(estate: Estate, opened: dict[str, Any]) -> dict[str, Any]:
+    """``window_starting`` as start_window journals it: with the App's deployment ids."""
+
+    return journal.write(
         estate.workspace,
         app_name=APP_NAME,
         expected=opened,
-        changes={"state": "window_starting"},
+        changes={
+            "state": "window_starting",
+            "start_baseline_ids": sorted(starts.deployment_ids(estate.workspace, app_name=APP_NAME)),
+        },
         assert_lease_held=lambda: None,
     )
+
+
+def test_a_start_journaled_only_as_its_intent_resumes_from_its_journaled_baseline() -> None:
+    estate = _estate()
+    _intent(estate, _open(estate))
     estate.apps.start(APP_NAME)  # the start ran; the run died before journaling its id
 
     assert _start(estate) == "deployment-start-1"
@@ -440,14 +449,7 @@ def test_a_start_journaled_only_as_its_intent_resumes_from_the_pending_deploymen
 
 def test_an_intent_with_nothing_pending_refuses_without_starting() -> None:
     estate = _estate()
-    opened = _open(estate)
-    journal.write(
-        estate.workspace,
-        app_name=APP_NAME,
-        expected=opened,
-        changes={"state": "window_starting"},
-        assert_lease_held=lambda: None,
-    )
+    _intent(estate, _open(estate))
 
     with pytest.raises(RuntimeError, match="start_unreadable"):
         _start(estate)
@@ -455,9 +457,10 @@ def test_an_intent_with_nothing_pending_refuses_without_starting() -> None:
     assert journal.read(estate.workspace, app_name=APP_NAME)["state"] == "window_refused"
 
 
-def test_a_start_without_a_readable_pending_id_refuses_rather_than_guess() -> None:
-    estate = _estate(StartBehaviour(readable_pending_id=False))
-    with pytest.raises(starts.StartProofError, match="start_unreadable"):
+def test_a_start_whose_deployment_never_shows_refuses_rather_than_guess() -> None:
+    estate = _estate(StartBehaviour(never_visible=True))
+    estate.apps.compute = "STOPPED"
+    with pytest.raises(starts.StartProofError, match="start_timeout"):
         starts.start_app(estate.workspace, app_name=APP_NAME)
 
 
@@ -683,8 +686,8 @@ def _green_is_last(estate: Estate) -> None:
 @pytest.mark.parametrize("green_last", (True, False), ids=("tier-b-only", "tier-a-falls-back"))
 def test_restore_redeploys_blue_when_the_start_id_is_unreadable(green_last: bool) -> None:
     # Tier b needs only compute ACTIVE before its redeploy: a start whose own
-    # deployment id cannot be read never stops the rollback short of blue.
-    estate = _estate(StartBehaviour(readable_pending_id=False))
+    # deployment never shows never stops the rollback short of blue.
+    estate = _estate(StartBehaviour(never_visible=True))
     if green_last:
         _green_is_last(estate)
     else:

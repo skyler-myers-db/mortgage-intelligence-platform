@@ -41,7 +41,11 @@ def test_the_rollback_probe_runs_step_0a_record_verifier_and_bootstrap_gate() ->
         prestop_rollback_record.ASSERT_ABSENT
         is app_rollback_bootstrap_gate.assert_rollback_record_absent
     )
-    assert prestop_rollback_record.ACTIVE_DEPLOYMENT is app_deployment_rollback._active_deployment_id
+    # Step 0a reads a stopped App's newest deployment, as its GET has no active one (spike S7).
+    assert prestop_rollback_record.ACTIVE_DEPLOYMENT is app_deployment_rollback.current_deployment_id
+    assert "current_deployment_id(workspace, app_name=app_name)" in inspect.getsource(
+        app_deployment_rollback.ensure_current
+    )
     # The post-stop ensure path and the bootstrap gate still call them.
     assert "verified_signed_last_good_contract(" in inspect.getsource(app_deployment_rollback_cli)
     assert "assert_rollback_record_absent(" in inspect.getsource(app_rollback_bootstrap_gate.main)

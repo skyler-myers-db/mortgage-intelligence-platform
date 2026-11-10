@@ -15,6 +15,7 @@ import pytest
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.core_blue_world import CoreWorld, adopted_core_world
+from tests.fixtures.measured_apps import virtual_start_clock
 from tools.databricks import app_rollback_record_contract as contract
 from tools.databricks import blue_tier_gate as gate
 from tools.databricks import core_blue, core_blue_restore
@@ -29,6 +30,7 @@ SERVING = {"name": "agent", "serving_endpoint": {"name": "mip-gateway", "permiss
 def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
     rr.signing_env(monkeypatch)
     monkeypatch.setattr(contract, "assert_owned_app_rollback_scope", lambda *_a, **_kw: None)
+    virtual_start_clock(monkeypatch)  # a start's 5 s polls (spike S7) cost no real time
 
 
 @pytest.fixture

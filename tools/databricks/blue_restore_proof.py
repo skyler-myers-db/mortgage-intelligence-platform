@@ -4,8 +4,10 @@ Restore tiers (plan §4.7):
 
 * **tier a** (start-only) is valid only while blue is still the App's last
   deployment, i.e. inside a pre-activation window. ``assert_tier_a`` refuses
-  once the active deployment is no longer blue: a start would then snapshot
-  green's source.
+  once blue is not the newest deployment of ANY state (on a running App also
+  its active one; on a stopped App, whose GET has none, its default source
+  must be blue's): a start would then snapshot green's source, a FAILED green
+  included (spike S7: it becomes active and moves the default source).
 * **tier b** redeploys blue's restore payload from the immutable,
   digest-verified copy. ``tier_b_payload`` refuses a record whose tier is not
   the profile's (``blue_tier_mismatch``), re-hashes the copy (a tampered or

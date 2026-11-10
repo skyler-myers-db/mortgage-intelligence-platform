@@ -81,6 +81,7 @@ from tools.databricks.app_rollback_resource_contract import (
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
 from tools.databricks.app_start_deployment import (
     StartProofError,
+    current_deployment_id,
     ensure_started,
     is_stopped,
     last_deployment_is,
@@ -482,7 +483,8 @@ def ensure_current(
             record=record,
             require_resources=False,
         )
-        active_id = _active_deployment_id(workspace, app_name=app_name)
+        # A stopped App has no active deployment: its newest one is what a start reruns (S7).
+        active_id = current_deployment_id(workspace, app_name=app_name)
         latest = _latest_succeeded(workspace, app_name=app_name)
         if (
             active_id != record["deployment_id"]
@@ -514,7 +516,7 @@ def ensure_current(
         )
         _assert_record_app_identity(workspace, app_name=app_name, record=record)
         _stored_resource_proof(workspace, record=record)
-        if _active_deployment_id(workspace, app_name=app_name) != active_id:
+        if current_deployment_id(workspace, app_name=app_name) != active_id:
             raise RuntimeError("App active deployment changed during signed resource repair")
         # Tier a only while blue is the App's last deployment: the start then
         # snapshots blue's own source, and the record is re-pinned to it.

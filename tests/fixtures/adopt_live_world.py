@@ -109,12 +109,15 @@ class SpyApps:
     def get(self, name: str) -> SimpleNamespace:
         world = self.world
         assert name == rr.APP_NAME
+        # Spike S7: a STOPPED (or STARTING) App's GET has no active or pending
+        # deployment; the default source is the last active deployment's folder.
+        serving = world.compute not in {"STOPPED", "STARTING"}
         return SimpleNamespace(
             name=name,
             url="https://mip-app.example.invalid",
             compute_status=SimpleNamespace(state=world.compute),
-            active_deployment=world.deployment(world.active),
-            pending_deployment=world.pending,
+            active_deployment=world.deployment(world.active) if serving else None,
+            pending_deployment=world.pending if serving else None,
             default_source_code_path=world.deployment(world.active).source_code_path,
             service_principal_client_id="app-client",
             service_principal_id="app-scim-id",

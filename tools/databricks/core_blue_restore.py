@@ -58,6 +58,7 @@ from tools.databricks.app_rollback_record_contract import _text
 from tools.databricks.app_rollback_resource_contract import restore_signed_app_resource_contract
 from tools.databricks.app_start_deployment import (
     StartProofError,
+    current_deployment_id,
     ensure_started,
     env_names,
     is_stopped,
@@ -281,7 +282,8 @@ def ensure_core_blue(
             )
         )
         assert_identity(workspace, record, app_name=app_name)
-        active = active_deployment_id(workspace, app_name=app_name)
+        # A stopped App has no active deployment: its newest one is what a start reruns (S7).
+        active = current_deployment_id(workspace, app_name=app_name)
         latest = _text(getattr(latest_succeeded(workspace, app_name=app_name), "deployment_id", None))
         if active != record["deployment_id"] or latest != active:
             return restore_core_blue(

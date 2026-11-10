@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from tools.databricks.app_rollback_record_contract import _text
@@ -11,6 +12,29 @@ def deployment_state(deployment: object) -> str:
     """Return the normalized Databricks App deployment state."""
 
     return _text(getattr(getattr(deployment, "status", None), "state", None)).split(".")[-1].upper()
+
+
+def newest_deployment(deployments: Iterable[object]) -> object | None:
+    """The newest deployment in ANY state: create_time, then update_time, then id.
+
+    Spike S7 measured that a FAILED deployment becomes active and moves the
+    App's default source, so the newest deployment of any state, never the
+    newest SUCCEEDED one, decides what an ``apps start`` reruns. A listed
+    deployment without an id is unreadable bookkeeping and refuses.
+    """
+
+    listed = list(deployments)
+    if any(not _text(getattr(item, "deployment_id", None)) for item in listed):
+        raise RuntimeError("an App deployment in the listing has no immutable deployment ID")
+    return max(
+        listed,
+        key=lambda item: (
+            _text(getattr(item, "create_time", None)),
+            _text(getattr(item, "update_time", None)),
+            _text(getattr(item, "deployment_id", None)),
+        ),
+        default=None,
+    )
 
 
 def latest_succeeded(workspace: Any, *, app_name: str) -> object:

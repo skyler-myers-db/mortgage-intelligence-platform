@@ -2937,9 +2937,22 @@ mutating mode, by `-m` or by its `tools/databricks/<module>.py` path (the mode
 is read from that one command's own tokens), or import a stop module in a
 heredoc or `-c`.
 
-**Owed live confirmations.** Spike S7 (a throwaway App): that `apps start`
-creates a new deployment from `default_source_code_path`, whether the env
-config carries over, and the start of a FAILED-active App. Spike S2: whether
+**Spike S7 is recorded** (a throwaway App, 2026-11-10). Every `apps start`
+creates a new SNAPSHOT deployment from the current bytes of
+`default_source_code_path`, with the newest deployment's env-name set. Neither
+the start response nor a GET right after it shows that deployment: the
+compute turns ACTIVE after 96-108 s (a trivial App), and only then does the
+new id show, about 1 s as `pending_deployment`, then as `active_deployment`.
+So `start` lists the App's deployment ids first, journals them with
+`window_starting` (journal version 2), starts without waiting and polls, at
+most every 5 s, for exactly one id outside that list (two refuse
+`start_ambiguous`, none `start_timeout`); a resumed start finds it against the
+journaled list. A STOPPED App's GET has no `active_deployment`, and a FAILED
+deployment becomes active and moves the default source, so blue is current
+(tier a, the plan's `blue_current`, the dead-man) only while nothing is
+pending, blue is the newest deployment of ANY state and SUCCEEDED, the
+default source is blue's folder and, on a running App, blue is active.
+`default_source_code_path` is not settable. Spike S2: whether
 `apps update` with an unchanged database binding touches a running App or its
 role. Until then the code assumes the worst case for both. The live shape of
 `information_schema.routines.routine_definition` is also derived, not
@@ -3100,13 +3113,14 @@ reads the raw journal, labelled unverified; `--unverified` refuses
 journal. The emergency recipe never runs
 `scripts/deploy.sh`, so it opens no window and arms no dead-man.
 
-**Owed live confirmations.** Spike S7 (a throwaway App only the owner can
-delete) also owes the dead-man's live facts: a one-time serverless run from a
-`/Workspace/Users/.../app-src/<id>/jobs/` file with these parameters, how long
-it takes to reach RUNNING and arm (`ARM_WAIT_S` assumes at most 600 s), its
-idempotency token and timeout, `apps start` as the deployer on a stopped App,
-and the cancel of a sleeping run. Until then the worst case is assumed: a start
-creates a new deployment, and nothing is trusted without the re-proof above.
+**Owed live confirmations.** Spike S7 recorded the start the dead-man makes
+(above): it judges the stopped App by its newest deployment and default source
+and finds its start's deployment against the ids listed before it, within the
+one `--start-timeout-seconds` budget. Still owed: a one-time serverless run
+from a `/Workspace/Users/.../app-src/<id>/jobs/` file with these parameters,
+how long it takes to reach RUNNING and arm (`ARM_WAIT_S` assumes at most
+600 s), its idempotency token and timeout, `apps start` as the deployer, and
+the cancel of a sleeping run. Nothing is trusted without the re-proof above.
 
 ### Governed run phases: plan, release and data (M1-PR6)
 
@@ -3525,12 +3539,14 @@ release's rebuild of an adopted blue's restore payload, handed to the proof
 only with blue's exact env-name set (D0's names carry neither agentic
 switch, so the rebuild leaves both out).
 
-**Spike S7 is owed** (whether the Apps update API can set
-`default_source_code_path`, and how an App start snapshots source). The worst
-case holds: the App's default source is never pointed at the copy.
-`S7_DEFAULT_SOURCE_SETTABLE` in `adopt_live.py` is the reviewed switch a later
-PR flips with the recorded S7 result (a code constant, never an environment
-variable); until then the switch refuses.
+**Spike S7 is recorded: the default source is not settable.**
+`apps create-update` rejects the `default_source_code_path` mask, and
+`apps update` succeeds but ignores the field; only a deployment moves it.
+`S7_DEFAULT_SOURCE_SETTABLE` in `adopt_live.py` stays False and the switch
+refuses for good (`default_source_not_settable`; the adopt plan records
+`s7_default_source: not_settable`). The default source stays on D0's own
+folder, and any later start snapshots that folder's current bytes, which the
+start proofs' full-tree digests check.
 
 **The pre-activation rollback proof (attack O2).** The first activation of a
 run (`deploy_app_snapshot`) first runs
@@ -3677,7 +3693,10 @@ half-applied (exit 4) and offers exactly two exits:
   stop (120 s) and start (600 s) budgets plus the 300 s apply bound; announce
   that figure. The plan's "5 minutes or less" is not met by those budgets and
   is not a gate (a 300 s refusal would refuse every WR5 window: the start
-  budget alone is 600 s); spikes S2 and S7 owe the live timings. The release
+  budget alone is 600 s). Spike S7 measured a trivial App's start (96-108 s
+  to compute ACTIVE before its deployment even begins) and stop (about
+  40-45 s); the real App installs its whole tree on top, so no budget is
+  shrunk. The release
   window (WR1-WR4) never plans WR5, and its digests are unchanged.
   `--remainder --journal <path>` prints, read-only, the exhausted journal's
   remainder count and the digest the window plan pins.

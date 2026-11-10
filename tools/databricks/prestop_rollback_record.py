@@ -58,7 +58,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tools.databricks.app_deployment_rollback import verified_signed_last_good_contract
-from tools.databricks.app_deployment_state import active_deployment_id, latest_succeeded
+from tools.databricks.app_deployment_state import latest_succeeded
 from tools.databricks.app_rollback_bootstrap_gate import assert_rollback_record_absent
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
@@ -70,7 +70,7 @@ from tools.databricks.app_rollback_secret_scope import (
     expected_app_rollback_scope,
 )
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
-from tools.databricks.app_start_deployment import is_stopped
+from tools.databricks.app_start_deployment import current_deployment_id, is_stopped
 from tools.databricks.blue_tier_gate import BlueTierRefused
 from tools.databricks.core_blue import CoreBlueRefused, load_core_blue, verify_core_blue
 from tools.databricks.core_blue_restore import BLUE_STOPPED
@@ -85,7 +85,9 @@ from tools.databricks.prestop_refusals import (
 # The very functions step 0a runs after the lease (identity, not copies).
 ASSERT_SIGNED = verified_signed_last_good_contract
 ASSERT_ABSENT = assert_rollback_record_absent
-ACTIVE_DEPLOYMENT = active_deployment_id
+# A stopped App's GET has no active deployment (spike S7): both step 0a paths
+# read the newest deployment there, the one a start reruns.
+ACTIVE_DEPLOYMENT = current_deployment_id
 # The core tier's step-0a reads (app_core_rollback ensure, M2-PR7b).
 CORE_LOAD = load_core_blue
 CORE_VERIFY = verify_core_blue

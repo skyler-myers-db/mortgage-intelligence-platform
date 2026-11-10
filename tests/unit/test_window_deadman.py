@@ -1,14 +1,16 @@
 """The dead-man restarts blue only when the runner died inside a restorable window (M0-PR9).
 
 ``jobs/window_deadman.py`` runs as the one-time job the window submits. The
-fake estate is M0-PR8's (``apps start`` creates a NEW deployment, spike S7's
-worst case) and the journal is the real signed one ``open_window`` writes.
+fake estate is M0-PR8's, in the shape spike S7 measured
+(tests/fixtures/measured_apps.py: ``apps start`` creates a NEW deployment
+that shows only reads later, and a STOPPED App's GET has no active
+deployment), and the journal is the real signed one ``open_window`` writes.
 At the deadline, with the journal still exactly this window's ``window_open``,
 it starts the App's stopped blue and records ``deadman_restarted`` with the
 deployment the start created; a contract window stays stopped; a window that
 moved on, another window's journal or an App that is not the stopped blue is
-never started. The AST contract pins its calls: start and get, plus the
-journal read and its one create-only marker write.
+never started. The AST contract pins its calls: start, get, list_deployments
+and get_deployment, plus the journal read and its create-only marker writes.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from tests.fixtures.quiesce_window_estate import (
     RELEASE,
     Estate,
     StartBehaviour,
+    deployment,
     load_deadman,
     run_deadman,
 )
@@ -223,15 +226,30 @@ def test_another_windows_journal_never_ends_the_wait_and_is_never_started() -> N
     assert _deadman(estate, _argv(opened, **{"--token": "not-hex"})) == 2
 
 
+def _failed_green_is_newest(estate: Estate) -> None:
+    """A FAILED green deploy became active and moved the default source, then the App stopped (S7-3)."""
+
+    estate.apps.deployments["deployment-green"] = deployment(
+        "deployment-green",
+        source=RELEASE,
+        artifact="/Workspace/Users/app-sp/src/deployment-green",
+        env_names=["DATABRICKS_WAREHOUSE_ID"],
+        state="FAILED",
+        created="2026-10-01T12:00:00Z",
+    )
+    estate.apps.active_id = "deployment-green"
+
+
 @pytest.mark.parametrize(
     ("break_it", "reason"),
     (
         (lambda estate: setattr(estate.apps, "compute", "ACTIVE"), "app_not_stopped"),
-        (lambda estate: setattr(estate.apps, "active_id", "deployment-other"), "active_not_blue"),
+        (_failed_green_is_newest, "newest_not_blue"),
         (lambda estate: setattr(estate.apps, "default_source", "/Workspace/Users/x/files"), "default_source_drift"),
-        (lambda estate: setattr(estate.apps, "pending_id", BLUE_ID), "pending_deployment"),
+        # Not a measured shape (a STOPPED App's GET shows nothing pending): the defensive branch.
+        (lambda estate: setattr(estate.apps, "unmeasured_stopped_pending", BLUE_ID), "pending_deployment"),
     ),
-    ids=("restarted-by-hand", "another-active", "default-source", "pending"),
+    ids=("restarted-by-hand", "failed-green-newest", "default-source", "pending"),
 )
 def test_an_app_that_is_not_the_windows_stopped_blue_is_never_started(break_it: Any, reason: str) -> None:
     estate = _estate()
@@ -259,20 +277,24 @@ def test_a_failed_start_is_recorded_with_its_deployment_and_never_retried() -> N
     assert estate.apps.starts == 1
 
 
-def test_a_start_without_a_readable_deployment_is_recorded_and_never_started_twice() -> None:
-    estate = _estate(StartBehaviour(readable_pending_id=False))
+@pytest.mark.parametrize(
+    ("behaviour", "reason"),
+    ((StartBehaviour(never_visible=True), "start_timeout"), (StartBehaviour(twin=True), "start_ambiguous")),
+    ids=("never-shows", "two-new-ids"),
+)
+def test_a_start_without_one_readable_deployment_is_recorded_and_never_started_twice(
+    behaviour: StartBehaviour, reason: str
+) -> None:
+    estate = _estate(behaviour)
     opened = _open(estate)
-    estate.apps.hidden_start = ""  # the id never surfaces
-    real_start = estate.apps.start
-
-    def start_hiding(name: str) -> object:
-        waiter = real_start(name)
-        estate.apps.hidden_start = ""
-        return waiter
-
-    estate.apps.start = start_hiding  # type: ignore[method-assign]
     assert _deadman(estate, _argv(opened)) == 1
-    assert _marker(estate, opened)["state"] == "deadman_start_unreadable" and estate.apps.starts == 1
+    marker = _marker(estate, opened)
+    assert (marker["state"], marker["reason"], marker["start_deployment_id"]) == (
+        "deadman_start_unreadable",
+        reason,
+        "",
+    )
+    assert estate.apps.starts == 1
 
 
 def _armed_path(opened: dict[str, Any]) -> str:
@@ -319,6 +341,7 @@ def test_the_token_is_stable_per_window_and_differs_across_windows() -> None:
 ALLOWED_CALLS = {
     ("apps", "get"),
     ("apps", "get_deployment"),
+    ("apps", "list_deployments"),
     ("apps", "start"),
     ("workspace", "download"),
     ("workspace", "upload"),

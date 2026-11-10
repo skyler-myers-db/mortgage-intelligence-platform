@@ -33,7 +33,11 @@ the opened reasons are exactly the predicted ones. No reason needs no ack.
 **Tier a.** The window closes with a start-only restore, which is valid only
 while blue is the App's last deployment and a start would snapshot blue's own
 bytes: the App's default source is blue's source, and that folder's tree
-digest equals blue's ``/src/`` snapshot's. Otherwise the plan refuses.
+digest equals blue's ``/src/`` snapshot's. Otherwise the plan refuses. Spike
+S7 recorded what that rests on: a start snapshots the CURRENT bytes of the
+default source with the newest deployment's env names, and the newest
+deployment of ANY state (a FAILED one becomes active and moves the default
+source) decides it, on a stopped App too (``last_deployment_is``).
 
 **Contract migrations.** A pending migration that is not expand-only leaves
 blue unable to run on the migrated schema: ``blue_restorable`` is false, the
@@ -121,7 +125,10 @@ REMEDIES = {
 }
 ACK_STATES = frozenset({"not_required", "matched", "absent", "mismatch"})
 # Conservative per-step budgets in seconds, for the admission (M0-PR9). They
-# are not measurements: spikes S2 and S7 owe the live timings.
+# are not measurements, and none is shrunk by one: spike S7 measured a trivial
+# App's start at 96-108 s to compute ACTIVE before its deployment even begins,
+# and its stop at about 40-45 s; the real App's start deployment installs its
+# whole tree on top, so "start" keeps its 600 s until a governed run measures it.
 # "green_activation" is a contract window's tail: it stays open (the App
 # stopped) through step 5's publish, the green deploy and its capture.
 STEP_BUDGET_S = {

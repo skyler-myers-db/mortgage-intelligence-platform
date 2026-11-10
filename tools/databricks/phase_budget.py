@@ -9,10 +9,13 @@ blue governed by the EXIT trap it never reaches, or a data job the next data
 phase must re-attach to.
 
 The prediction is a reviewed sum of per-step budgets (``STEP_BUDGET_S``),
-never a measurement: the first governed run owes the live timings, as spikes
-S2 and S7 owe the window's. They are calibrated to the envelope the parked
-workflow held for a whole first install (240 minutes, two one-use Lakebase
-role bootstraps of a 65-minute captured OAuth lease each, data included):
+never a measurement: the first governed run owes the live timings. Spike S7
+measured only a trivial App's window steps (start to compute ACTIVE 96-108 s
+before the start deployment even begins, stop about 40-45 s), which the real
+App's install time exceeds, so no budget was shrunk. They are calibrated to
+the envelope the parked workflow held for a whole first install (240
+minutes, two one-use Lakebase role bootstraps of a 65-minute captured OAuth
+lease each, data included):
 
 * **plan**: the read-only preflight, the bundle plan gate and the window plan.
 * **release**: today's run minus the data jobs. Its base depends on the tier
