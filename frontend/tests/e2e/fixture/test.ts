@@ -113,6 +113,10 @@ export const test = base.extend<FixtureOptions & FixtureHarness>({
       const hygiene = new Hygiene(mockApi, readProductionCsp(path.dirname(configFile)), hygieneOptOut);
       await hygiene.attach(page);
       await use(hygiene);
+      // Forgiven by the harness, not by the test: kept visible in the report.
+      for (const message of hygiene.forgivenAssetCancels()) {
+        testInfo.annotations.push({ type: 'hygiene: re-fetched asset cancel', description: message });
+      }
       const violations = hygiene.violations();
       if (violations.length > 0) throw new Error(formatViolations(testInfo.title, violations));
     },
