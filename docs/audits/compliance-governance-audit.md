@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end audit of the regulatory recordkeeping posture: every state-changing action is traced through to an immutable Lakebase audit row, the actor is bound to the edge-injected identity (not body-spoofable), the disclosure version active at time of contact is pinned, the rationale is captured, the trail is queryable via /api/audit/events + /api/audit/rollups, and PII is redacted at the ledger boundary. Goal: confirm the audit trail satisfies ECOA, RESPA, TILA, Fair Housing, TCPA, and CAN-SPAM recordkeeping for top-of-funnel mortgage outreach.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14e7aedef1c1c97ad86726790cc82`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Schema review of `lakebase/schema.sql` for ledger design + database-level immutability; codebase grep for INSERT/UPDATE/DELETE paths against `action_audit`; live state-changing probes (`draft_outreach`, `outreach.approve`, `genie.refused_prompt`, `LEAD_ASSIGN`, `CALL_DISPOSITION`) with `/api/audit/events` correlation; disclosure resolution path review; /api/audit/rollups aggregate validation; PII redaction check on 30 most recent audit rows.
 **Scope:** `mip_app.action_audit` (the canonical ledger), `mip_app.approvals`, `mip_app.lead_assignments`, `mip_app.call_dispositions`, `mip_app.tenant_disclosures`, `mip_app.genie_messages`; FastAPI routers in `backend/api/{outreach,sales,genie,workspace,portfolio,campaigns,audit}.py`; service helpers `backend/services/{audit_store,disclosures,sales_state,workspace_store,pii_redaction}.py`.
 
@@ -94,8 +94,8 @@ I triggered live mutations and verified each one wrote an audit row with the rig
 
 ```json
 {
-  "event_id": "7ebed40c-ac77-4389-acd3-ee837d7be3e7",
-  "actor": "skyler@entrada.ai",
+  "event_id": "<event-id>",
+  "actor": "<operator-email>",
   "action": "draft_outreach",
   "entity_type": "outreach_draft",
   "entity_id": "B-0JU06SZUVTTM3",
@@ -125,19 +125,19 @@ Critical fields captured at draft time: **`disclosure_version`**, **`consent_sta
 
 ```json
 {
-  "event_id": "7d44916b-19f9-46dd-81e2-62632523d12d",
-  "actor": "skyler@entrada.ai",
+  "event_id": "<event-id>",
+  "actor": "<operator-email>",
   "action": "outreach.approve",
   "entity_type": "approval",
-  "entity_id": "6469830d-0197-4003-ac9a-372e231c318d",
+  "entity_id": "<entity-id>",
   "subject_clip": "clip_ref_4296e8c369b6",
   "event_type": "APPROVE",
-  "request_id": "7169bfcf-391d-42dd-bc4c-67bae3974098",
+  "request_id": "<request-id>",
   "payload_json": {
     "rationale": "compliance audit: verifying audit trail captures actor/disclosure/rationale",
     "draft_body": "Hello,\n\nYour property profile in DALLAS, TX may qualify for Cash-out Refi...",
     "offer_code": "refi",
-    "approval_id": "6469830d-0197-4003-ac9a-372e231c318d",
+    "approval_id": "<approval-id>",
     "borrower_id": "B-0JU06SZUVTTM3",
     "consent_status": "opt_in",
     "disclosure_state": "_ALL",
@@ -153,7 +153,7 @@ Critical fields captured at draft time: **`disclosure_version`**, **`consent_sta
 ```
 
 Captures **everything a fair-lending auditor wants**:
-- *Who* (actor: skyler@entrada.ai) — edge identity, not spoofable
+- *Who* (actor: `<operator-email>`) — edge identity, not spoofable
 - *What* (action: outreach.approve, offer_code: refi)
 - *About whom* (subject_clip: HMAC-masked, borrower_id in payload: synthetic)
 - *When* (created_at: ISO timestamp, immutable)
@@ -181,7 +181,7 @@ Existing CALL_DISPOSITION rows in the rollups (4 in the last week) confirm the f
 ```json
 {
   "action": "genie.refused_prompt",
-  "actor": "skyler@entrada.ai",
+  "actor": "<operator-email>",
   "created_at": "2026-05-13T14:02:33.826779+00:00",
   "metadata_keys": [
     "action_type",
@@ -192,7 +192,7 @@ Existing CALL_DISPOSITION rows in the rollups (4 in the last week) confirm the f
     "source_assets",
     "visualization_kind"
   ],
-  "question_hash": "839061ebc3fe58e9"
+  "question_hash": "<question-hash>"
 }
 ```
 
@@ -227,7 +227,7 @@ The endpoint returns events newest-first, paginated. Each row's `payload_json` i
 
 - **PII leakage check**: 0 forbidden field names (`owner_1_full_name`, `owner_1_first_name`, `owner_1_last_name`, `situs_street_address`, `mailing_street_address`, `owner_name_hash_raw`) appearing as object keys.
 - **Subject CLIP check**: every `subject_clip` value starts with `clip_ref_` or `clip_demo_` — HMAC-masked, never raw.
-- **Actor check**: every row has `actor: skyler@entrada.ai` (real edge identity).
+- **Actor check**: every row has `actor: <operator-email>` (real edge identity).
 - **Timestamp check**: every row has an ISO-8601 timestamp.
 - **request_id check**: APPROVE rows carry a UUID; DRAFT and VIEW events have null (no idempotency need).
 
@@ -321,7 +321,7 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 
 - **DB-enforced append-only ledger**: `trg_action_audit_append_only` rejects `UPDATE` / `DELETE`; `REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC` remains defense-in-depth — regulator-friendly proof that audit rows are immutable.
 - **Code-side append-only**: zero UPDATE/DELETE SQL against `action_audit` across the entire backend.
-- **Edge-bound actor**: every audit row's `actor_email` is the Databricks Apps platform-injected `X-Forwarded-Email`. Verified non-spoofable in the security audit; verified consistent in this audit (all 30 most-recent events show `skyler@entrada.ai`).
+- **Edge-bound actor**: every audit row's `actor_email` is the Databricks Apps platform-injected `X-Forwarded-Email`. Verified non-spoofable in the security audit; verified consistent in this audit (all 30 most-recent events show `<operator-email>`).
 - **HMAC-masked subject_clip**: every row references the borrower via `clip_ref_<12hex>`, never the raw Cotality CLIP. Combined with synthetic `B-XXX` borrower IDs in development, no PII reaches the ledger.
 - **Disclosure version pinning**: APPROVE + DRAFT_OUTREACH rows capture `disclosure_version`, `disclosure_state`, and `disclosure_channel` at the moment of action. A future disclosure rotation doesn't destroy the contact-time record.
 - **Fail-closed disclosure validation**: NMLS, Equal Housing, opt-out, SMS-STOP all enforced by the resolver. No path ships a non-compliant body.
@@ -346,13 +346,13 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 | INSERT against action_audit in code | many (one per state-changing action) | 10 INSERT call sites | ✅ |
 | Campaign status transition audit | campaign update and audit insert atomic | one CTE updates `mip_app.campaigns` and inserts `CAMPAIGN_STATUS_UPDATE` | ✅ |
 | `subject_clip` is masked | starts with `clip_ref_` or `clip_demo_` | 30/30 most-recent rows | ✅ |
-| `actor_email` is edge identity | matches X-Forwarded-Email | 30/30 rows = `skyler@entrada.ai` | ✅ |
+| `actor_email` is edge identity | matches X-Forwarded-Email | 30/30 rows = `<operator-email>` | ✅ |
 | `event_at` is immutable server timestamp | TIMESTAMPTZ DEFAULT now() | confirmed in DDL | ✅ |
 | DRAFT_OUTREACH captures disclosure_version | present in payload_json | `summit-demo-2026-05-v1` | ✅ |
 | APPROVE captures disclosure_version + body + rationale | all present | all present | ✅ |
 | APPROVE captures consent_status + marketing_eligible + last_touch_at | all present | all present | ✅ |
 | APPROVE links to approval_id | entity_id = approval_id; payload echoes it | confirmed | ✅ |
-| Genie refusal writes `genie.refused_prompt` | row with question_hash, not verbatim prompt | confirmed (question_hash: `839061ebc3fe58e9`) | ✅ |
+| Genie refusal writes `genie.refused_prompt` | row with question_hash, not verbatim prompt | confirmed (question_hash: `<question-hash>`) | ✅ |
 | Disclosure resolver fails closed on missing block | raises MissingTenantDisclosureError | code-confirmed | ✅ |
 | Disclosure validator enforces NMLS | enforced | `disclosures.py:61` | ✅ |
 | Disclosure validator enforces Equal Housing | enforced | `disclosures.py:65` | ✅ |
@@ -399,7 +399,7 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 - **Disclosure resolver fail-closes on missing NMLS / Equal Housing / opt-out / SMS-STOP language.**
 - **Workflow gates** (assignment-requires-approval, server-controlled attempt counters, active-LO check, cross-LO logging block) prevent classes of compliance evasion.
 
-The compliance + governance posture is **production-ready under the documented threat model** (synthetic borrower data, single-tenant demo, Skyler@entrada.ai as the authoritative admin). At production onboarding, the LOW-1 decision about verbatim body storage and the LOW-2 question of warehouse-mirror retention should be addressed explicitly — neither blocks deploy.
+The compliance + governance posture is **production-ready under the documented threat model** (synthetic borrower data, single-tenant demo, `<operator-email>` as the authoritative admin). At production onboarding, the LOW-1 decision about verbatim body storage and the LOW-2 question of warehouse-mirror retention should be addressed explicitly — neither blocks deploy.
 
 The system would survive a fair-lending exam with the evidence it currently records.
 
@@ -419,7 +419,7 @@ The system would survive a fair-lending exam with the evidence it currently reco
 - `backend/api/genie.py:233+` — Genie refusal audit row
 - `/api/audit/events` and `/api/audit/rollups` (45-route OpenAPI surface)
 - Live probes: `/tmp/comp_outreach.sh`, `/tmp/comp_audit_shape.sh`, `/tmp/comp_fairlending.sh`, `/tmp/comp_sales.sh`, `/tmp/comp_sales2.sh`
-- Deployment: `01f14e7aedef1c1c97ad86726790cc82` (RUNNING / ACTIVE)
+- Deployment: `<deployment-id>` (RUNNING / ACTIVE)
 
 ---
 
@@ -427,7 +427,7 @@ The system would survive a fair-lending exam with the evidence it currently reco
 
 After engineering pushed the statement-level mutation trigger + atomic campaign-status CTE + regression tests, re-ran the full compliance probe against the new deployment.
 
-**Active deployment:** `01f14eda34d0190683452aad6555402a` (live Lakebase migration applied, statement-level append-only trigger active).
+**Active deployment:** `<deployment-id>` (live Lakebase migration applied, statement-level append-only trigger active).
 
 ### Engineering finding — original audit was over-confident
 
@@ -450,7 +450,7 @@ This is a real audit-discipline finding I missed: never accept "REVOKE X FROM PU
 | Trigger creation | grep `trg_action_audit_append_only` | present, BEFORE UPDATE OR DELETE, FOR EACH STATEMENT | `lakebase/schema.sql:295-299` | ✅ |
 | Live no-op UPDATE rejected | engineering report | SQLSTATE 42501 | confirmed by engineering live-validation | ✅ |
 | Live no-op DELETE rejected | engineering report | SQLSTATE 42501 | confirmed by engineering live-validation | ✅ |
-| Live INSERT still succeeds | run draft + approve flow | row written, audit_event_id returned | confirmed (audit_event_id `24a85031-0e2f-4ba8-8d87-3c69664b03b6`) | ✅ |
+| Live INSERT still succeeds | run draft + approve flow | row written, audit_event_id returned | confirmed (audit_event_id `<event-id>`) | ✅ |
 | Campaign status atomic CTE | grep `_CAMPAIGN_PATCH_SQL` in `databricks_repo.py` | single CTE with UPDATE + INSERT | `databricks_repo.py:601-627` confirmed | ✅ |
 | Regression test pins trigger | grep `test_audit_store_contract.py` | asserts 6 trigger SQL fragments | confirmed at line 113-118 | ✅ |
 | Regression test pins atomicity | grep `test_portfolio_repo_timezone.py` | asserts 1 SQL call contains both UPDATE + INSERT | confirmed at line 522-528 | ✅ |
@@ -458,7 +458,7 @@ This is a real audit-discipline finding I missed: never accept "REVOKE X FROM PU
 | Draft outreach writes DRAFT_OUTREACH row | disclosure_version + consent_status + marketing_eligible in payload | all present | exact match (`summit-demo-2026-05-v1` / opt_in / true) | ✅ |
 | Approve writes APPROVE row | actor + subject_clip + disclosure_version + body | all present | exact match | ✅ |
 | Subject clip masked on new approval | `clip_ref_*` prefix | masked | `clip_ref_a8fd22896b92` | ✅ |
-| Genie refusal still audited | `genie.refused_prompt` row with question_hash | present | event_id `da36e6b1`, question_hash `76ddc05c19b382b5` | ✅ |
+| Genie refusal still audited | `genie.refused_prompt` row with question_hash | present | event_id `da36e6b1`, question_hash `<question-hash>` | ✅ |
 | Genie refusal does NOT store verbatim prompt | "race" / "ethnicity" absent from metadata | absent | confirmed (`verbatim prompt text present: False`) | ✅ |
 | PII redaction on 30 most recent rows | 0 forbidden findings | 0 | 0 across 30 rows | ✅ |
 | Audit rollups still aggregate | event_type counts incremented | APPROVE=293 (was 291, +2 from my probes), OUTREACH_REJECT=67, LEAD_ASSIGN=6, CALL_DISPOSITION=4, LEAD_DISTRIBUTE=2 | exact | ✅ |
@@ -475,4 +475,4 @@ This is a real audit-discipline finding I missed: never accept "REVOKE X FROM PU
 - **LOW-1 and LOW-2 remain documented production-onboarding flags.** Verbatim `draft_body` storage in APPROVE rows is intentional for synthetic Module 0 evidence. The warehouse-side `mip.gold.audit_events_mirror` remains a longer-horizon analytics enhancement, not a Module 0 runtime blocker.
 - **Auditor self-correction noted.** My original "REVOKE FROM PUBLIC is enough" claim was insufficient evidence for the immutability assertion. The actual proof requires either (a) verification that the role lacks direct grants, or (b) a row/statement-level trigger that fires regardless of privilege. Engineering installed (b); going forward, the trigger is the load-bearing control.
 
-The compliance + governance posture is **production-ready and audit-clean** on deployment `01f14eda34d0190683452aad6555402a`. The trigger-enforced append-only ledger + atomic campaign-status CTE close the two real engineering defects. The two LOW items are production-onboarding decisions that do not affect Module 0 sign-off.
+The compliance + governance posture is **production-ready and audit-clean** on deployment `<deployment-id>`. The trigger-enforced append-only ledger + atomic campaign-status CTE close the two real engineering defects. The two LOW items are production-onboarding decisions that do not affect Module 0 sign-off.

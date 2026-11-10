@@ -1,6 +1,6 @@
 {
   "stamp": "2026-08-07T13-17-46Z",
-  "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
+  "base": "https://<app-host>",
   "overall_score": 100.0,
   "passed": 22,
   "total": 22,

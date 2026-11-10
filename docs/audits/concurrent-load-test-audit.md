@@ -6,8 +6,8 @@
 > cache posture, write-path contention, and frontend 429/503 handling.
 > Live validation was run against the deployed Databricks App.
 
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
-**Active deployment validated:** `01f152e659dd1f42aab69164a47db116`
+**App:** `https://<app-host>`  
+**Active deployment validated:** `<deployment-id>`
 (`RUNNING`, `SUCCEEDED`, update time `2026-05-18T18:26:38Z`)  
 **Primary evidence:** read run `tools/load_test/results/20260518T183252Z_stats.csv`;
 write run `tools/load_test/results/20260518T190152Z_stats.csv`;
@@ -59,7 +59,7 @@ Additional fixes found during live validation:
 Command shape:
 
 ```bash
-MIP_API_URL=https://mip-app-2543889327043640.aws.databricksapps.com \
+MIP_API_URL=https://<app-host> \
 MIP_BEARER_TOKEN=<workspace token> \
 MIP_USERS=20 MIP_SPAWN_RATE=5 MIP_RUN_TIME=2m \
 MIP_LOAD_TEST_FAIL_ON_BASELINE_REGRESSION=1 \
@@ -83,7 +83,7 @@ Baseline comparator: `no p95/failure-rate regressions against committed baseline
 Command shape:
 
 ```bash
-MIP_API_URL=https://mip-app-2543889327043640.aws.databricksapps.com \
+MIP_API_URL=https://<app-host> \
 MIP_BEARER_TOKEN=<workspace token> \
 MIP_LOAD_TEST_WRITE=1 \
 MIP_USERS=5 MIP_SPAWN_RATE=2 MIP_RUN_TIME=1m \
@@ -184,7 +184,7 @@ Three write tasks correctly gated. Default `bash run.sh` against staging stays r
 - `tools/load_test/baseline.py` (208 LOC) implements `read_locust_stats` → `compare` → `write_baseline` with `_is_write_endpoint` distinguishing read vs write so write drills don't overwrite the sustained read baseline.
 - `tools/load_test/run.sh:46-206` reads `MIP_LOAD_TEST_BASELINE` (default `${SCRIPT_DIR}/baseline.json`) and `MIP_LOAD_TEST_FAIL_ON_BASELINE_REGRESSION` (default `0`), then invokes `baseline.py` with `--baseline` + optional `--fail-on-regression` + optional `--write-baseline` to regenerate.
 
-Live evidence: both read and write baseline comparators ran with `--fail-on-regression` against deployment `01f152e659dd1f42aab69164a47db116` and reported no regressions.
+Live evidence: both read and write baseline comparators ran with `--fail-on-regression` against deployment `<deployment-id>` and reported no regressions.
 
 **Resolved LOW 2 — Genie concurrency.** Verified: `backend/config/settings.py:265: mip_genie_concurrency_limit: int = 6` (up from 4). The comment notes the bump is for demo-panel scenarios where multiple stakeholders ask Genie questions simultaneously. The `docs/runbook.md` documents demo-panel expectations (per the engineering signoff).
 
@@ -205,7 +205,7 @@ The team's signoff calls out several issues found during the live drill that wer
 
 These are all legitimate operational hardening from running the harness against a real deployment. The team's discipline of "run the harness, fix the failures it surfaces, commit the baseline" is exactly the right shape.
 
-### Live execution proof from engineering signoff (deployment `01f152e659dd1f42aab69164a47db116`)
+### Live execution proof from engineering signoff (deployment `<deployment-id>`)
 
 | Gate | Result |
 |---|---|

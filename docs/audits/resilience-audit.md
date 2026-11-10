@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end probe of the resilience patterns that CLAUDE.md calls out as Module 0 completion criteria: warehouse + Lakebase warm-start, retry + circuit breaker around SQL / Genie / Lakebase, short-TTL cache for hot KPIs, explicit degraded-state UI when a dependency is down, idempotency under retry storms, and the never-mock invariant. Goal: prove the app survives real-world flakiness through resilience engineering, not silent mock substitution.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14e7aedef1c1c97ad86726790cc82`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Direct HTTPS probes for warm-state latency; cache HIT/MISS timing benchmarks; live `/api/health` introspection for breaker state; Chrome MCP fetch interception to inject 503 + slow responses against the running React app; parallel approval probes for idempotency; codebase grep for never-mock invariant.
 **Scope:** `backend/services/resilience.py` (CircuitBreaker, Resilient, TTLCache, StaleWhileRevalidateCache, with_retry, DependencyDownError); `backend/main.py:268-322` (DependencyDownError → 503 handler); `backend/api/health.py` (probe + SWR-cached health); `backend/services/error_sanitizer.py` (constant-string 503 detail); `frontend/src/lib/api.ts:443-463` (retryable detection + exponential backoff); `frontend/src/components/ui/WarmingUpBlock.tsx` (degraded-state UI).
 
@@ -11,7 +11,7 @@
 
 ## Engineering re-validation addendum — 2026-05-13
 
-**Current deployment validated:** `01f14e7aedef1c1c97ad86726790cc82` (`RUNNING / ACTIVE`, update_time `2026-05-13T03:26:39Z`).
+**Current deployment validated:** `<deployment-id>` (`RUNNING / ACTIVE`, update_time `2026-05-13T03:26:39Z`).
 
 The two LOW findings were independently checked against source and live endpoints:
 
@@ -48,7 +48,7 @@ Additional validation run in this pass:
   "status": "ok",
   "mode": "live",
   "app_env": "sandbox",
-  "warehouse_id": "81d08d4fa2d799e9",
+  "warehouse_id": "<warehouse-id>",
   "dependencies": {"warehouse": "up", "lakebase": "up", "genie": "up"},
   "circuit_breakers": {"warehouse": "closed", "lakebase": "closed", "genie": "closed"},
   "breaker_state_changes_last_hour": 0,
@@ -165,11 +165,11 @@ Throttled `/api/leads` to 8s via fetch interception, then SPA-navigated to `/lea
 
 ### 9. Idempotency under retry storm
 
-Sent 5 parallel approval requests to `/api/outreach/approve` with the **same** `request_id` (`15a205c8-5759-453c-b754-c7c136dadb71`) for borrower `B-0GKU2LHHOA2ZM`.
+Sent 5 parallel approval requests to `/api/outreach/approve` with the **same** `request_id` (`<request-id>`) for borrower `B-0GKU2LHHOA2ZM`.
 
 All 5 responses:
 - `approved: true`
-- Identical `approval_id: 9aecc862-f82e-4231-a15e-5837aca57389`
+- Identical `approval_id: <approval-id>`
 - Exactly ONE response carried a non-empty `audit_event_id: f8041926...` (the request that won the race)
 - The other 4 responses had empty `audit_event_id` — they hit the R5-01 `_lookup_existing_approval` pre-check and returned the existing approval without writing a new row or emitting a duplicate audit event
 
@@ -323,13 +323,13 @@ The resilience layer is **production-ready** and exceeds the Module 0 completion
 - `frontend/src/components/ui/WarmingUpBlock.tsx` (dependency-aware degraded-state UI with attempt counter and correlation_id echo)
 - Live probes: `/tmp/res_warm.sh`, `/tmp/res_cache.sh`, `/tmp/res_idempotency.sh`
 - Chrome MCP fetch interception: 503 injection on `/api/segments`, 8s throttle on `/api/leads`
-- Deployment: `01f14e7aedef1c1c97ad86726790cc82` (RUNNING / ACTIVE)
+- Deployment: `<deployment-id>` (RUNNING / ACTIVE)
 
 ---
 
 ## Independent re-validation — 2026-05-13 (post-correction)
 
-After engineering pushed the docstring + regression test for the portfolio fresh-vs-cached contract, re-ran the original probes + a corrected portfolio benchmark + a focused no-regression sweep against the same deployment `01f14e7aedef1c1c97ad86726790cc82`.
+After engineering pushed the docstring + regression test for the portfolio fresh-vs-cached contract, re-ran the original probes + a corrected portfolio benchmark + a focused no-regression sweep against the same deployment `<deployment-id>`.
 
 ### Source-of-truth checks
 
@@ -374,7 +374,7 @@ Flat at ~0.95s across 5 calls — Lakebase fetch on every call, exactly as the d
 | Cache HIT no regression — `/api/data-estate` | 3-call timing | speedup | 1.20s → 0.40s → 0.40s (3.0x) | ✅ |
 | 503 contract intact | `safe_dependency_detail` grep in `main.py` | import + body shape `{detail, retryable, dependency, correlation_id}` | present at line 313 / 358-360 | ✅ |
 | Degraded-state UI fires on injected 503 | Chrome MCP fetch interception on `/api/segments` | WarmingUpBlock renders with dependency-aware copy + correlation_id echo | "Warehouse warming up (attempt 2 of 6)" + "Databricks SQL warehouses auto-suspend when idle..." + `correlation_id: 22222222-...` | ✅ |
-| Idempotency holds under 5x parallel retry | 5 concurrent POST `/api/outreach/approve` with same `request_id` | 1 distinct approval_id, 1 audit_event_id set | 1 distinct approval_id (`7a1ea403-88f7-43d6-9db2-73fc55185040`), 1 audit_event_id set (result 3 won the race) | ✅ |
+| Idempotency holds under 5x parallel retry | 5 concurrent POST `/api/outreach/approve` with same `request_id` | 1 distinct approval_id, 1 audit_event_id set | 1 distinct approval_id (`<approval-id>`), 1 audit_event_id set (result 3 won the race) | ✅ |
 
 **11 of 11 re-validation checks pass.** No regressions.
 

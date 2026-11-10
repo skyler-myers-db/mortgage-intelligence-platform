@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of the CLAUDE.md packaging promise: "`./scripts/deploy.sh -t dev` must provision, populate, promote, and smoke-check every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no 'now go click this' setup docs, no secret dances beyond one `.env.local` fill-in."
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15185868d1fa285ea9a3a4c94afd4` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Source-level audit of `databricks.yml` (878 lines, 4 targets, 9 resource categories), `app.yaml`, `scripts/deploy.sh` (403 lines, 11-step orchestrator), `tools/databricks/bundle_env.py`, `tools/render_sql.py`, `tools/verify_scaffold.py`, `Makefile`, `.env.example`, all 5 jobs under `jobs/`, the Lakeflow pipeline, the FRED seed CSV at `data/seeds/`, `lakebase/schema.sql` + `lakebase/seed_campaigns.sql`, and the 25 SQL files referenced from the bundle. Counted idempotency primitives (`IF NOT EXISTS` / `ON CONFLICT` / `MERGE INTO`), enumerated the secret-resolution chain, mapped the env-var injection from app resource bindings, and verified the "first boot works offline" guarantee for FRED.
 
 ---
@@ -238,4 +238,4 @@ of the cleanest deployability postures in the audit set.
 - `lakebase/schema.sql` (16× `IF NOT EXISTS` + 22× index `IF NOT EXISTS`)
 - `lakebase/seed_campaigns.sql` (5× `ON CONFLICT DO NOTHING`)
 - `sql/_rendered/**` (25 rendered SQL files referenced from bundle job tasks)
-- Live deployment: `01f15185868d1fa285ea9a3a4c94afd4`
+- Live deployment: `<deployment-id>`

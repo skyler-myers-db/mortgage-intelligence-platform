@@ -4128,7 +4128,7 @@ deployed app `correlation_id`.
 
 Current Entrada dev status (2026-05-15): external OTLP is not configured
 on `mip-app`. CLI/API evidence shows active deployment
-`01f14ff2c4cd10b99ebad8f8785c307f` is `SUCCEEDED`, the app is `RUNNING`,
+`<deployment-id>` is `SUCCEEDED`, the app is `RUNNING`,
 and only the warehouse, Genie, Lakebase, and lifecycle job resources are
 attached; no app secret resource is attached for collector headers.
 `/api/v1/admin/health` returns
@@ -4142,21 +4142,21 @@ secret resource and emits the full runtime contract plus
 bundle var, process environment, or shell history.
 
 App-side proof was completed on 2026-05-14 with temporary deployment
-`01f14fe0164a1b6388f9d240679492db`: `/api/v1/admin/health` reported
+`<deployment-id>`: `/api/v1/admin/health` reported
 `log_export: otlp`, a sanitized RUM request returned correlation id
-`b07b2f0825a043188fda96e041a14d19`, and the external collector received
+`<correlation-id>`, and the external collector received
 the matching OTLP HTTP protobuf payload. The sandbox was then restored to
 stdout-only so it is not left exporting logs to the temporary collector.
 
 Secret-backed header proof was completed on 2026-05-14/15 with temporary
-deployment `01f14ff1cb5513a9824b1e040701141d`: `MIP_OTEL_HEADERS` was
+deployment `<deployment-id>`: `MIP_OTEL_HEADERS` was
 resolved through Databricks App resource `value_from: otel_headers`,
 backed by a temporary non-sensitive `mip/otel-headers` secret. The
-external collector received request `d64260ce-232a-498e-bb9a-4bf65306c090`
+external collector received request `<request-id>`
 with proof header `x-mip-otel-proof=proof-20260515T000246Z` and a
 matching `/api/v1/telemetry/rum` log body for correlation id
-`c864cd1bbbf44779874fdb235ae7c6bf`. The sandbox was restored to
-deployment `01f14ff2c4cd10b99ebad8f8785c307f` with no OTLP env vars, the
+`<correlation-id>`. The sandbox was restored to
+deployment `<deployment-id>` with no OTLP env vars, the
 temporary app secret resource removed, and the temporary Databricks
 Secret deleted.
 

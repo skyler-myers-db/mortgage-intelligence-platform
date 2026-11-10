@@ -38,9 +38,9 @@ invalid_client: Client authentication failed
 
 Error ids from three separate runs:
 
-- `ea23bd08-7326-49be-ad32-d9b88e7fcc81`
-- `9c3e929b-84d3-4335-b827-c39ddbc51593`
-- `058fa7e1-3a8b-473a-8209-bcdbedd2dc57`
+- `<error-id>`
+- `<error-id>`
+- `<error-id>`
 
 ## Hypotheses ruled out
 

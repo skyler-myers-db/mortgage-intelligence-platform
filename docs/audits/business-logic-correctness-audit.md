@@ -9,8 +9,8 @@
 > service-layer call sites that build the runtime dossier and offer proof.
 
 **Date:** 2026-05-18
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`
-**Active deployment after remediation:** `01f1530971261d09af6eefef69992d05`
+**App:** `https://<app-host>`
+**Active deployment after remediation:** `<deployment-id>`
 
 ## Headline Result
 
@@ -145,10 +145,10 @@ does not print bearer tokens in pytest parameter reprs.
 
 Full deploy completed on 2026-05-18:
 
-- Active deployment: `01f1530971261d09af6eefef69992d05`
+- Active deployment: `<deployment-id>`
 - App state: `RUNNING`
 - Compute state: `ACTIVE`
-- App URL: `https://mip-app-2543889327043640.aws.databricksapps.com`
+- App URL: `https://<app-host>`
 
 Second deploy output confirmed the corrected gold job executed function DDL:
 
@@ -227,7 +227,7 @@ Deployment validation:
 
 - `./scripts/deploy.sh -t dev --no-confirm`: pass after adding UDF deploy tasks
 - `scripts/smoke_live.sh`: pass as part of deploy
-- `databricks apps get mip-app`: active deployment `01f1530971261d09af6eefef69992d05`,
+- `databricks apps get mip-app`: active deployment `<deployment-id>`,
   `RUNNING` / `ACTIVE`
 - live `tests/integration/test_sql_python_parity.py`: pass against deployed UC
 - live warehouse probes listed above: pass
@@ -335,7 +335,7 @@ Spot-checked 19 invariants from prior audits and the BL primitives themselves. A
 
 Every original finding (1 HIGH-equivalent + 2 MEDIUM + 3 LOW) is genuinely
 closed in the working tree, locked by a real regression gate, and verified
-against the post-deployment active app `01f1530971261d09af6eefef69992d05`.
+against the post-deployment active app `<deployment-id>`.
 The release-blocking deploy-wiring bug surfaced during engineering's
 validation is also closed and gated. 50/50 golden cases pass Python parity.
 No prior-audit invariant was broken in the process.

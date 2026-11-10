@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end adversarial probe of authentication boundary, authorization gates, PII redaction, input validation, Genie injection resistance, approval-gate integrity, and information disclosure surfaces. Goal: discover any path by which an authenticated workspace user (or anyone past the Databricks Apps edge) could read data they shouldn't, mutate state they shouldn't, or coerce the agent into violating governance guards.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14e6f026a161e95c88e798a8096cc`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Direct HTTPS probes via `curl` with workspace OBO token; OpenAPI spec inspection; per-endpoint header analysis; Genie conversation injection battery; approval-gate fuzzing; SQL Statements API for adversarial-input fixture lookups.
 **Scope:** all 45 routes in `/openapi.json`; the rbac dependency in `backend/services/rbac.py`; the PII redaction layer in `backend/services/pii_redaction.py`; the approval gate in `backend/api/outreach.py`; the Genie hardening / trusted-SQL adapter; static/debug asset surface.
 
@@ -33,7 +33,7 @@ Validation:
 - Local TestClient proof: `/openapi.json`, `/docs`, `/redoc`, and `/api/openapi.json` all return `404` JSON; `/api/health` carries the new security headers.
 - Built Vite shell inspection showed no inline `<script>` in `frontend/dist/index.html`, so `script-src 'self'` is compatible with the current bundle.
 - `databricks bundle validate -t dev --profile DEFAULT` passed.
-- Deployed snapshot `01f14e7aedef1c1c97ad86726790cc82` succeeded and is active/running on `mip-app`.
+- Deployed snapshot `<deployment-id>` succeeded and is active/running on `mip-app`.
 - Live post-deploy proof: `/openapi.json`, `/docs`, `/redoc`, `/api/openapi.json`, `/api/docs`, and `/api/redoc` all return JSON `404`; `/api/health` carries CSP/HSTS/nosniff/frame/referrer/permissions headers.
 - `scripts/smoke_live.sh --no-genie` passed against the deployed app, including portfolio preview, leads, borrower dossier, evidence, data estate, source readiness, geo rollups, outreach draft, and approval audit write.
 - Live adversarial mini-battery passed: unauth and malformed bearer requests return `401`; no CORS allow-origin; spoofed forwarded headers do not break admin identity handling; borrower SQL-shaped IDs return `422`; search SQL-shaped query returns an empty list; borrower dossier leaks no forbidden PII keys; traversal probes do not leak files; Genie PII-extraction prompt is denied.
@@ -72,7 +72,7 @@ The **core authorization and data-handling controls are solid**. Authentication 
 | Any endpoint | malformed Bearer | 401 | 401 | ✅ |
 | Any endpoint | empty Bearer | 401 | 401 | ✅ |
 | `/api/admin/sources` | unauth + spoofed admin headers | 401 | 401 (edge rejects) | ✅ |
-| `/api/admin/settings` | valid token + spoofed `X-Forwarded-Email=attacker@evil` + `X-Forwarded-Groups=admins` | supplied identity must not override the authenticated actor | 200 (real identity = skyler@entrada.ai matched `admin_emails`; this result did not establish a platform-injected group contract) | ✅ |
+| `/api/admin/settings` | valid token + spoofed `X-Forwarded-Email=attacker@evil` + `X-Forwarded-Groups=admins` | supplied identity must not override the authenticated actor | 200 (real identity = `<operator-email>` matched `admin_emails`; this result did not establish a platform-injected group contract) | ✅ |
 | `/api/admin/settings` | valid token + spoofed `X-Forwarded-Email=nobody@example` (downgrade test) | should still 200 if platform strips client headers | 200 (confirms platform IS stripping — defense holds) | ✅ |
 | `/api/admin/rules` PUT | valid admin + payload that lowers min_spread to -99999 | 410 Gone (rules are governance-owned) | 410 with explanatory detail | ✅ |
 | `/api/borrowers/{id}/approval` | mutating attempt | 405 (no POST defined on that path) | 405 | ✅ |
@@ -82,7 +82,7 @@ The **core authorization and data-handling controls are solid**. Authentication 
 | Borrower 360 response | `owner_link_id` shape | `owner_link_ref_*` or `ol_demo_*` | `owner_link_ref_2e55268a49d8` | ✅ |
 | Borrower 360 response | `display_name` shape | `Owner <8hex>` or `Owner anon` | `Owner e9687876` | ✅ |
 | Borrower 360 response | `subject_property` contains no street | regex check | `Synthetic property · CHICAGO, IL 60626` | ✅ |
-| Audit ledger | actor field on Genie events | edge identity, not body-supplied | `skyler@entrada.ai` consistently | ✅ |
+| Audit ledger | actor field on Genie events | edge identity, not body-supplied | `<operator-email>` consistently | ✅ |
 | Outreach approve | `actor: "ceo@summit.example"` in body | ignored, audit uses edge identity | not reachable due to upstream guard; code path documented at outreach.py:579-587 | ✅ |
 | Outreach approve | non-UUID `request_id` (`sec-audit-spoof-test-001`) | 422 validation error | 422 "must be a UUID or governed server-issued opaque id" | ✅ |
 | Outreach approve | marketing-ineligible borrower (B-03ZKTVAOC0VPL) | denied before state change | 400 "borrower is not marketing-eligible: consent_status=unknown" | ✅ |
@@ -124,7 +124,7 @@ The **core authorization and data-handling controls are solid**. Authentication 
 | `/main.tsx.map` (sourcemap probe) | should 404 or SPA shell | served SPA shell — sourcemap not exposed | ✅ |
 | `/assets/index.js.map` | should 404 | 404 | ✅ |
 | Response headers | `Strict-Transport-Security`, `CSP`, `X-Content-Type-Options`, etc. | present | absent | 🟡 LOW finding 3 |
-| Response headers | `gap-auth: <email>` | should not leak user email | leaks `gap-auth: skyler@entrada.ai` | 🟡 LOW finding 4 |
+| Response headers | `gap-auth: <email>` | should not leak user email | leaks `gap-auth: <operator-email>` | 🟡 LOW finding 4 |
 | Response headers | `x-databricks-internal-pod-ip: <b64-encoded IP>` | should not leak internal topology | leaks `10.152.118.211:7172` | 🟡 LOW finding 4 |
 
 **56 of 56 probes either pass or surface a flagged finding.** No silent failures.
@@ -138,7 +138,7 @@ The **core authorization and data-handling controls are solid**. Authentication 
 **Reproduction:**
 
 ```
-curl -H "Authorization: Bearer $TOKEN" https://mip-app-2543889327043640.aws.databricksapps.com/openapi.json
+curl -H "Authorization: Bearer $TOKEN" https://<app-host>/openapi.json
 # returns 107,692-byte OpenAPI 3.1.0 spec with all 45 routes, every Pydantic schema, every parameter shape
 ```
 
@@ -264,7 +264,7 @@ allow: GET
 content-length: 31
 content-type: application/json
 date: ...
-gap-auth: skyler@entrada.ai                       ← authenticated email
+gap-auth: <operator-email>                       ← authenticated email
 server: databricks
 x-correlation-id: ...
 x-databricks-internal-pod-ip: MTAuMTUyLjExOC4yMTE6NzE3Mg==   ← base64 of "10.152.118.211:7172"
@@ -311,7 +311,7 @@ Make the spa_fallback handler emit the same response shape regardless of encodin
 
 - **Edge authentication is mandatory and fail-closed.** Every unauthenticated probe returned `401` with empty body. The Databricks Apps platform terminates auth before requests reach FastAPI.
 - **The tested email-spoofing defense held.** A client-supplied `X-Forwarded-Email` did not replace the authenticated Apps actor. This historical probe did not establish that Databricks injects an authoritative `X-Forwarded-Groups` value; current deployed authorization uses exact server-owned identity allowlists and treats group headers as local/test-only compatibility input.
-- **Actor binding for audit attribution.** Outreach approve / reject explicitly ignore the body `actor` field (`outreach.py:579-587`) and use `resolve_actor(request)` which reads only the platform-injected header. Audit ledger probe confirmed all events tagged with `skyler@entrada.ai` not anything spoofable.
+- **Actor binding for audit attribution.** Outreach approve / reject explicitly ignore the body `actor` field (`outreach.py:579-587`) and use `resolve_actor(request)` which reads only the platform-injected header. Audit ledger probe confirmed all events tagged with `<operator-email>` not anything spoofable.
 - **`require_admin` is properly fail-closed when `trust_forwarded_headers=False`.** The code disables the header path entirely and falls back to the email allowlist — which itself only fires when `resolve_actor` returns an address, which it doesn't without trust. The result is "nobody admitted via header, only explicit server-side configuration" — exactly the right posture for an untrusted edge.
 - **PII redaction has a defensive exit check.** `_enforce_no_forbidden_keys` raises `ValueError` if any of `owner_name_hash`, `owner_1_full_name`, `situs_street_address`, `mailing_street_address`, `trigger_timeline_json` survive into the response dict. This is belt-and-suspenders — even if a future repo edit forgets to drop a column, the redactor throws.
 - **CLIP/owner-link IDs are HMAC-masked.** `mask_cotality_id` uses HMAC-SHA256 with a server-side secret (`MIP_COTALITY_ID_MASK_SECRET`). The output `clip_ref_<12hex>` and `owner_link_ref_<12hex>` are deterministic per CLIP (so the same borrower lands on the same masked ID across requests) but not reversible to the raw CLIP without the secret.
@@ -375,7 +375,7 @@ The product is **production-ready from a security perspective** given the curren
 
 After engineering shipped fixes for MEDIUM-1, MEDIUM-2, and LOW-3, ran the original probes again plus the additional checks below against the new deployment.
 
-**Active deployment:** `01f14e7aedef1c1c97ad86726790cc82` (RUNNING / ACTIVE)
+**Active deployment:** `<deployment-id>` (RUNNING / ACTIVE)
 **Source-of-truth diff confirmed via grep:**
 - `backend/api/data_estate.py:14` — symbol is now `AdminRulesServiceDep`, not `AdminDep`.
 - `backend/services/rbac.py:136` — `AdminDep` retained as the canonical auth gate.
@@ -405,7 +405,7 @@ After engineering shipped fixes for MEDIUM-1, MEDIUM-2, and LOW-3, ran the origi
 | Canonical `AdminDep` still gates admin / audit routers | grep verification | imports + 7 usages intact | imports in `admin.py` + `audit.py`; 7 usages preserved (admin × 4, audit × 3) | ✅ |
 | Unauth still 401 (no regression) | curl without bearer | 401 empty body | 401 size=2 | ✅ |
 | Admin endpoint still 200 (no regression) | authed GET `/api/admin/settings` | 200 with workspace identity | 200, 152 bytes, app config | ✅ |
-| Header-spoof downgrade still defeated | authed + `X-Forwarded-Email: attacker@evil.com` + non-admin group | still 200 (platform overrides client headers) | 200 — confirms platform strip is still active | ✅ |
+| Header-spoof downgrade still defeated | authed + `X-Forwarded-Email: attacker@evil.example` + non-admin group | still 200 (platform overrides client headers) | 200 — confirms platform strip is still active | ✅ |
 | Borrower 360 PII redaction (no regression) | grep response for `owner_name_hash`, `owner_1_full_name`, `situs_street_address`, `trigger_timeline_json`, `mailing_street_address`, `first_pos_lender_original`, `first_pos_lender_current` | none in response | none | ✅ |
 | `clip_id` masked (no regression) | shape check | `clip_ref_<12hex>` | `clip_ref_f39cc7370860` | ✅ |
 | `owner_link_id` masked (no regression) | shape check | `owner_link_ref_<12hex>` | `owner_link_ref_2e55268a49d8` | ✅ |
@@ -438,7 +438,7 @@ The CSP's `style-src 'self' 'unsafe-inline'` is the standard SPA compromise — 
 
 ### Sign-off
 
-**Both MEDIUM findings closed, LOW-3 closed, on deployment `01f14e7aedef1c1c97ad86726790cc82`.**
+**Both MEDIUM findings closed, LOW-3 closed, on deployment `<deployment-id>`.**
 
 - MEDIUM-1 (FastAPI docs exposure): closed via `MIP_EXPOSE_OPENAPI=0` default + explicit JSON 404 routes for `/openapi.json`, `/docs`, `/redoc` plus their `/api/*` counterparts. All 6 paths now return `404 application/json {"detail":"not found"}`.
 - MEDIUM-2 (`AdminDep` name shadow): closed via rename to `AdminRulesServiceDep` in `data_estate.py`. Canonical `AdminDep` from `rbac.py` is the only `AdminDep` symbol in the codebase now; the 7 admin/audit router usages are intact.

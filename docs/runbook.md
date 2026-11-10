@@ -1176,11 +1176,11 @@ every local admin call:
 
 ```bash
 curl -s -H "X-Forwarded-Groups: mip-admin" \
-     -H "X-Forwarded-Email: you@entrada.ai" \
+     -H "X-Forwarded-Email: you@example.com" \
      http://localhost:8000/api/v1/admin/rules | jq .
 
 curl -s -X PUT -H "X-Forwarded-Groups: mip-admin" \
-     -H "X-Forwarded-Email: you@entrada.ai" \
+     -H "X-Forwarded-Email: you@example.com" \
      -H "Content-Type: application/json" \
      -d '{"overrides":{"note":"local test"}}' \
      http://localhost:8000/api/v1/admin/rules | jq .
@@ -1339,7 +1339,7 @@ row.
    ```bash
    BORROWER_ID="$(curl -s "$MIP_APP_URL/api/v1/leads?limit=1" | jq -r '.[0].borrower_id')"
    curl -s -X POST "$MIP_APP_URL/api/v1/outreach/approve" \
-     -H "X-Forwarded-Email: you@entrada.ai" \
+     -H "X-Forwarded-Email: you@example.com" \
      -H "Content-Type: application/json" \
      -d "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"RATE_TERM_REFI\"}" | jq
    ```

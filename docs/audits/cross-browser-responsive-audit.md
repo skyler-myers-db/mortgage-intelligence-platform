@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of how the SPA renders across browser engines (Chromium / Firefox / WebKit), how it adapts to multiple viewport widths, how its theme / accent / density switching behaves, how the print stylesheet hides workspace chrome, and how touch-target sizing fares on small viewports.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f150ae4cdf1664a88d49827a879b2e` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Code-level audit of `design-system/components.css`, `tokens.css`, `print.css` for CSS feature usage (container queries, `:has()`, `color-mix()`, vendor prefixes); review of `frontend/tests/e2e/cross_browser_matrix.spec.ts` and `playwright.config.ts` to map existing browser-matrix coverage; live Chrome MCP probes for viewport resize, theme / accent / density switching, print-stylesheet rule inspection, CSS feature support assertion via `CSS.supports()`, and WCAG 2.5.5/2.5.8 touch-target sizing measurement.
 
 ---
@@ -14,7 +14,7 @@ The substantive WCAG 2.2 AA target-size finding is **closed** in source and on t
 
 SVG state/county paths are now marked with `data-target-size-exempt="geographic-shape"` rather than silently filtered by class. They preserve exact map geometry, remain keyboard reachable, and keep their explicit focus-visible treatment; the target-size exception is documented in the test.
 
-Validation on active deployment `01f150ae4cdf1664a88d49827a879b2e`:
+Validation on active deployment `<deployment-id>`:
 
 - `E2E_LIVE=1 npm --prefix frontend run e2e -- tests/e2e/accessibility_procurement.spec.ts --reporter=list --workers=1` — **7/7 passed**.
 - `E2E_LIVE=1 E2E_BROWSER_MATRIX=1 npm --prefix frontend run e2e -- tests/e2e/cross_browser_matrix.spec.ts --reporter=list --workers=1` — **45/45 passed** across Chromium, Firefox, WebKit, Pixel 7, iPhone 15, and iPad Pro 11 landscape.
@@ -215,7 +215,7 @@ This section is retained for traceability only. The current deployed procurement
 - Mortgage lender procurement RFPs in 2026 increasingly cite WCAG 2.2 AA as a hard requirement (especially for any product touched by Section 508).
 - The fix was small: bump `.evidence-chip` minimum height from ~23 to 28 px, add equivalent minimums to compact chips and sortable table-header buttons, and make skip links larger when visible.
 
-**Post-remediation status:** closed on active deployment `01f150ae4cdf1664a88d49827a879b2e`. The procurement accessibility gate now covers focused skip links, core routes, Borrower 360, Offer Orchestrator, and explicitly documented geographic-shape SVG exceptions.
+**Post-remediation status:** closed on active deployment `<deployment-id>`. The procurement accessibility gate now covers focused skip links, core routes, Borrower 360, Offer Orchestrator, and explicitly documented geographic-shape SVG exceptions.
 
 **Code refs:** `frontend/src/design-system/components.css` (search `.evidence-chip`, `.chip--compact`, `.tbl__sort`, `.sr-skip-link`); `frontend/tests/e2e/accessibility_procurement.spec.ts`.
 
@@ -282,10 +282,10 @@ The cross-browser + responsive posture is **production-ready for the documented 
 - `frontend/src/design-system/components.css:38-2536` — 11 @media rules + 6 @container bands
 - `frontend/src/design-system/print.css` — 12-rule print stylesheet with @page margin + Canvas tokens
 - Live `CSS.supports()` probe (Chrome 147) — all 13 modern features supported
-- Live post-fix procurement accessibility gate — 7/7 passed on deployment `01f150ae4cdf1664a88d49827a879b2e`
-- Live post-fix browser/device matrix — 45/45 passed on deployment `01f150ae4cdf1664a88d49827a879b2e`
+- Live post-fix procurement accessibility gate — 7/7 passed on deployment `<deployment-id>`
+- Live post-fix browser/device matrix — 45/45 passed on deployment `<deployment-id>`
 - Live custom all-route touch-target sweep — 0 undersized non-exempt controls, 0 horizontal overflow
-- Live deployment: `01f150ae4cdf1664a88d49827a879b2e`
+- Live deployment: `<deployment-id>`
 
 ---
 
@@ -322,7 +322,7 @@ The focused skip-link rule additionally upgrades the layout to `display: inline-
 
 `frontend/tests/e2e/cross_browser_matrix.spec.ts` and `frontend/playwright.config.ts` are unchanged — the existing 6-project matrix (chromium / firefox / webkit + Pixel 7 / iPhone 15 / iPad Pro 11) and the `assertShellHealthy` overflow + broken-token check still gate the matrix run.
 
-### Live walkthrough — spot-check on deployment `01f150ae4cdf1664a88d49827a879b2e`
+### Live walkthrough — spot-check on deployment `<deployment-id>`
 
 Re-measurement (from the prior in-session live probe before context compaction; deployment ID unchanged):
 

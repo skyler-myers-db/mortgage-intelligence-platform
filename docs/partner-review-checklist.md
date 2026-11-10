@@ -36,9 +36,9 @@ Use this checklist before recording or presenting Module 0 with Databricks or Co
 ## Live Validation Before External Use
 
 - [x] Deploy the exact reviewed source.
-  - Evidence: Databricks App deployment `01f14d00b90b15bba16e412e31a8edbd`, updated 2026-05-11T06:19:06Z, status `SUCCEEDED`. Enhanced DAB upload succeeded; the resource update path still returns Databricks permission error `PERMISSION_DENIED: You need "Can View" permission`, so the app was started with direct snapshot deploy from the refreshed workspace source path.
+  - Evidence: Databricks App deployment `<deployment-id>`, updated 2026-05-11T06:19:06Z, status `SUCCEEDED`. Enhanced DAB upload succeeded; the resource update path still returns Databricks permission error `PERMISSION_DENIED: You need "Can View" permission`, so the app was started with direct snapshot deploy from the refreshed workspace source path.
 - [x] Run the Lakebase migration and score/source-readiness refresh jobs.
-  - Evidence: FRED refresh run `1125872647053071`, silver refresh run `927414118382839`, Lakebase migration run `803051005237713`, gold refresh run `189210446175254`, lifecycle sync run `50010806203638`.
+  - Evidence: FRED refresh run `<run-id>`, silver refresh run `<run-id>`, Lakebase migration run `<run-id>`, gold refresh run `<run-id>`, lifecycle sync run `<run-id>`.
 - [x] Run local backend/frontend tests.
   - Evidence: backend unit suite, focused live-SQL integration suite, `ruff`, frontend lint, frontend unit tests, frontend build, scaffold verification, and `git diff --check` passed.
 - [x] Run live Playwright over Home -> Portfolio Builder -> Segments -> Lead Queue -> Borrower 360 -> Offer -> Ask Genie.
