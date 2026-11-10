@@ -3917,7 +3917,7 @@ def test_only_authenticated_old_supervisor_app_pin_is_reviewed_during_activation
     reconcile = _shell_function("reconcile_retry_supervisor_app_acl")
     assert "is_blue" in reconcile
     assert 'if mode == "managed":' in reconcile
-    assert '"${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"' in reconcile
+    assert '"$MIP_AGENT_SUPERVISOR_NAME"' in reconcile
     assert "display_name=supervisor_name" in reconcile
     activation = script[
         script.index("APP_GLOBAL_ACCESS_ARGS=(") : script.index(
@@ -3938,7 +3938,7 @@ def test_configured_supervisor_name_reaches_historical_cleanup() -> None:
         script.index("tools.databricks.reconcile_historical_agent_endpoints cleanup") :
     ]
 
-    assert '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"' in cleanup
+    assert '--supervisor-name "$MIP_AGENT_SUPERVISOR_NAME"' in cleanup
 
 
 def test_historical_cleanup_receives_only_bounded_proof_signing_authority(

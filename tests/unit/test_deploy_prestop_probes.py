@@ -1131,7 +1131,7 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
         '--app-name "$_GRANTS_APP_NAME"',
         '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"',
         '"${_PRESTOP_TIER_ARGS[@]}"',
-        '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"',
+        '--supervisor-name "$MIP_AGENT_SUPERVISOR_NAME"',
         '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
         '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
         '--catalog "${MIP_DEFAULT_CATALOG:-mip}"',
