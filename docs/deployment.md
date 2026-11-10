@@ -989,7 +989,13 @@ python tools/databricks/bundle_env.py validate -t client
    reconcile it.
    `MIP_LAKEBASE_INSTANCE`/`LAKEBASE_INSTANCE_NAME` and
    `LAKEBASE_DATABASE`/`MIP_LAKEBASE_DATABASE_NAME` are compatibility alias
-   pairs and must match when both names are present.
+   pairs and must match when both names are present. The App reads
+   `LAKEBASE_DATABASE` before the `PGDATABASE` its database binding injects.
+   So `scripts/deploy.sh` hands `app_deploy_payload.py` the database it binds
+   (`--lakebase-database`), and the payload names it whenever it is not the
+   App's default `mip_app_state` (M3-PR4). An ambient or `.env.local` value
+   is never read. The default install's App env-name set does not change, and
+   the emergency recipe above passes no flag, so it builds the same payload.
 
 3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
