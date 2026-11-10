@@ -34,11 +34,27 @@ from tools.clients import lakebase_handover as handover
 from tools.clients import lakebase_handover_rehearse as rehearsal
 from tools.clients import lakebase_handover_sql as sql
 from tools.clients.handover_verify import retire_blockers
+from tools.clients.lakebase_handover_acl import REVIEWED_PRIVILEGES
 from tools.clients.lakebase_handover_sql import LOCK_BOUNDS, BudgetExhausted, LockBudget, PgObject
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDEN = REPO / "tests" / "fixtures" / "lakebase_handover_plan_golden.json"
 DESTRUCTIVE = re.compile(r"\b(DROP|DELETE|TRUNCATE|REASSIGN|GRANT|REVOKE)\b")
+NEVER = re.compile(r"\b(DROP|DELETE|TRUNCATE|REASSIGN)\b")
+ACL_CHANGES = re.compile(r"\b(GRANT|REVOKE)\b")
+# Every handover module, and the one that may render a GRANT or REVOKE (S3: the
+# revert restores the target's merged grants; the rehearsal grants and takes
+# back CREATE on its own schema).
+HANDOVER_MODULES = (
+    "lakebase_handover.py",
+    "lakebase_handover_sql.py",
+    "lakebase_handover_acl.py",
+    "lakebase_handover_rehearse.py",
+    "lakebase_handover_window.py",
+    "handover_uc_plan.py",
+    "handover_uc_ownership.py",
+)
+ACL_BUILDER = "lakebase_handover_acl.py"
 CAMPAIGNS = "TABLE:mip_app.campaigns"
 
 
@@ -156,10 +172,14 @@ def test_every_write_is_one_owner_change_between_the_two_bounds(tmp_path: Path) 
 
 
 def test_no_handover_module_carries_a_destructive_statement() -> None:
-    """Every string literal outside docstrings, in every handover module: no DROP, DELETE or TRUNCATE."""
+    """Every string literal outside docstrings, in every handover module: no DROP, DELETE, TRUNCATE or REASSIGN.
 
-    modules = ("lakebase_handover.py", "lakebase_handover_sql.py", "lakebase_handover_rehearse.py", "handover_uc_plan.py", "handover_uc_ownership.py")
-    for name in modules:
+    GRANT and REVOKE appear only in the reviewed builders (lakebase_handover_acl.py);
+    which ones run is pinned in tests/unit/test_lakebase_handover_s3.py: the apply
+    none, the revert only the journaled restores, the rehearsal its own schema's.
+    """
+
+    for name in HANDOVER_MODULES:
         tree = ast.parse((REPO / "tools" / "clients" / name).read_text(encoding="utf-8"))
         docstrings = {
             id(node.body[0].value)
@@ -175,8 +195,13 @@ def test_no_handover_module_carries_a_destructive_statement() -> None:
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
         ]
         assert literals, name
-        assert [text for text in literals if DESTRUCTIVE.search(text)] == [], name
-    assert DESTRUCTIVE.search("DROP ROLE x"), "positive control"
+        if name == ACL_BUILDER:
+            # Its privilege vocabulary names DELETE and TRUNCATE as single words, never as statements.
+            literals = [text for text in literals if text not in REVIEWED_PRIVILEGES]
+        assert [text for text in literals if NEVER.search(text)] == [], name
+        if name != ACL_BUILDER:
+            assert [text for text in literals if ACL_CHANGES.search(text)] == [], name
+    assert NEVER.search("DROP ROLE x") and ACL_CHANGES.search("GRANT x TO y"), "positive controls"
 
 
 def test_a_lock_timeout_retries_and_never_blocks_the_app_past_lock_timeout(tmp_path: Path) -> None:

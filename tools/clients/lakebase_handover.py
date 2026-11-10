@@ -1,8 +1,8 @@
 """Hand the App database and its mip_app objects to the deployer's role, lock-bounded (M2-PR8).
 
 Run as the legacy owner, at cutover step 8 (docs/deployment.md, "Ownership
-handover"), after the deployer's Postgres role exists by the mechanism the S3
-rehearsal picks:
+handover"), after the deployer's Postgres role exists by spike S3's L-A
+mechanism:
 
   python -m tools.clients.lakebase_handover --plan
   python -m tools.clients.lakebase_handover --apply --ack-plan <sha256> --journal J
@@ -47,13 +47,18 @@ import os
 import shlex
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from tools.clients import handover_journal as journals
+from tools.clients.lakebase_handover_acl import (
+    restore_statements,
+    schemas_without_usage,
+    target_grants,
+)
 from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     DEFAULT_BUDGET,
@@ -127,8 +132,10 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
         if not target_inherited:
             # The exact inverse needs the target's privileges: refuse before the apply.
             refusals.append("caller_cannot_revert")
-    changes, other = [], 0
+    changes, planned, other, database_owner = [], {}, 0, ""
     for item in _inventory(cursor):
+        if item.kind == "DATABASE":
+            database_owner = item.owner
         if item.owner != legacy:
             other += 1
             continue
@@ -137,15 +144,18 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
         except LakebaseHandoverRefused:
             refusals.append("unreviewed_object")
             continue
+        planned[item.key] = item
         changes.append(
             {
                 "key": item.key,
                 "kind": item.kind,
+                "phase": item.phase,
                 "prior_owner": legacy,
                 "new_owner": target,
                 "statement": statement,
                 # The exact inverse: the same object back to the legacy role.
                 "revert_statement": owner_statement(replace(item, owner=target), legacy),
+                "revert_grants": [],
             }
         )
     kinds = {entry["kind"] for entry in changes}
@@ -155,6 +165,15 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
         refusals.append("caller_needs_database_create")
     if "DATABASE" in kinds and not createdb:
         refusals.append("caller_needs_createdb")
+    if target_exists:
+        # The grants job the target runs next revokes in every non-system schema (S3, answer 4).
+        owns_database = "DATABASE" in kinds or database_owner == target
+        refusals.extend("target_needs_schema_usage" for _schema in schemas_without_usage(cursor, target=target, owns_database=owns_database))
+        # The target's own entries the apply merges away, restored by the revert (S3, answer 3b).
+        grants = target_grants(cursor, legacy=legacy, target=target, planned=planned)
+        refusals.extend("target_grant_unrevertible" for _entry in range(grants.unrevertible))
+        for entry in changes:
+            entry["revert_grants"] = grants.restores.get(entry["key"], [])
     document = {
         "schema": SCHEMA,
         "legacy_role": legacy,
@@ -183,6 +202,10 @@ class Clock:
 SYSTEM_CLOCK = Clock()
 
 
+def _apply_statements(entry: Mapping[str, Any]) -> list[str]:
+    return [str(entry["statement"])]
+
+
 def run_entries(
     connection: Any,
     journal: journals.Journal,
@@ -190,10 +213,10 @@ def run_entries(
     *,
     budget: LockBudget,
     clock: Clock,
-    statement: str = "statement",
+    statements: Callable[[Mapping[str, Any]], Sequence[str]] = _apply_statements,
     done: str = "applied",
 ) -> bool:
-    """Run each entry's statement lock-bounded; False when the budget ran out."""
+    """Run each entry's statements, one lock-bounded transaction per entry; False when the budget ran out."""
 
     deadline = clock.now() + budget.total_s
     for entry in entries:
@@ -205,7 +228,7 @@ def run_entries(
         try:
             attempts = run_bounded(
                 connection,
-                entry[statement],
+                statements(entry),
                 budget=budget,
                 deadline=deadline,
                 clock=clock.now,
@@ -258,7 +281,8 @@ def revert_plan(read_session: ReadSession, journal: journals.Journal) -> tuple[d
     for entry in sort_changes(landed, reverse=True):
         owner = owners.get(entry["key"])
         if owner == entry["new_owner"]:
-            moves.append({"key": entry["key"], "statement": entry["revert_statement"]})
+            # The inverse and, in its transaction, the target's grants the apply merged away.
+            moves.append({"key": entry["key"], "statement": entry["revert_statement"], "grants": list(entry.get("revert_grants") or [])})
         elif owner == entry["prior_owner"]:
             noops.append(entry["key"])
         else:
@@ -286,10 +310,10 @@ def revert(
     journal.set_status("reverting")
     for key in document["noops"]:
         journal.mark_unmoved(key)
-    moves = [{**journal.entry(move["key"]), "revert_statement": move["statement"]} for move in document["moves"]]
+    moves = [{**journal.entry(move["key"]), "revert_statement": move["statement"], "revert_grants": move["grants"]} for move in document["moves"]]
     connection = connect()
     try:
-        finished = run_entries(connection, journal, moves, budget=budget, clock=clock, statement="revert_statement", done="reverted")
+        finished = run_entries(connection, journal, moves, budget=budget, clock=clock, statements=restore_statements, done="reverted")
     finally:
         connection.close()
     journal.set_status("reverted" if finished else "reverting")
@@ -372,7 +396,18 @@ def _profile_session(instance: str = "", database: str = "") -> Session:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
-    modes = ("--plan", "--apply", "--revert", "--retire-check", "--rehearse", "--window-context", "--window-open", "--in-window", "--window-close", "--remainder")
+    modes = (
+        "--plan",
+        "--apply",
+        "--revert",
+        "--retire-check",
+        "--rehearse",
+        "--window-context",
+        "--window-open",
+        "--in-window",
+        "--window-close",
+        "--remainder",
+    )
     for flag in modes:
         mode.add_argument(flag, action="store_true")
     parser.add_argument("--ack-plan", default="")

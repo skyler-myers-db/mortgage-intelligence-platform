@@ -26,7 +26,12 @@ waited longer than ``lock_timeout`` plus a scheduling margin; a session that
 dies voids the run (``RehearsalSessionFailed``) instead of passing it. It
 first reads the same PostgreSQL preconditions the plan does (``AUTHORITY_SQL``
 on the rehearsal schema): a missing one fails the rehearsal and names the gap
-the chosen mechanism must close, before any change. The
+the chosen mechanism must close, before any change. The rehearsal creates and
+owns its schema, so the target's CREATE there (``target_needs_schema_create``)
+is the rehearsal's own to give: when the target lacks it, the rehearsal grants
+it after creating the schema and revokes exactly that grant at the end, also
+after a failure, and a pass needs the revoke to have landed (spike S3, answer
+6: the first run otherwise refused until the owner granted it by hand). The
 L-B mechanism (``delete_database_instance_role`` with ``reassign_owned_to``)
 deletes a role, which no tool in this PR does; it is not rehearsed here.
 """
@@ -39,10 +44,11 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
 from tools.clients import handover_journal as journals
+from tools.clients.lakebase_handover_acl import grant_statement, revoke_statement
 from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     DEFAULT_BUDGET,
@@ -50,6 +56,7 @@ from tools.clients.lakebase_handover_sql import (
     SCHEMA_NAME,
     LakebaseHandoverRefused,
     LockBudget,
+    PgObject,
     quote_ident,
     run_bounded,
 )
@@ -67,6 +74,8 @@ OWNER_SQL = (
     "SELECT pg_get_userbyid(relowner)::text FROM pg_class "
     f"WHERE oid = to_regclass('{REHEARSAL_SCHEMA}.{REHEARSAL_TABLE}')"
 )
+# The rehearsal schema's CREATE, which the rehearsal grants the target and takes back.
+_SCHEMA_OBJECT = PgObject("SCHEMA", "", REHEARSAL_SCHEMA, "", "")
 LOCK_TIMEOUT_S = float(LOCK_TIMEOUT.removesuffix("s"))
 SCHEDULING_MARGIN_S = 1.0
 _PREFIX = "[mip-lakebase-rehearsal]"
@@ -103,6 +112,9 @@ class RehearsalReport:
     probe_samples: int = 0
     # Probe queries that overlapped the change's lock waits: the evidence itself.
     probe_samples_during_change: int = 0
+    # The rehearsal granted the target CREATE on its own schema; and took it back.
+    granted_schema_create: bool = False
+    schema_create_revoked: bool = False
 
 
 class ThreadedConcurrent:
@@ -215,46 +227,95 @@ def rehearse(
     if hold_s <= LOCK_TIMEOUT_S:
         raise ValueError("the long transaction must outlast lock_timeout to rehearse the retry")
     connection = connect()
+    granted: list[str] = []
+    try:
+        report = _rehearse_on(
+            connection, connect, granted, legacy=legacy, target=target, hold_s=hold_s, concurrent=concurrent, clock=clock, sleep=sleep, budget=budget
+        )
+    except BaseException:
+        _take_back(connection, granted, target, quiet=True)
+        connection.close()
+        raise
+    revoked = _take_back(connection, granted, target, quiet=False)
+    connection.close()
+    if not granted:
+        return report
+    return replace(report, granted_schema_create=True, schema_create_revoked=revoked, passed=report.passed and revoked)
+
+
+def _take_back(connection: Any, granted: list[str], target: str, *, quiet: bool) -> bool:
+    """Revoke the rehearsal's own CREATE grant; True once the target no longer holds it."""
+
+    if not granted:
+        return True
     try:
         with connection.transaction(), connection.cursor() as cursor:
-            cursor.execute(INSTALL_SCHEMA_SQL, {"schema": SCHEMA_NAME})
-            holds_install = cursor.fetchone()
-            if holds_install is None or holds_install[0]:
-                raise LakebaseHandoverRefused("the rehearsal database holds mip_app: an install's database, not a throwaway")
-            for statement in SETUP:
-                cursor.execute(statement)
+            cursor.execute(revoke_statement(_SCHEMA_OBJECT, ("CREATE",), target))
             cursor.execute(AUTHORITY_SQL, {"target": target, "schema": REHEARSAL_SCHEMA})
-            row = cursor.fetchone() or ("", False, False, False, False, False, False)
-        missing = tuple(
-            code
-            for code, held in (
-                ("target_role_not_settable", row[2]),
-                ("target_needs_schema_create", row[3]),
-                ("caller_cannot_revert", row[6]),
-            )
-            if not held
+            row = cursor.fetchone()
+        return row is not None and not row[3]
+    except Exception:
+        if quiet:
+            return False  # the failure in flight is the one to report
+        raise
+
+
+def _rehearse_on(
+    connection: Any,
+    connect: Callable[[], Any],
+    granted: list[str],
+    *,
+    legacy: str,
+    target: str,
+    hold_s: float,
+    concurrent: Callable[[Callable[[], Any], float], Concurrent] | None,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+    budget: LockBudget,
+) -> RehearsalReport:
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(INSTALL_SCHEMA_SQL, {"schema": SCHEMA_NAME})
+        holds_install = cursor.fetchone()
+        if holds_install is None or holds_install[0]:
+            raise LakebaseHandoverRefused("the rehearsal database holds mip_app: an install's database, not a throwaway")
+        for statement in SETUP:
+            cursor.execute(statement)
+        cursor.execute(AUTHORITY_SQL, {"target": target, "schema": REHEARSAL_SCHEMA})
+        row = cursor.fetchone() or ("", False, False, False, False, False, False)
+        if row[1] and not row[3]:
+            # The rehearsal owns its schema: CREATE there is its own to give (S3, answer 6).
+            cursor.execute(grant_statement(_SCHEMA_OBJECT, ("CREATE",), target))
+            granted.append(target)
+            cursor.execute(AUTHORITY_SQL, {"target": target, "schema": REHEARSAL_SCHEMA})
+            row = cursor.fetchone() or row
+    missing = tuple(
+        code
+        for code, held in (
+            ("target_role_not_settable", row[2]),
+            ("target_needs_schema_create", row[3]),
+            ("caller_cannot_revert", row[6]),
         )
-        if missing:
-            owner = _owner(connection)
-            return RehearsalReport(LOCK_TIMEOUT_S, hold_s, 0, 0, owner, owner, 0.0, False, missing)
-        factory = concurrent or (lambda opened, held: ThreadedConcurrent(opened, held, clock=clock))
-        sessions = factory(connect, hold_s)
-        sessions.start()
-        try:
-            change_started = clock()
-            deadline = change_started + budget.total_s
-            change = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(target)}"
-            change_attempts = run_bounded(connection, change, budget=budget, deadline=deadline, clock=clock, sleep=sleep)
-            change_ended = clock()
-        finally:
-            # Always ends both sessions; a session that died raises here.
-            samples = sessions.join()
-        after_change = _owner(connection)
-        inverse = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(legacy)}"
-        revert_attempts = run_bounded(connection, inverse, budget=budget, deadline=clock() + budget.total_s, clock=clock, sleep=sleep)
-        after_revert = _owner(connection)
+        if not held
+    )
+    if missing:
+        owner = _owner(connection)
+        return RehearsalReport(LOCK_TIMEOUT_S, hold_s, 0, 0, owner, owner, 0.0, False, missing)
+    factory = concurrent or (lambda opened, held: ThreadedConcurrent(opened, held, clock=clock))
+    sessions = factory(connect, hold_s)
+    sessions.start()
+    try:
+        change_started = clock()
+        deadline = change_started + budget.total_s
+        change = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(target)}"
+        change_attempts = run_bounded(connection, change, budget=budget, deadline=deadline, clock=clock, sleep=sleep)
+        change_ended = clock()
     finally:
-        connection.close()
+        # Always ends both sessions; a session that died raises here.
+        samples = sessions.join()
+    after_change = _owner(connection)
+    inverse = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(legacy)}"
+    revert_attempts = run_bounded(connection, inverse, budget=budget, deadline=clock() + budget.total_s, clock=clock, sleep=sleep)
+    after_revert = _owner(connection)
     worst = max((ended - started for started, ended in samples), default=0.0)
     # Only a probe query that arrived while the change waited measures what an
     # App query suffers; none (a probe that recorded nothing) is no evidence.
