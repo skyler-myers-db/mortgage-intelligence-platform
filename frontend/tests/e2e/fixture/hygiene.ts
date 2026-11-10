@@ -10,6 +10,13 @@
  *
  * The production CSP is applied to every document response (see
  * productionCsp.ts) so the `csp` check exercises the real policy.
+ *
+ * A request the browser cancelled is not a failed request by itself.
+ * Chromium's net::ERR_ABORTED is dropped for every request. A Firefox or
+ * WebKit cancel of a same-origin /assets/ GET is forgiven only when the same
+ * URL landed (2xx or 304, body received) in the same test, and each one
+ * forgiven is annotated on the test; an asset that never landed, and every
+ * other cancel (an /api/ read, a POST), still fails unless the test allows it.
  */
 import type { ConsoleMessage, Page, Request } from '@playwright/test';
 import type { MockApi } from './mockApi';
@@ -38,6 +45,34 @@ interface CspReport {
 
 const CSP_BINDING = '__mipFixtureCspViolation';
 
+/**
+ * Firefox's and WebKit's names for a request the page or the engine cancelled
+ * itself. WebKit spells it per port: "cancelled" on macOS, "Load request
+ * cancelled" on Linux (the e2e-cross-engine runner). Chromium's name,
+ * net::ERR_ABORTED, is dropped for every request (onRequestFailed).
+ */
+const ENGINE_CANCEL = /^(?:NS_BINDING_ABORTED|cancelled|Load request cancelled)$/;
+
+/**
+ * A same-origin GET under /assets/ that Firefox or WebKit cancelled. The
+ * harness holds it until the verdict and forgives it only when the same URL
+ * landed in the same test (Hygiene.collected); an /api/ cancel, any other
+ * method, and any other failure text are reported as they happen.
+ */
+export function isEngineAssetCancel(method: string, url: string, failure: string): boolean {
+  if (method !== 'GET' || !ENGINE_CANCEL.test(failure)) return false;
+  try {
+    return new URL(url).pathname.startsWith('/assets/');
+  } catch {
+    return false;
+  }
+}
+
+/** A response that delivered the asset: 2xx, or a 304 revalidation. */
+function delivered(status: number): boolean {
+  return (status >= 200 && status < 300) || status === 304;
+}
+
 function oneLine(text: string, max = 400): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
@@ -49,6 +84,10 @@ export class Hygiene {
 
   private readonly found: HygieneViolation[] = [];
   private readonly allowed: Array<{ check: HygieneCheck; pattern: RegExp }> = [];
+  /** Firefox / WebKit /assets/ cancels, resolved against `landed` at the verdict. */
+  private readonly assetCancels: Array<{ url: string; message: string }> = [];
+  /** Every URL this page received in full with a delivering status, in this test. */
+  private readonly landed = new Set<string>();
   private attached = false;
 
   constructor(
@@ -76,7 +115,18 @@ export class Hygiene {
     this.allowed.push({ check, pattern });
   }
 
-  /** Everything collected so far, including opted-out checks (harness self-tests read this). */
+  /**
+   * Everything collected so far, including opted-out checks (harness self-tests read this).
+   *
+   * A Firefox / WebKit asset cancel (isEngineAssetCancel) is in it only while
+   * its URL has not landed. Order does not matter. React 19 re-assigns every
+   * mounted <img>'s src at commit (react-dom commitMount, to replay onLoad);
+   * Firefox can answer that with a second request for the image it already
+   * holds and cancel it unsent. The footer wordmark did (CI run 42864141680,
+   * both attempts): the 200 started 33-41 ms BEFORE the cancelled request,
+   * yet Playwright delivered the cancel first. So "landed" means anywhere in
+   * the test, before or after the cancel.
+   */
   collected(): HygieneViolation[] {
     const unregistered: HygieneViolation[] = this.mockApi.unregistered.map((call) => ({
       check: 'unregistered-api',
@@ -85,7 +135,15 @@ export class Hygiene {
         'Add one under tests/e2e/fixture/data/ or call mockApi.register() in the test; ' +
         'use mockApi.degrade() if the test wants this endpoint to fail.',
     }));
-    return [...unregistered, ...this.found];
+    const unlanded: HygieneViolation[] = this.assetCancels
+      .filter((cancel) => !this.landed.has(cancel.url))
+      .map((cancel) => ({ check: 'request-failed', message: cancel.message }));
+    return [...unregistered, ...this.found, ...unlanded];
+  }
+
+  /** The asset cancels forgiven because their URL landed; test.ts annotates each one. */
+  forgivenAssetCancels(): string[] {
+    return this.assetCancels.filter((cancel) => this.landed.has(cancel.url)).map((cancel) => cancel.message);
   }
 
   /** Violations that fail the test: collected minus opt-outs and allowed messages. */
@@ -103,6 +161,10 @@ export class Hygiene {
     });
     page.on('console', (message) => this.onConsole(message));
     page.on('requestfailed', (request) => this.onRequestFailed(page, request));
+    page.on('requestfinished', (request) => {
+      const status = request.existingResponse()?.status();
+      if (status !== undefined && delivered(status)) this.landed.add(request.url());
+    });
 
     await page.exposeFunction(CSP_BINDING, (report: CspReport) => {
       this.found.push({
@@ -175,10 +237,15 @@ export class Hygiene {
     } catch {
       return;
     }
-    this.found.push({
-      check: 'request-failed',
-      message: oneLine(`${request.method()} ${request.url()} failed: ${failure}`),
-    });
+    const message = oneLine(`${request.method()} ${request.url()} failed: ${failure}`);
+    // Firefox and WebKit report their cancels by other names, so they are
+    // not dropped like Chromium's: an asset one is held for the verdict
+    // (collected), every other one is a violation now, as before.
+    if (isEngineAssetCancel(request.method(), request.url(), failure)) {
+      this.assetCancels.push({ url: request.url(), message });
+      return;
+    }
+    this.found.push({ check: 'request-failed', message });
   }
 }
 
