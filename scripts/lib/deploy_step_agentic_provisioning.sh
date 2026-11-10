@@ -139,7 +139,7 @@ run_with_proof_signing_authority \
   --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-  --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+  --supervisor-name "$MIP_AGENT_SUPERVISOR_NAME" \
   --app-name "$_GRANTS_APP_NAME" \
   --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
   --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
