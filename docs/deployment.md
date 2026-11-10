@@ -992,10 +992,16 @@ python tools/databricks/bundle_env.py validate -t client
    pairs and must match when both names are present. The App reads
    `LAKEBASE_DATABASE` before the `PGDATABASE` its database binding injects.
    So `scripts/deploy.sh` hands `app_deploy_payload.py` the database it binds
-   (`--lakebase-database`), and the payload names it whenever it is not the
-   App's default `mip_app_state` (M3-PR4). An ambient or `.env.local` value
-   is never read. The default install's App env-name set does not change, and
-   the emergency recipe above passes no flag, so it builds the same payload.
+   (`--lakebase-database "$LAKEBASE_DATABASE"`, the value it also exports as
+   `BUNDLE_VAR_lakebase_database_name`), and the payload names it whenever it
+   is not the App's default `mip_app_state` (M3-PR4). The payload tool itself
+   reads no ambient or `.env.local` value for it. An adopted core blue's
+   restore payload is rebuilt with the same flag (`app_core_rollback
+   restore-payload --lakebase-database`), so a blue bound to another database
+   rebuilds with its own env-name set. The default install's App env-name set
+   does not change, and the emergency recipe above passes no flag, so it
+   builds the same payload; for a client bound to another database, add
+   `--lakebase-database <database>` to its `app_deploy_payload` line.
 
 3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
