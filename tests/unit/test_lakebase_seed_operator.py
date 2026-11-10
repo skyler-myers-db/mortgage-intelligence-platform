@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -178,3 +179,32 @@ def test_no_tracked_seed_or_bundle_text_names_an_operator_address() -> None:
 
     addresses = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", TEMPLATE)
     assert addresses and all(address.endswith("@summit.example") for address in addresses)
+
+
+def test_every_module_that_applies_the_seed_renders_it_first() -> None:
+    """A raw apply would write the literal token as an address (CI's real-PostgreSQL contracts).
+
+    A module that reads the seed and executes SQL must render it; one that
+    only inspects the template's text may read it raw.
+    """
+
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", "tests", "tools", "jobs", "scripts", "backend"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+        timeout=120,
+    ).stdout.decode("utf-8")
+    appliers: list[str] = []
+    for rel in filter(None, listed.split("\0")):
+        if not rel.endswith(".py") or rel == "tests/unit/test_lakebase_seed_operator.py":
+            continue
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        reads = re.search(r"seed_campaigns\.sql\"\)\.read_text\(", text)
+        applies = re.search(r"_run_transaction\(|\.execute\(", text)
+        if reads and applies:
+            appliers.append(rel)
+            assert "render_seed_sql(" in text, f"{rel} applies the raw seed template"
+    # The migrate job, its plan inputs and the real-PostgreSQL and live contracts.
+    assert {"jobs/lakebase_migrate.py", "tests/integration/test_sales_loop_postgres.py"} <= set(appliers)
+    assert len(appliers) >= 20, appliers

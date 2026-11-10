@@ -29,13 +29,14 @@ from psycopg.rows import dict_row
 
 from backend.services import borrower_decision_history as history
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures import borrower_decision_rows as seeds
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _MARKER = "-- Borrower decision history index ---"
 # The integrator re-dates this placeholder after 2026_10_01_genie_job_sections (C6).
 _VERSION = "2026_10_07_borrower_decision_history_index"

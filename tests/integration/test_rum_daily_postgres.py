@@ -29,6 +29,7 @@ from backend.schemas.telemetry import RumEvent
 from backend.services import rum_rollup
 from backend.services.rum_buckets import NUM_BUCKETS
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
@@ -37,7 +38,7 @@ pytestmark = pytest.mark.integration
 RUM_DAILY_VERSION = "2026_10_07_rum_daily"
 _MARKER = "-- Browser RUM day aggregates ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _DAY = date(2026, 10, 2)
 
 

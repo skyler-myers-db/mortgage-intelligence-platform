@@ -36,12 +36,13 @@ from backend.services import genie_completion_jobs as jobs
 from backend.services.genie_answers import GenieCancelResponse
 from backend.services.genie_completion_cancel import GenieCancelRequest, request_cancel
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _MARKER = "-- Genie completion-job pre-cancel ---"
 #: Dated at the W5c merge: the fourth of the five W5c blocks, after the dossier index.
 PRECANCEL_VERSION = "2026_10_07_genie_job_precancel"
