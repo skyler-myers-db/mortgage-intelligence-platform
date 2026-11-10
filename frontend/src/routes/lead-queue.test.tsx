@@ -162,14 +162,14 @@ describe('buildLeadQueueExportFilters', () => {
         raw_clip: '9154364327',
         street_address: '123 Main Street',
       },
-      cohortId: 'f2366c18-e9d7-4354-8400-a29cf212a2fd',
+      cohortId: '5eed00a6-0000-4000-8000-0000000000a6',
     });
 
     expect(filters).toContain('states=IL');
     expect(filters).toContain('funnel_stage=approved');
     expect(filters).toContain('target_lender_ref=Acme+Mortgage');
     expect(filters).toContain('product=Cash-out');
-    expect(filters).toContain('cohort_id=f2366c18-e9d7-4354-8400-a29cf212a2fd');
+    expect(filters).toContain('cohort_id=5eed00a6-0000-4000-8000-0000000000a6');
     expect(filters).not.toContain('owner_name');
     expect(filters).not.toContain('raw_clip');
     expect(filters).not.toContain('street_address');
@@ -187,7 +187,7 @@ describe('buildLeadQueueExportFilters', () => {
 
   it('drops unreviewed portfolio filter values even for allowed keys', () => {
     const filters = buildLeadQueueExportFilters({
-      cohortId: 'f2366c18-e9d7-4354-8400-a29cf212a2fd',
+      cohortId: '5eed00a6-0000-4000-8000-0000000000a6',
       portfolioCriteria: {
         product: 'Alice Smith',
         occupancy: '123 Main Street',
@@ -195,7 +195,7 @@ describe('buildLeadQueueExportFilters', () => {
       },
     });
 
-    expect(filters).toContain('cohort_id=f2366c18-e9d7-4354-8400-a29cf212a2fd');
+    expect(filters).toContain('cohort_id=5eed00a6-0000-4000-8000-0000000000a6');
     expect(filters).toContain('lender_relationship=Competitor+customer');
     expect(filters).not.toContain('Alice');
     expect(filters).not.toContain('Smith');

@@ -39,7 +39,7 @@ from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 ACTOR = "ops@summit-mortgage.example"
 KEY_SWEEP = 2000
 LEDGER_FILTERS = {"event_type": "APPROVE", "since": "2026-09-01T00:00:00Z"}
-EVENT_IDS = ["0f8fad5b-d9cb-469f-a165-70867728950e", "7c9e6679-7425-40de-944b-e07fc1f90ae7"]
+EVENT_IDS = ["5eed00a1-0000-4000-8000-0000000000a1", "5eed00a2-0000-4000-8000-0000000000a2"]
 BORROWER_IDS = ["B-AAAAAAAAAAAA1", "B-AAAAAAAAAAAA2"]
 CSV_SHA256 = hashlib.sha256(b"csv").hexdigest()
 STATES = (

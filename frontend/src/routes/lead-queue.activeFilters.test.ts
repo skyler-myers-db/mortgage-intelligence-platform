@@ -85,7 +85,7 @@ describe('hidden columns are display state (tables-05 step 2)', () => {
 
 describe('an approval-request scope is a filter (flow-02 / shell-06)', () => {
   it('Clear all drops approval_request_batch and keeps the display state', () => {
-    const scoped = new URLSearchParams('approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e&view=sales-ops');
+    const scoped = new URLSearchParams('approval_request_batch=5eed00a1-0000-4000-8000-0000000000a1&view=sales-ops');
     expect(hasLeadQueueFilters(scoped)).toBe(true);
     expect(searchParamsCleared(scoped).toString()).toBe('view=sales-ops');
   });

@@ -29,7 +29,7 @@ from backend.services.audit_store import (
 )
 from backend.services.pii_redaction import scrub_free_text
 
-BATCH = "0d2c0f4e-6b6a-4b8e-9a51-3c0f7b1d2e4f"
+BATCH = "5eed00a3-0000-4000-8000-0000000000a3"
 # Phone-shaped masked ids the old scan refused, and a control it never did.
 PHONE_SHAPED_IDS = ("B-5551234567XYZ", "B-1555123456789", "B-05551234567XY")
 CONTROL_ID = "B-0A1B2C3D4E5F6"

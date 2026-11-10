@@ -199,7 +199,7 @@ def test_a_fingerprint_whose_hex_reads_as_a_phone_number_still_prints(
     store: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Pre-2026-10-28 the entity was ``print-{fingerprint[:16]}``. Under this
-    # process key LEDGER_FILTERS fingerprint to b917f0406271903c..., whose
+    # process key LEDGER_FILTERS fingerprint to b917f040..., whose
     # ten-digit run reads as a phone number, so the audit-id PII guard refused
     # the row and the print answered 422 (about 1.4% of keys).
     monkeypatch.setattr(audit_fingerprint, "_LOCAL_KEY", hashlib.sha256(b"probe-168").digest())

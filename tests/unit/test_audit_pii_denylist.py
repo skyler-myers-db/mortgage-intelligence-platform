@@ -69,7 +69,7 @@ def test_assert_no_pii_is_case_insensitive() -> None:
     with pytest.raises(AuditPIIError):
         _assert_no_pii({"DISPLAY_NAME": "Jane"})
     with pytest.raises(AuditPIIError):
-        _assert_no_pii({"Email": "a@b.com"})
+        _assert_no_pii({"Email": "a@b.example"})
 
 
 def test_assert_no_pii_permits_allowlist_adjacent_keys() -> None:
@@ -477,12 +477,12 @@ def test_audit_store_accepts_uuid_with_phone_like_digit_run() -> None:
         actor="operator@summit.example",
         action="outreach.reject",
         entity_type="approval",
-        entity_id="94e455bb-5fed-4745-82db-0b8606194175",
-        payload_json={"approval_id": "94e455bb-5fed-4745-82db-0b8606194175"},
+        entity_id="5eed00b1-0000-4000-8000-0000000000b1",
+        payload_json={"approval_id": "5eed00b1-0000-4000-8000-0000000000b1"},
         event_type="OUTREACH_REJECT",
     )
 
-    assert event.entity_id == "94e455bb-5fed-4745-82db-0b8606194175"
+    assert event.entity_id == "5eed00b1-0000-4000-8000-0000000000b1"
 
 
 def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
@@ -492,9 +492,9 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
         actor="operator@summit.example",
         action="outreach.approve",
         entity_type="approval",
-        entity_id="94e455bb-5fed-4745-82db-0b8606194175",
+        entity_id="5eed00b1-0000-4000-8000-0000000000b1",
         payload_json={
-            "approval_id": "94e455bb-5fed-4745-82db-0b8606194175",
+            "approval_id": "5eed00b1-0000-4000-8000-0000000000b1",
             "borrower_id": "B-12345",
             "offer_code": "refi",
             "draft_subject": "Review for jane@example.com at 555-212-3333",
@@ -606,7 +606,7 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
     store = InMemoryAuditStore()
     # borrowers.py::read_borrower_360
     store.write(
-        actor="a@b.com", action="view_borrower_360",
+        actor="a@b.example", action="view_borrower_360",
         entity_type="borrower", entity_id="B-1",
         payload_json={
             "opportunity_score": 92,
@@ -618,16 +618,16 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
     )
     # outreach.py::draft_outreach
     store.write(
-        actor="a@b.com", action="draft_outreach",
+        actor="a@b.example", action="draft_outreach",
         entity_type="outreach_draft", entity_id="B-1",
         payload_json={"channel": "email", "offer_code": "refi"},
     )
     # outreach.py::approve_outreach
     store.write(
-        actor="a@b.com", action="outreach.approve",
-        entity_type="approval", entity_id="94e455bb-5fed-4745-82db-0b8606194175",
+        actor="a@b.example", action="outreach.approve",
+        entity_type="approval", entity_id="5eed00b1-0000-4000-8000-0000000000b1",
         payload_json={
-            "approval_id": "94e455bb-5fed-4745-82db-0b8606194175",
+            "approval_id": "5eed00b1-0000-4000-8000-0000000000b1",
             "offer_code": "refi",
             "borrower_id": "B-1",
             "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -637,10 +637,10 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
     )
     # outreach.py::reject_outreach
     store.write(
-        actor="a@b.com", action="outreach.reject",
-        entity_type="approval", entity_id="2ee3b92a-8910-4dc1-b72a-5ef0e0413f37",
+        actor="a@b.example", action="outreach.reject",
+        entity_type="approval", entity_id="5eed00b2-0000-4000-8000-0000000000b2",
         payload_json={
-            "approval_id": "2ee3b92a-8910-4dc1-b72a-5ef0e0413f37",
+            "approval_id": "5eed00b2-0000-4000-8000-0000000000b2",
             "offer_code": "refi",
             "borrower_id": "B-1",
             "request_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -649,7 +649,7 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
     )
     # leads.py::list_leads_ranked
     store.write(
-        actor="a@b.com", action="view_leads_ranked",
+        actor="a@b.example", action="view_leads_ranked",
         entity_type="lead_queue", entity_id="itm",
         payload_json={
             "rendered_borrower_ids": ["B-1", "B-2"],
@@ -664,7 +664,7 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
     )
     # offers.py::recommend_offer
     store.write(
-        actor="a@b.com", action="recommend_offer",
+        actor="a@b.example", action="recommend_offer",
         entity_type="borrower", entity_id="B-1",
         payload_json={
             "offer_code": "refi",
@@ -679,7 +679,7 @@ def test_view_leads_public_ceilings_are_allowlisted_and_range_checked() -> None:
     """W5a tables-06: VIEW_LEADS records the public max_* bounds."""
     store = InMemoryAuditStore()
     store.write(
-        actor="a@b.com", action="view_leads_ranked",
+        actor="a@b.example", action="view_leads_ranked",
         entity_type="lead_queue", entity_id="_all",
         payload_json={
             "rendered_borrower_ids": ["B-1"],

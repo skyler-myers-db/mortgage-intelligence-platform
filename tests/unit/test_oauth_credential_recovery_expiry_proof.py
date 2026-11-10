@@ -57,7 +57,7 @@ def _prove(
         intent=intent,
         sink=sink,
         delivery_ack=delivery_ack,
-        principal_id="75100133948918",
+        principal_id="70000000000102",
         before_ids=frozenset({"a", "b"}),
         fence=lambda: calls.append("fence"),
     )
@@ -119,7 +119,7 @@ def test_unavailable_intent_age_quarantines() -> None:
             intent=_intent(),
             sink=None,
             delivery_ack=None,
-            principal_id="75100133948918",
+            principal_id="70000000000102",
             before_ids=frozenset(),
             fence=lambda: None,
         )

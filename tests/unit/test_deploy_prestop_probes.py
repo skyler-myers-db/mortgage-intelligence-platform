@@ -214,7 +214,7 @@ def test_a_whitespace_padded_canonical_name_is_refused(
 
 # --- Reserved replacement names ------------------------------------------------
 
-GOVERNED_SPACE = "01f13d4968af1b249dc388fd5b18b195"
+GOVERNED_SPACE = "01f1c0de000000000000000000000001"
 RESERVED_NAMES = (
     f"{CANONICAL}{RUNTIME_REPLACEMENT_SUFFIX}",
     supervisor_replacement_name(CANONICAL, genie_space_id=GOVERNED_SPACE, catalog="mip"),

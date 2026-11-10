@@ -35,7 +35,7 @@ import AuditLedger from '../../routes/audit-ledger';
 import { RefusalReportsPanel } from './RefusalReportsPanel';
 import { QUESTION_EXPIRED, QUESTION_NOT_RECORDED } from './RefusalReportRow';
 
-const WITH_TEXT = '0d2c0f4e-6b6a-4b8e-9a51-3c0f7b1d2e4f';
+const WITH_TEXT = '5eed00a3-0000-4000-8000-0000000000a3';
 const HASH_ONLY = '5a1f3e2d-1c0b-4a9e-8d7c-6b5a4f3e2d1c';
 const AUDIT_ID = '7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2f1e';
 const PAGE: RefusalReportListResponse = {
@@ -45,7 +45,7 @@ const PAGE: RefusalReportListResponse = {
       reported_at: '2026-10-05T14:30:00Z',
       refusal_reason: 'unreviewed_criterion',
       reporter: 'lo.alpha@summit.example',
-      conversation_id: '01f13d4968af1b249dc388fd5b18b195',
+      conversation_id: '01f1c0de000000000000000000000001',
       message_id: null,
       has_text: true,
       text_expires_at: '2027-01-03T14:30:00Z',
@@ -132,7 +132,7 @@ describe('RefusalReportsPanel', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelector('.chip')?.textContent).toBe('Outside the reviewed vocabulary');
     expect(rows[0].textContent).toContain('lo.alpha@summit.example');
-    expect(rows[0].querySelector('td.mono.fs-11')?.textContent).toContain('01f13d4968af1b249dc388fd5b18b195');
+    expect(rows[0].querySelector('td.mono.fs-11')?.textContent).toContain('01f1c0de000000000000000000000001');
     const link = rows[0].querySelector<HTMLAnchorElement>('a.mono');
     expect(link?.getAttribute('href')).toBe(auditEventHref(AUDIT_ID));
     expect(rows[1].textContent).toContain('Hash only');

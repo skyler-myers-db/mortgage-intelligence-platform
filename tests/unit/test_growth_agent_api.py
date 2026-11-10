@@ -99,7 +99,7 @@ def _full_capability_settings() -> Settings:
         mip_ai_gateway_endpoint="mip-agent-gateway",
         mip_ai_gateway_inference_table="mip.audit.mip_agent_gateway_llama",
         mip_agent_eval_experiment="/Shared/mip/agent-eval",
-        mip_agent_eval_run_id="91d51bf91f28494dac6781c394e28d7a",
+        mip_agent_eval_run_id="e7a1c0de0000000000000000000000e1",
         mip_lakebase_sync=True,
         mip_lakebase_sync_catalog="mip_app_state",
         mip_lakebase_sync_schema="mip_sync",

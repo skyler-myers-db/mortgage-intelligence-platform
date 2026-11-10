@@ -48,8 +48,8 @@ ADMIN = "ops@summit-mortgage.example"
 ADMIN_HEADERS = {"X-Forwarded-Email": ADMIN, "X-Forwarded-Groups": "mip-admin"}
 NON_ADMIN_HEADERS = {"X-Forwarded-Email": "lo@summit-mortgage.example", "X-Forwarded-Groups": ""}
 EVENT_IDS = [
-    "0f8fad5b-d9cb-469f-a165-70867728950e",
-    "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "5eed00a1-0000-4000-8000-0000000000a1",
+    "5eed00a2-0000-4000-8000-0000000000a2",
 ]
 FILTERS = {"event_type": "APPROVE", "since": "2026-09-01T00:00:00Z"}
 FILTER_PARAMS = {
@@ -393,7 +393,7 @@ def test_a_fingerprint_whose_hex_reads_as_a_phone_number_still_records_the_expor
     audit_store: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Pre-2026-10-28 the entity was ``export-{fingerprint[:16]}``. Under this
-    # process key FILTERS fingerprint to b917f0406271903c..., whose ten-digit
+    # process key FILTERS fingerprint to b917f040..., whose ten-digit
     # run reads as a phone number, so the audit-id PII guard refused the row
     # and the download never started (422, about 1.4% of keys).
     monkeypatch.setattr(settings, "app_env", "test")
