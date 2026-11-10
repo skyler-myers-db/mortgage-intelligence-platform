@@ -3666,6 +3666,8 @@ MIP_APP_NAME=mip-app
 MIP_VERIFIER_SCIM_ID=verifier-scim
 MIP_AGENT_SUPERVISOR_ID=green-supervisor-id
 MIP_AGENT_SUPERVISOR_ENDPOINT=green-supervisor
+# The preflight's resolved name (deploy_step_preflight_gates.sh), not the canonical one.
+MIP_AGENT_SUPERVISOR_NAME="Harbor Growth Supervisor"
 AGENT_RUNTIME_GREEN_ARGS=(--replacement-id green-supervisor-id --replacement-endpoint green-supervisor)
 refresh_captured_cutover_journal() {{
   MIP_REPLACED_AGENT_SUPERVISOR_ID=old-supervisor-id
@@ -3697,6 +3699,7 @@ resume_captured_runtime_retirement
     assert "--old-gateway-endpoint-id old-gateway-id" in observed[0]
     assert "--old-gateway-delete-allowed" in observed[0]
     assert "cutover_agent_runtime_supervisor finalize" in observed[1]
+    assert "--canonical-name Harbor Growth Supervisor" in observed[1]
     assert all("clear-journal" not in line for line in observed)
 
 
