@@ -35,7 +35,7 @@ recover_pending_supervisor_creation() {
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.supervisor_creation_control adopt \
     "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-    --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" || return 1
   supervisor_creation_status "$status_json" || return 1
@@ -61,7 +61,7 @@ recover_pending_supervisor_creation() {
   step "classify the signed Supervisor intent against current reviewed policy"
   run "$PYTHON" -m tools.databricks.supervisor_creation_control classify-policy \
     "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-    --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --out-json "$policy_json" || return 1
@@ -87,7 +87,7 @@ recover_pending_supervisor_creation() {
     DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     "$PYTHON" -m tools.databricks.supervisor_creation_runtime complete \
     "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-    --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --out-json "$completion_json" || return 1
@@ -113,7 +113,7 @@ create_planned_supervisor_if_needed() {
       DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
       "$PYTHON" -m tools.databricks.supervisor_creation_runtime finalize-signed-blue \
       "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-      --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+      --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
       --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
       --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
       --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
@@ -123,7 +123,7 @@ create_planned_supervisor_if_needed() {
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.supervisor_creation_control plan-prepare \
     "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-    --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
@@ -158,7 +158,7 @@ create_planned_supervisor_if_needed() {
     DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     "$PYTHON" -m tools.databricks.supervisor_creation_runtime create \
     "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-    --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --out-json "$result_json" || return 1
@@ -174,7 +174,7 @@ create_planned_supervisor_if_needed() {
     DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     "$PYTHON" -m tools.databricks.supervisor_creation_runtime complete \
     "${SUPERVISOR_CREATION_COMMON_ARGS[@]}" \
-    --canonical-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --out-json "$completion_json" || return 1

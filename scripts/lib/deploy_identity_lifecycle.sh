@@ -422,6 +422,10 @@ run_as_m2m_identity() {
   local cutover_signed_blue_supervisor_pin="${MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON:-}"
   local lakebase_instance="${MIP_LAKEBASE_INSTANCE:-${LAKEBASE_INSTANCE_NAME:-mip-app-state}}"
   local lakebase_database="${LAKEBASE_DATABASE:-${MIP_LAKEBASE_DATABASE_NAME:-mip_app_state}}"
+  # The preflight's resolved Supervisor name (deploy_step_preflight_gates.sh).
+  # provision_agentic_resources reads it from the environment only, so without
+  # it here an agent-runtime call would plan the canonical default instead.
+  local supervisor_name="${MIP_AGENT_SUPERVISOR_NAME:-}"
   local allowed_name
   shift 3
   echo "${DIM}\$ $* (${label} M2M identity)${RST}"
@@ -446,6 +450,9 @@ run_as_m2m_identity() {
     export LAKEBASE_INSTANCE_NAME="$lakebase_instance"
     export LAKEBASE_DATABASE="$lakebase_database"
     export MIP_LAKEBASE_DATABASE_NAME="$lakebase_database"
+    if [[ -n "$supervisor_name" ]]; then
+      export MIP_AGENT_SUPERVISOR_NAME="$supervisor_name"
+    fi
     for allowed_name in TMPDIR LANG LC_ALL SSL_CERT_FILE REQUESTS_CA_BUNDLE \
       CURL_CA_BUNDLE HTTPS_PROXY HTTP_PROXY NO_PROXY; do
       if [[ -n "${!allowed_name:-}" ]]; then

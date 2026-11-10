@@ -2277,7 +2277,10 @@ non-runtime canonical Supervisor. Those runs used to refuse at the same audits
 after the stop.
 
 - **Supervisor retirement.** If a Supervisor holds the canonical name
-  (`MIP_AGENT_SUPERVISOR_NAME`, default `Mortgage Growth Agent`) and its
+  (`MIP_AGENT_SUPERVISOR_NAME`, default `Mortgage Growth Agent`; the
+  preflight reads it once, from the shell or the client profile in
+  `.env.local`, and every probe, provisioning and cutover step uses that
+  value) and its
   creator is not the configured agent-runtime service principal, a successful
   deploy replaces it and later deletes it and its serving endpoint. That cannot
   be undone and is not covered by any rollback step. The probe refuses unless
