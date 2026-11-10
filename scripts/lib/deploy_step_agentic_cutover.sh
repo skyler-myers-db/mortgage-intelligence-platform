@@ -124,6 +124,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
               "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT}" != "$MIP_AI_GATEWAY_ENDPOINT" ) ]]; then
       AGENT_RUNTIME_PIN_ARGS=(
         -m tools.databricks.cutover_agent_runtime_supervisor pin-journal
+        --canonical-name "$MIP_AGENT_SUPERVISOR_NAME"
         --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
         --app-name "$_GRANTS_APP_NAME"
         --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
@@ -170,6 +171,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       set +a
     fi
     AGENT_RUNTIME_GREEN_ARGS=(
+      --canonical-name "$MIP_AGENT_SUPERVISOR_NAME"
       --replacement-id "$MIP_AGENT_SUPERVISOR_ID"
       --replacement-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
       --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT"

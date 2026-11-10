@@ -134,6 +134,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
     DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor finalize \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --replacement-id "$MIP_AGENT_SUPERVISOR_ID" \
     --replacement-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
     --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
