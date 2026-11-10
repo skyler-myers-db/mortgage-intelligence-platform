@@ -12,8 +12,12 @@ main) certifies code that is runtime-equivalent to the release commit:
   shopped around.
 - R must be green, at most ``max_age_days`` old (exactly 14.0 days passes),
   and its three release jobs must each have concluded ``success``. nightly.yml
-  runs ``verify_deployed_app_contract --git-sha`` twice, so a green run really
-  certifies the deployed commit it names.
+  runs ``python -m tools.clients.validation_session app-sha`` twice (the
+  deployed App's authenticated health must name the run's sha), so a green
+  run really certifies the deployed commit it names. It checks the git sha
+  only, not the Gateway binding, the deployment lease or the signed
+  last-good contract (scripts/deploy.sh verifies the binding and the lease
+  at deploy time).
 - "Runtime" is deny-by-default: every path is runtime except the explicit
   NON_RUNTIME list below. genie/sample_questions.md is read at runtime, so
   ``**/*.md`` is deliberately NOT in the list; only repo-root ``*.md`` is.
@@ -22,8 +26,9 @@ main) certifies code that is runtime-equivalent to the release commit:
   parses and names its own head sha: a run-name naming another sha
   (cross-sha) or none (a run from before M1-PR8) is refused. With
   ``--client <key>`` a run of another client is refused too (cross-client),
-  so another install's green run never certifies this one. The refused runs
-  are counted in the verdict, never chosen.
+  so another install's green run never certifies this one. Without
+  ``--client`` any client's run counts, and the verdict says so ("client:
+  any"). The refused runs are counted in the verdict, never chosen.
 
 Exit codes: 0 PASS, 1 FAIL, 2 API error (every caller treats 2 as FAIL).
 Output carries only URLs, shas, ages, job conclusions, the reason and paths.
@@ -82,6 +87,7 @@ NON_RUNTIME_PREFIXES = (
 NON_RUNTIME_SUFFIXES = (".test.ts", ".test.tsx")
 
 FIX_HINT = "dispatch deploy-dev.yml on {sha}, then nightly.yml on the same sha"
+ANY_CLIENT = "any (cross-client evidence accepted; pass --client for per-client evidence)"
 CLIENT_FIX_HINT = "dispatch deploy-dev.yml (client={client}) on {sha}, then nightly.yml (client={client}) on the same sha"
 
 
@@ -432,8 +438,7 @@ def evaluate(
 def render(result: Verdict) -> str:
     lines = [f"live-validation gate: {result.status}" + (f" ({result.reason})" if result.reason else "")]
     lines.append(f"  release sha: {result.release_sha}")
-    if result.client:
-        lines.append(f"  client: {result.client}")
+    lines.append(f"  client: {result.client}" if result.client else f"  client: {ANY_CLIENT}")
     for reason, count in result.refused.items():
         lines.append(f"  refused evidence: {count} {reason.replace('_', '-')} run(s)")
     if result.run_url:

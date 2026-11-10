@@ -94,9 +94,9 @@ def _inspect_zip(path: Path) -> list[Any]:
     return _load_tool("release_hygiene").inspect_zip(str(path))
 
 
-def _github_live_verdict(release_sha: str) -> Any:
+def _github_live_verdict(release_sha: str, client: str | None = None) -> Any:
     gate = _load_tool("live_validation_gate")
-    return gate.evaluate(gate.resolve_sha(release_sha))
+    return gate.evaluate(gate.resolve_sha(release_sha), client=client)
 
 
 def _live_evidence(name: str, operator: str, operator_evidence: str | None, passed_claim: str, mode: str, verdict: Any) -> Evidence:
@@ -249,7 +249,7 @@ def build_report(args: argparse.Namespace, live_verdict: Any = None) -> dict[str
     release_zip = _repo_path(args.release_zip)
     mode = args.live_evidence
     if mode == "github" and live_verdict is None:
-        live_verdict = _github_live_verdict(args.release_sha)
+        live_verdict = _github_live_verdict(args.release_sha, getattr(args, "client", None))
     live = {
         name: _live_evidence(
             name,
@@ -443,6 +443,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="github: the six live checks come only from tools/live_validation_gate.py; none: they stay unverified",
     )
     parser.add_argument("--release-sha", default="HEAD", help="the release commit the live gate certifies")
+    parser.add_argument(
+        "--client",
+        default=None,
+        help="the client whose nightly.yml runs are evidence; without it any client's run counts",
+    )
     parser.add_argument("--mls-listing-status", choices=VALID_FEED_STATUSES, default="unknown")
     parser.add_argument("--building-permit-status", choices=VALID_FEED_STATUSES, default="unknown")
     return parser.parse_args(argv)

@@ -397,6 +397,9 @@ def test_prod_readiness_gate_runs_the_gate_without_deploying() -> None:
     workflow = yaml.safe_load(text)
 
     assert workflow["name"] == "prod-readiness-gate"
+    # Per-client evidence (M1-PR8): the client is a required dispatch input.
+    client = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]["client"]
+    assert client["required"] is True and client["type"] == "string"
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["jobs"]["non-deploying-prod-gate"]["name"] == "Non-deploying production scaffold gate"
     job = workflow["jobs"]["live-validation-age"]
@@ -405,9 +408,9 @@ def test_prod_readiness_gate_runs_the_gate_without_deploying() -> None:
     assert checkout["uses"] == "actions/checkout@v6" and checkout["with"]["fetch-depth"] == 0
     assert python["uses"] == "actions/setup-python@v6" and str(python["with"]["python-version"]) == "3.11"
     assert gate_step["run"].strip() == (
-        'python -m tools.live_validation_gate --release-sha "$GITHUB_SHA" --max-age-days 14'
+        'python -m tools.live_validation_gate --release-sha "$GITHUB_SHA" --max-age-days 14 --client "$MIP_DISPATCH_CLIENT"'
     )
-    assert gate_step["env"] == {"GITHUB_TOKEN": "${{ github.token }}"}
+    assert gate_step["env"] == {"GITHUB_TOKEN": "${{ github.token }}", "MIP_DISPATCH_CLIENT": "${{ inputs.client }}"}
     assert "DATABRICKS_" not in text and "scripts/deploy.sh" not in text and "secrets." not in text
 
 
@@ -457,8 +460,11 @@ def test_another_clients_green_run_is_refused_as_cross_client_evidence() -> None
     assert (result.status, result.reason, result.refused) == ("FAIL", "no_green_run", {"cross_client": 1})
     assert result.fix == f"dispatch deploy-dev.yml (client={CLIENT}) on {RELEASE}, then nightly.yml (client={CLIENT}) on the same sha"
     assert "refused evidence: 1 cross-client run(s)" in gate.render(result)
-    # Without --client the same run is evidence: the selection, not the verdict, refused it.
-    assert _evaluate(other, client=None).status == "PASS"
+    # Without --client the same run is evidence: the selection, not the verdict,
+    # refused it, and the verdict says the evidence may be any client's.
+    anyone = _evaluate(other, client=None)
+    assert anyone.status == "PASS"
+    assert "client: any (cross-client evidence accepted" in gate.render(anyone)
 
 
 def test_a_run_name_naming_another_sha_is_refused_as_cross_sha_evidence() -> None:

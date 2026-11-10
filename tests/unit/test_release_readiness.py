@@ -319,3 +319,26 @@ def test_an_operator_failed_stays_failed_in_both_modes(tmp_path: Path) -> None:
     for mode, verdict in (("none", None), ("github", _pass_verdict())):
         report = _live_report(tmp_path, verdict, "--live-evidence", mode, "--genie-live", "failed")
         assert report["checks"]["genie_live"]["status"] == "failed", mode
+
+
+def test_the_github_live_evidence_is_this_clients_when_client_is_given(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """--client reaches the gate, so another client's green run never certifies this release."""
+
+    seen: list[str | None] = []
+
+    def fake(release_sha: str, client: str | None = None) -> Verdict:
+        seen.append(client)
+        return _pass_verdict()
+
+    monkeypatch.setattr(release_readiness, "_github_live_verdict", fake)
+    release_zip = tmp_path / "release.zip"
+    with zipfile.ZipFile(release_zip, "w") as archive:
+        archive.writestr("README.md", "# ok\n")
+    talk_track = tmp_path / "talk-track.md"
+    _write_talk_track(talk_track)
+    common = ["--release-sha", SHA, "--release-zip", str(release_zip), "--talk-track", str(talk_track), "--timestamp", "2026-05-21T12:00:00+00:00"]
+
+    release_readiness.main([*common, "--out", str(tmp_path / "a.json"), "--client", "client-one"])
+    release_readiness.main([*common, "--out", str(tmp_path / "b.json")])
+
+    assert seen == ["client-one", None]
