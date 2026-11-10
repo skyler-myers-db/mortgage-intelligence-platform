@@ -25,7 +25,9 @@ in tests/unit/test_lakebase_handover_s3.py):
   (``owner_reads``), so one the target owns cannot read a table the legacy
   role still owns: 42501 (S3, answer 3c);
 * the rehearsal's ``CREATE SCHEMA`` leaves the target no CREATE there (S3,
-  answer 6: the first ``--rehearse`` refused ``target_needs_schema_create``).
+  answer 6: the first ``--rehearse`` refused ``target_needs_schema_create``);
+* the legacy role keeps the extensions and its ``pg_default_acl`` row the
+  handover does not move (S3, answer 3b: ``pgcrypto`` and one row).
 
 Time is virtual (``clock``/``sleep``), a rolled-back transaction leaves
 owners and ACLs as they were, and every executed statement is recorded. Reads
@@ -49,6 +51,7 @@ from tools.clients.lakebase_handover_rehearse import (
     REHEARSAL_SCHEMA,
     SETUP,
 )
+from tools.clients.lakebase_handover_roles import FACTS_SQL, RESIDUE_SQL
 from tools.clients.lakebase_handover_sql import AUTHORITY_SQL, INVENTORY_SQL, PgObject
 
 LEGACY = "legacy-owner@example.com"
@@ -165,6 +168,8 @@ class FakeServer:
     member_of: frozenset[str] = frozenset({DEPLOYER})
     settable: bool = True
     inherits: bool = True
+    # The caller holds ADMIN on the target (it created it with databricks_create_role).
+    admin_edge: bool = True
     # The caller's own PostgreSQL preconditions (AUTHORITY_SQL); "schema_create"
     # False forces the target's CREATE off whatever the ACL says.
     authority: dict[str, bool] = field(default_factory=lambda: {"schema_create": True, "database_create": True, "createdb": True})
@@ -181,6 +186,10 @@ class FakeServer:
         }
     )
     column_grants: list[tuple[str, str, str, str, str]] = field(default_factory=list)  # key, column, grantee, grantor, privilege
+    extensions: dict[str, str] = field(default_factory=lambda: {"pgcrypto": LEGACY, "databricks_auth": "cloud_admin"})
+    default_acl_roles: list[str] = field(default_factory=lambda: [LEGACY])
+    other_owned: int = 0  # objects the legacy role owns outside this inventory (another database)
+    memberships_granted: int = 0  # memberships the legacy role granted other roles
     held_until: dict[str, float] = field(default_factory=dict)  # object key -> release time
     now: float = 0.0
     statements: list[str] = field(default_factory=list)
@@ -288,6 +297,22 @@ class FakeServer:
         owner = self.owner_of(key)
         return owner if owner in self.effective(self.caller) else None
 
+    def residue(self, legacy: str) -> list[tuple[str, int]]:
+        owned = sum(1 for key in {*self.owners, *(f"SCHEMA:{name}" for name in self.schemas)} if self.owner_of(key) == legacy)
+        named = sum(
+            1
+            for key, entries in self.acl.items()
+            if self.owner_of(key) != legacy and any(legacy in (grantee, grantor) for grantee, grantor, _name in entries)
+        )
+        found = {
+            "owns_extension": sum(1 for owner in self.extensions.values() if owner == legacy),
+            "default_acl": self.default_acl_roles.count(legacy),
+            "owns_object": owned + self.other_owned,
+            "holds_privilege": named,
+            "granted_membership": self.memberships_granted,
+        }
+        return sorted((name, count) for name, count in found.items() if count)
+
 
 class FakeConnection:
     def __init__(self, server: FakeServer) -> None:
@@ -364,6 +389,13 @@ class FakeCursor:
             return missing
         if statement == TARGET_ACL_SQL:
             return self._target_acl(params["target"])
+        if statement == FACTS_SQL:
+            target = params["target"]
+            database = server.database_key().partition(":")[2]
+            exists = target in server.roles
+            return [(server.caller, database, server.owner_of(server.database_key()), exists, exists and server.admin_edge, "databricks_auth" in server.extensions)]
+        if statement == RESIDUE_SQL:
+            return server.residue(params["legacy"]) if params["legacy"] in server.roles else []
         if statement == INSTALL_SCHEMA_SQL:
             schema = params["schema"]
             return [(any(item.schema == schema or (item.kind == "SCHEMA" and item.name == schema) for item in server.objects),)]

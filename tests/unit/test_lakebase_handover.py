@@ -44,11 +44,12 @@ NEVER = re.compile(r"\b(DROP|DELETE|TRUNCATE|REASSIGN)\b")
 ACL_CHANGES = re.compile(r"\b(GRANT|REVOKE)\b")
 # Every handover module, and the one that may render a GRANT or REVOKE (S3: the
 # revert restores the target's merged grants; the rehearsal grants and takes
-# back CREATE on its own schema).
+# back CREATE on its own schema; --preconditions prints the owner's grants).
 HANDOVER_MODULES = (
     "lakebase_handover.py",
     "lakebase_handover_sql.py",
     "lakebase_handover_acl.py",
+    "lakebase_handover_roles.py",
     "lakebase_handover_rehearse.py",
     "lakebase_handover_window.py",
     "handover_uc_plan.py",
@@ -314,7 +315,8 @@ def test_retire_check_refuses_while_a_job_runs_as_the_legacy_identity(capsys: py
     pipelines = [{"pipeline_id": "p-1", "run_as_user_name": LEGACY.upper(), "creator_user_name": DEPLOYER}]
     workspace = jobs_workspace(jobs, pipelines, me=LEGACY)
     assert retire_blockers(workspace, legacy_identity=LEGACY) == ["job:1", "pipeline:p-1"]
-    session = SimpleNamespace(workspace=lambda: workspace)
+    retired = FakeServer(objects=[], acl={}, extensions={}, default_acl_roles=[])  # the Lakebase half holds nothing
+    session = SimpleNamespace(workspace=lambda: workspace, read_session=retired.read_session)
     assert handover.main(["--retire-check"], session=lambda *a: session) == 2
     assert "legacy_identity_in_use" in capsys.readouterr().err
     jobs[1]["run_as_user_name"] = DEPLOYER

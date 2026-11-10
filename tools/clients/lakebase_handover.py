@@ -2,8 +2,9 @@
 
 Run as the legacy owner, at cutover step 8 (docs/deployment.md, "Ownership
 handover"), after the deployer's Postgres role exists by spike S3's L-A
-mechanism:
+mechanism (``--preconditions`` prints the owner's SQL for it, read-only):
 
+  python -m tools.clients.lakebase_handover --preconditions
   python -m tools.clients.lakebase_handover --plan
   python -m tools.clients.lakebase_handover --apply --ack-plan <sha256> --journal J
   python -m tools.clients.lakebase_handover --revert --journal J [--ack-plan <sha256>]
@@ -36,7 +37,9 @@ override, which the migration connection would prefer, refuses
 
 The tool never drops, creates or reassigns a role. ``--retire-check`` is the
 read-only gate before the owner removes the legacy role by hand: it refuses
-while any job or pipeline still runs as the legacy identity.
+while any job or pipeline still runs as the legacy identity, or while the
+legacy role still owns an extension, a default-ACL row or any other object,
+holds a privilege, or granted a membership (tools/clients/lakebase_handover_roles.py).
 """
 
 from __future__ import annotations
@@ -400,6 +403,7 @@ def _parser() -> argparse.ArgumentParser:
         "--plan",
         "--apply",
         "--revert",
+        "--preconditions",
         "--retire-check",
         "--rehearse",
         "--window-context",
@@ -445,19 +449,10 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
             values = {"WR5_APP_NAME": current.app_name, "WR5_SCOPE": current.rollback_scope, "WR5_LAKEBASE_INSTANCE": current.live_instance}
             print("".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items()), end="")
             return 0
-        if args.retire_check:
-            from tools.clients.handover_verify import retire_blockers
+        if args.preconditions or args.retire_check:
+            from tools.clients.lakebase_handover_roles import run_preconditions, run_retire_check
 
-            workspace = current.workspace()
-            legacy = args.legacy_identity or str(getattr(workspace.current_user.me(), "user_name", "") or "")
-            blockers = retire_blockers(workspace, legacy_identity=legacy)
-            if args.report_out is not None:
-                journals.write_private(args.report_out, {"runs_as_legacy": blockers})
-            print(f"{_PREFIX} retire-check: {len(blockers)} job(s) or pipeline(s) still run as the legacy identity")
-            if blockers:
-                print(f"{_PREFIX} REFUSED legacy_identity_in_use: keep the legacy role until none does", file=sys.stderr)
-                return 2
-            return 0
+            return run_preconditions(args, current) if args.preconditions else run_retire_check(args, current)
         if args.plan or args.apply:
             computed = plan(current.read_session, target=current.target)
             for line in _iter_lines(computed):

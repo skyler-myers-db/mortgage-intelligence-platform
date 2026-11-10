@@ -13,15 +13,19 @@ cannot drift back to answering the way the tool hoped:
   next revokes in every one;
 * exact revert: the target's own grants the apply merged away are journaled
   and restored, so apply, revert and a new plan give the original digest;
+* retire-check reports the legacy role's extensions and default-ACL rows;
+* ``--preconditions`` prints the owner's L-A SQL, in order and quoted;
 * ``--rehearse`` grants the target CREATE on its own schema and takes it back.
 """
 
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,10 +39,12 @@ from tests.fixtures.fake_lakebase import (
     owner_entries,
     throwaway,
 )
+from tests.fixtures.handover_jobs_fake import jobs_workspace
 from tools.clients import handover_journal as journals
 from tools.clients import lakebase_handover as handover
 from tools.clients import lakebase_handover_acl as acl
 from tools.clients import lakebase_handover_rehearse as rehearsal
+from tools.clients import lakebase_handover_roles as roles
 from tools.clients import lakebase_handover_sql as sql
 
 REPO = Path(__file__).resolve().parents[2]
@@ -249,6 +255,96 @@ def test_the_apply_still_sends_no_grant_and_the_revert_only_journaled_restores(t
     assert _revert(server, tmp_path / "j.json")
     reverted = [text for statements in server.transactions[count:] for text in statements if text.startswith(("GRANT", "REVOKE"))]
     assert reverted == [text for entry in journal.entries for text in entry["revert_grants"]] and reverted
+
+
+# -- retire-check --------------------------------------------------------------
+
+
+def test_retire_check_reports_the_extension_and_default_acl_row_the_handover_leaves(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    server = FakeServer()
+    _apply(server, tmp_path / "j.json")
+    workspace = jobs_workspace({}, [], me=LEGACY)
+    session = SimpleNamespace(workspace=lambda: workspace, read_session=server.read_session)
+    capsys.readouterr()
+    assert handover.main(["--retire-check", "--report-out", str(tmp_path / "r.json")], session=lambda *a: session) == 2
+    captured = capsys.readouterr()
+    assert "legacy_role_residue (default_acl, owns_extension)" in captured.err and "legacy_identity_in_use" not in captured.err
+    assert LEGACY not in captured.out + captured.err
+    residue = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))["lakebase_residue"]
+    assert residue == {category: int(category in {"default_acl", "owns_extension"}) for category in roles.RESIDUE_CATEGORIES}
+    server.extensions["pgcrypto"] = DEPLOYER
+    server.default_acl_roles.clear()
+    assert handover.main(["--retire-check"], session=lambda *a: session) == 0
+
+
+def test_retire_check_counts_what_the_legacy_role_still_owns_holds_or_granted() -> None:
+    server = FakeServer(other_owned=1, memberships_granted=2)
+    with server.read_session() as cursor:
+        before = roles.legacy_residue(cursor, legacy=LEGACY)
+    assert before["owns_object"] == 11 + 1 and before["granted_membership"] == 2
+    with server.read_session() as cursor:
+        assert roles.legacy_residue(cursor, legacy="absent-role@example.com") == dict.fromkeys(roles.RESIDUE_CATEGORIES, 0)
+
+
+# -- preconditions -------------------------------------------------------------
+
+
+def _preconditions(server: FakeServer, *, target: str = DEPLOYER) -> tuple[list[str], list[str]]:
+    with server.read_session() as cursor:
+        return roles.preconditions(cursor, target=target)
+
+
+def test_preconditions_print_the_owners_l_a_sql_in_order_for_a_missing_target() -> None:
+    server = FakeServer(roles={LEGACY, APP_ROLE}, extensions={}, schemas={"public": "pg_database_owner", 'odd"schema': LEGACY})
+    server.acl[SCHEMA].pop((DEPLOYER, LEGACY, "CREATE"))
+    lines, refusals = _preconditions(server)
+    assert refusals == []
+    statements = [line for line in lines if not line.startswith("--")]
+    assert statements == [
+        "CREATE EXTENSION IF NOT EXISTS databricks_auth;",
+        f"SELECT databricks_create_role('{DEPLOYER}', 'SERVICE_PRINCIPAL');",
+        f'GRANT "{DEPLOYER}" TO "{LEGACY}" WITH INHERIT TRUE, SET TRUE;',
+        f'GRANT CREATE ON SCHEMA "mip_app" TO "{DEPLOYER}";',
+        f'GRANT USAGE ON SCHEMA "odd""schema" TO "{DEPLOYER}";',
+    ]
+    assert lines[-1].endswith("lakebase_handover --plan")
+
+
+def test_preconditions_leave_out_what_holds_and_print_nothing_when_all_do() -> None:
+    lines, refusals = _preconditions(FakeServer())
+    assert refusals == [] and [line for line in lines if not line.startswith("--")] == []
+    assert "-- Every precondition holds." in lines
+
+
+def test_preconditions_refuse_a_target_created_without_the_admin_edge() -> None:
+    """A role created through the REST API or the UI first: the legacy owner cannot self-grant SET and INHERIT."""
+
+    server = FakeServer(admin_edge=False, settable=False, inherits=False)
+    lines, refusals = _preconditions(server)
+    assert refusals == ["target_role_without_admin_edge"]
+    assert not any(line.startswith(("SELECT databricks_create_role", f'GRANT "{DEPLOYER}"')) for line in lines)
+
+
+def test_preconditions_quote_role_names_and_literals() -> None:
+    target = "o'dd\"role"
+    server = FakeServer(roles={LEGACY}, extensions={})
+    lines, refusals = _preconditions(server, target=target)
+    assert refusals == ["target_identity_unreviewed"], "the deployer is a service principal's application id"
+    assert "SELECT databricks_create_role('o''dd\"role', 'SERVICE_PRINCIPAL');" in lines
+    assert 'GRANT "o\'dd""role" TO "legacy-owner@example.com" WITH INHERIT TRUE, SET TRUE;' in lines
+
+
+def test_the_preconditions_mode_reads_only_and_writes_the_private_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    server = FakeServer(roles={LEGACY, APP_ROLE})
+    session = SimpleNamespace(read_session=server.read_session, target=DEPLOYER)
+    assert handover.main(["--preconditions", "--report-out", str(tmp_path / "p.json")], session=lambda *a: session) == 0
+    assert server.transactions == [], "read-only: no write transaction"
+    out = capsys.readouterr().out
+    assert f"SELECT databricks_create_role('{DEPLOYER}', 'SERVICE_PRINCIPAL');" in out
+    assert json.loads((tmp_path / "p.json").read_text(encoding="utf-8"))["refusals"] == []
+    assert "connect" not in inspect.getsource(roles.run_preconditions)
 
 
 # -- rehearse ------------------------------------------------------------------
