@@ -424,6 +424,7 @@ repin_proven_quiesce_window() {
 
 # The proven start deployment becomes the signed record (same provenance,
 # predecessor_deployment_id), health is checked against it, the journal closes.
+# The core tier re-pins its v7 core record (app_core_rollback repin, S7).
 # A WR1 window restarted blue on the bundle's bindings, so the re-pin records
 # the live set when it is exactly that applied payload (or the record's own);
 # the next step 0a then has nothing to revert on the serving App.
@@ -435,8 +436,11 @@ repin_and_close_quiesce_window() {
   fi
   mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET || return 1
   step "re-pin the signed record to the proven start deployment and check its health"
-  run_with_account_identity run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.app_deployment_rollback repin \
+  local -a repin=("$PYTHON" -m tools.databricks.app_deployment_rollback repin)
+  if [[ "${CLIENT_AGENTIC_TIER:-}" == "off" ]]; then
+    repin=("$PYTHON" -m tools.databricks.app_core_rollback repin --lakebase-instance "$MIP_LAKEBASE_INSTANCE" --agentic-tier off)
+  fi
+  run_with_account_identity run_with_proof_signing_authority "${repin[@]}" \
     --app-name "$_GRANTS_APP_NAME" \
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --base-url "${MIP_APP_URL:?App URL is required for the re-pin health proof}" \
@@ -708,8 +712,11 @@ recover_deadman_quiesce_window() {
     applied_bindings=(--app-resource-payload "$payload")
   fi
   step "re-pin the deployment an earlier window's dead-man started (repin --from-deadman, the window's proofs)"
-  if ! run_with_account_identity run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.app_deployment_rollback repin --from-deadman \
+  local -a repin=("$PYTHON" -m tools.databricks.app_deployment_rollback repin)
+  if [[ "${CLIENT_AGENTIC_TIER:-}" == "off" ]]; then
+    repin=("$PYTHON" -m tools.databricks.app_core_rollback repin --lakebase-instance "$MIP_LAKEBASE_INSTANCE" --agentic-tier off)
+  fi
+  if ! run_with_account_identity run_with_proof_signing_authority "${repin[@]}" --from-deadman \
     --app-name "$_GRANTS_APP_NAME" \
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --base-url "${MIP_APP_URL:?App URL is required for the re-pin health proof}" \

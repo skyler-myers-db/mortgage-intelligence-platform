@@ -62,16 +62,27 @@ def test_a_green_left_active_is_a_note_the_core_step_0a_restores_over(
     assert verdict.refusals == () and "restores the record's deployment over it" in verdict.notes[0]
 
 
-def test_a_stopped_core_blue_refuses_before_the_lease_as_step_0a_would(
+def test_a_stopped_core_blue_is_a_note_step_0a_starts_and_re_pins(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.compute = "STOPPED"  # spike S7: its GET has no active deployment
+
+    verdict = _verdict(world, monkeypatch)
+    assert verdict.refusals == () and "starts it and re-pins the start (tier a)" in verdict.notes[0]
+    assert world.apps.mutations == []
+
+
+def test_a_stopped_core_app_whose_start_would_not_rerun_blue_refuses_before_the_lease(
     world: CoreWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Review of #319: predicted here, nothing is quiesced or repaired under the lease."""
 
     world.compute = "STOPPED"
+    world.active = "deployment-old"  # the default source follows the last active deployment
 
     verdict = _verdict(world, monkeypatch)
     assert [refusal.code for refusal in verdict.refusals] == [codes.ROLLBACK_RECORD_DRIFT]
-    assert "blue_stopped" in verdict.refusals[0].message and "owner break-glass" in verdict.refusals[0].message
+    assert "tier_a_refused" in verdict.refusals[0].message and "owner break-glass" in verdict.refusals[0].message
     assert world.apps.mutations == []
 
 

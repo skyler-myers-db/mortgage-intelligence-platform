@@ -11,11 +11,14 @@ a restart it records lets the pre-lease plan through to the recovery under
 the lease, which re-proves it (``repin --from-deadman``).
 
 A v7 core record (M2-PR7b: an adopted blue, or a core release's own capture)
-is read too, its env-name set from the record itself. Only a plan with no
-reason passes over it: the window's start-and-re-pin is written for v5 and v6
-records, and a v7 one waits for spike S7 (how a start snapshots source), so a
-v7 blue that needs a window refuses before the lease (``V7WindowOwed``), with
-the App untouched. A v7 agentic record is refused as before (M4-PR1).
+is read too, its env-name set from the record itself. Spike S7 recorded how a
+start snapshots source (the CURRENT bytes of blue's folder, with the newest
+deployment's env names), so a v7 core blue gets the window v5/v6 get: the
+folder's full-tree digest now is checked against the record's own signed
+``source_tree_sha256`` (blue's folder at adoption or capture) instead of a
+download of a ``/src/`` payload, and the start is re-pinned onto the next v7
+version (tools/databricks/core_blue_repin.py). A v7 agentic record is refused
+as before (M4-PR1).
 """
 
 from __future__ import annotations
@@ -47,12 +50,6 @@ ROLE_STATES = frozenset({"exact", "drift"})
 # recorded absent, which no converge can rotate. The App and the jobs reader
 # always exist.
 VERIFIER_ROLE_STATES = ROLE_STATES | {"absent"}
-
-
-class V7WindowOwed(RuntimeError):
-    """A v7 blue needs a window, whose start-and-re-pin is not written for v7 (M2-PR7b)."""
-
-    code = "window_over_v7_blue"
 
 
 def app_or_none(workspace: Any, *, app_name: str) -> object | None:
@@ -200,17 +197,18 @@ def collect_facts(
             else env_names_digest(env_names(record["payload"]))
         ),
     )
-    if v7 and facts.reasons():
-        raise V7WindowOwed(
-            f"the plan needs a window ({', '.join(facts.reasons())}) over a v7 core blue, whose "
-            "start-and-re-pin waits for spike S7; nothing was changed and the App keeps serving"
-        )
     if not facts.reasons() or not facts.restore_source:
         return facts
+    if v7:
+        # The record's own digest of blue's folder; another folder is a drift.
+        same = record["source_code_path"] == facts.restore_source
+        artifact = str(record["source_tree_sha256"]) if same else ""
+    else:
+        artifact = digest(workspace, record["payload"]["source_code_path"])
     return WindowFacts(
         **{
             **facts.__dict__,
             "source_tree_sha256": digest(workspace, facts.restore_source),
-            "artifact_tree_sha256": digest(workspace, record["payload"]["source_code_path"]),
+            "artifact_tree_sha256": artifact,
         }
     )

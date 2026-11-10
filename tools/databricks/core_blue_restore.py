@@ -7,14 +7,18 @@ treatment is quiesced, the record is loaded through the tier gate
 * the active deployment is not the record's (a run killed after a green
   activation and before its signed capture): blue is restored first (tier b,
   below), with treatment left quiesced;
-* otherwise a stopped App refuses first (``blue_stopped``), before any
-  binding repair: the start-and-re-pin of tier a is M0-PR8's for v5 and v6,
-  and for v7 it waits for spike S7 (how a start snapshots source), so the
-  release never starts a stopped core blue (the pre-stop probe predicts the
-  refusal before the lease). Then the record's own bindings are restored when
-  a killed run left a candidate's (the restore-owned repair, the one
-  ``apps.update`` site), and identity, the core resource proof and health are
-  proven against the record.
+* otherwise a stopped App whose next start would not rerun blue refuses
+  first (``tier_a_refused``), before any binding repair: its newest
+  deployment of any state must be blue and its default source blue's folder
+  (spike S7: a STOPPED App's GET has no active deployment, and a FAILED
+  deployment becomes active and moves the default source). The pre-stop probe
+  predicts that refusal before the lease. Then the record's own bindings are
+  restored when a killed run left a candidate's (the restore-owned repair,
+  the one ``apps.update`` site), and identity and the core resource proof are
+  proven against the record. A stopped blue is then started and re-pinned
+  (tier a, as v5/v6's step 0a does): the start's new deployment is proven to
+  be blue and the record re-signed onto it (tools/databricks/core_blue_repin.py).
+  Health is proven against the record's deployment.
 
 ``restore_core_blue`` is tier b, the only rollback once green was activated:
 blue's restore payload (``blue_restore_proof.tier_b_payload``: the immutable
@@ -62,6 +66,7 @@ from tools.databricks.app_start_deployment import (
     ensure_started,
     env_names,
     is_stopped,
+    last_deployment_is,
     tree_digest,
     wait_for_compute_active,
 )
@@ -77,12 +82,15 @@ from tools.databricks.core_blue import (
     resign,
     verify_core_blue,
 )
+from tools.databricks.core_blue_repin import repin_core_start
 
 DEPLOY_TIMEOUT = timedelta(minutes=20)
-# The step-0a refusal for a stopped core blue; the pre-stop probe predicts it.
-BLUE_STOPPED = (
-    "the core blue is stopped: the release never starts it (tier a for a v7 record waits for "
-    "spike S7); start it with the owner break-glass, then re-run"
+# The step-0a refusal for a stopped core App whose start would not rerun blue
+# (spike S7); the pre-stop probe predicts it.
+TIER_A_REFUSED = (
+    "the core App is stopped and its next start would not rerun blue (its newest deployment "
+    "or its default source is not blue's), so step 0a never starts it; restore blue from the "
+    "immutable copy (app_core_rollback restore) or the owner break-glass, then re-run"
 )
 
 
@@ -302,15 +310,32 @@ def ensure_core_blue(
                 tree=tree,
                 run_git_sha=run_git_sha,
             )
-        # Before any binding repair: a stopped blue is left exactly as it is.
-        if is_stopped(workspace, app_name=app_name):
-            raise CoreBlueRefused("blue_stopped", BLUE_STOPPED)
+        # Before any binding repair: a stopped App a start would not restore is left as it is.
+        stopped = is_stopped(workspace, app_name=app_name)
+        if stopped and not last_deployment_is(workspace, app_name=app_name, deployment_id=active):
+            raise CoreBlueRefused("tier_a_refused", TIER_A_REFUSED)
         live_core_bindings(workspace, app_name=app_name)  # a serving binding refuses, unrepaired
         lease()
         restore_signed_app_resource_contract(
             workspace, app_name=app_name, resources=record["app_resources"]
         )
         verify_core_blue(workspace, record, app_name=app_name)
+        if stopped:
+            # Tier a (spike S7): the start makes a new deployment; prove it is blue, re-pin.
+            active = ensure_started(workspace, app_name=app_name)
+            record = repin_core_start(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                lakebase_instance=lakebase_instance,
+                deployment_id=active,
+                expected_rollback_deployment_id=record["deployment_id"],
+                health=health,
+                lease=lease,
+                agentic_tier=agentic_tier,
+                tier_transition_ack=tier_transition_ack,
+                digest=tree,
+            )
         health(record, active)
         verify_core_blue(workspace, record, app_name=app_name)
         if active_deployment_id(workspace, app_name=app_name) != active:

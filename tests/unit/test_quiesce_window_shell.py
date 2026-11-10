@@ -60,7 +60,7 @@ case "$*" in
   *"quiesce_window plan"*)
     [[ -z "${PLAN_REFUSES:-}" ]] || exit 2
     printf '{"code": "%s", "reasons": %s}\n' "${PLAN_CODE:-none}" "${PLAN_REASONS_JSON:-[]}" > "$out" ;;
-  *"app_deployment_rollback repin"*)
+  *"app_deployment_rollback repin"*|*"app_core_rollback repin"*)
     [[ -z "${REPIN_RC:-}" ]] || exit "$REPIN_RC"
     [[ -z "$out" ]] || printf 'MIP_APP_ROLLBACK_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
   *"catalog_bootstrap_skip_rule check"*)

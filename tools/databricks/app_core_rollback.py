@@ -4,13 +4,17 @@
   python -m tools.databricks.app_core_rollback capture ...          # signed core capture
   python -m tools.databricks.app_core_rollback restore ...          # tier b
   python -m tools.databricks.app_core_rollback restore-payload ...  # blue's, before activation
+  python -m tools.databricks.app_core_rollback repin --to ID ...    # the window's start (M0-PR8)
+  python -m tools.databricks.app_core_rollback repin --from-deadman # the dead-man's (M0-PR9)
 
 scripts/deploy.sh runs these in the core tier (``MIP_AGENTIC_TIER=off``)
 where the agentic tier runs ``app_deployment_rollback``: ``ensure`` and
 ``restore`` from the EXIT-trap library only (they may deploy and start the
 App: tools/databricks/stop_primitive_map.py), ``capture`` and
-``restore-payload`` from the core activation step. The logic is
-tools/databricks/core_blue.py, core_blue_capture.py and core_blue_restore.py.
+``restore-payload`` from the core activation step, ``repin`` from the window
+library (the v7 core twin of ``app_deployment_rollback repin``: it starts,
+stops and deploys nothing). The logic is tools/databricks/core_blue.py,
+core_blue_capture.py, core_blue_restore.py and core_blue_repin.py.
 
 ``--agentic-tier`` is the profile's tier and is required: the tier gate
 (tools/databricks/blue_tier_gate.py) judges blue against it, and capture
@@ -38,13 +42,15 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from tools.databricks.app_deployment_deadman_repin import DeadmanRepinRefused  # noqa: E402
 from tools.databricks.app_rollback_record_v7 import V7RecordError  # noqa: E402
+from tools.databricks.app_start_deployment import StartProofError  # noqa: E402
 from tools.databricks.blue_restore_proof import RestoreProofRefused  # noqa: E402
 from tools.databricks.blue_tier_gate import BlueTierRefused  # noqa: E402
 from tools.databricks.core_blue import CoreBlueRefused, binding_values  # noqa: E402
 
 _PREFIX = "[mip-core-blue]"
-MODES = ("ensure", "capture", "restore", "restore-payload")
+MODES = ("ensure", "capture", "restore", "restore-payload", "repin")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -73,6 +79,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--genie-space-id", default="")
     parser.add_argument("--release-id", default="")
     parser.add_argument("--stage-dir", type=Path)
+    # repin (M0-PR8/M0-PR9): the window's start, or with --from-deadman the
+    # dead-man's, whose start, blue and tree come from the signed journal.
+    parser.add_argument("--to", dest="repin_to", default="")
+    parser.add_argument("--expected-tree-sha256", default="")
+    parser.add_argument("--from-deadman", action="store_true")
     # restore-payload
     parser.add_argument("--out", type=Path)
     parser.add_argument("--install-class", default="")
@@ -150,6 +161,51 @@ def _green_health(workspace: Any, args: argparse.Namespace) -> Callable[[], tupl
     return check
 
 
+def _repin(
+    workspace: Any, args: argparse.Namespace, common: dict[str, str], lease: Callable[[], None]
+) -> dict[str, Any]:
+    """The window's (or the dead-man's) start deployment, proven blue and signed (core_blue_repin)."""
+
+    from tools.databricks import core_blue, core_blue_repin
+    from tools.databricks.app_deployment_rollback_inputs import reviewed_resources_file
+
+    applied = (
+        reviewed_resources_file(str(args.app_resource_payload)) if args.app_resource_payload else None
+    )
+    health = core_blue.core_health(
+        workspace, app_name=args.app_name, base_url=args.base_url, bearer_token=_token(args)
+    )
+
+    def repin(**proofs: Any) -> dict[str, Any]:
+        return core_blue_repin.repin_core_start(
+            workspace, **common, health=health, lease=lease,
+            tier_transition_ack=args.tier_transition_ack or None, **proofs,
+        )  # fmt: skip
+
+    if args.from_deadman:
+        if args.repin_to or args.expected_rollback_deployment_id or args.expected_tree_sha256:
+            raise CoreBlueRefused("usage", "--from-deadman reads the start, blue and tree from the journal")
+        from tools.databricks.app_deployment_deadman_repin import repin_from_deadman
+
+        return repin_from_deadman(
+            workspace,
+            app_name=args.app_name,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
+            repin=repin,
+            assert_lease_held=lease,
+            applied_app_resources=applied,
+        )
+    if not args.repin_to or not args.expected_rollback_deployment_id or not args.expected_tree_sha256:
+        raise CoreBlueRefused("usage", "repin needs --to, --expected-rollback-deployment-id, --expected-tree-sha256")
+    return repin(
+        deployment_id=args.repin_to,
+        expected_rollback_deployment_id=args.expected_rollback_deployment_id,
+        expected_tree_sha256=args.expected_tree_sha256,
+        applied_app_resources=applied,
+    )
+
+
 def run(args: argparse.Namespace, workspace: Any) -> str:
     """One mode; returns its PASS line or raises a reviewed refusal."""
 
@@ -178,6 +234,11 @@ def run(args: argparse.Namespace, workspace: Any) -> str:
             args.out.chmod(0o600)
         return f"restore-payload: {why}"
     lease = _lease(workspace, args)
+    if args.action == "repin":
+        record = _repin(workspace, args, common, lease)
+        if args.out_env is not None:
+            _write_env(args.out_env, binding_values(record))
+        return f"repin: the signed v7 core record ({record['provenance']}) names the start deployment"
     treatment = _treatment(workspace, args, args.app_name)
     if args.action == "capture":
         from tools.databricks.app_deployment_rollback_inputs import (
@@ -248,6 +309,12 @@ def main(
         return 2
     except V7RecordError as exc:
         print(f"{_PREFIX} REFUSED record_invalid: {exc}", file=sys.stderr)
+        return 2
+    except StartProofError as exc:  # its message carries the reviewed code first
+        print(f"{_PREFIX} REFUSED {exc}", file=sys.stderr)
+        return 2
+    except DeadmanRepinRefused as exc:
+        print(f"{_PREFIX} REFUSED deadman_unproven: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
         print(f"{_PREFIX} FAILED: {args.action} could not complete ({type(exc).__name__})", file=sys.stderr)

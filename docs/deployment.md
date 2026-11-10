@@ -1975,7 +1975,7 @@ tier.
 | App payload | unchanged | `MIP_AGENT_ORCHESTRATOR=0`, `MIP_AI_GATEWAY=0`; an operator value turning either on refuses; no other agentic name (agent model, Supervisor, Gateway, proxy, proof key or eval; M2-PR7b) |
 | capability preflight (`tools/clients/capabilities.py`, in the live checks) | Apps, Lakebase, Genie, SQL warehouses, Model Serving, MLflow (the pre-stop probes' Supervisor listing proves the Supervisor API) | Apps, Lakebase, Genie, SQL warehouses |
 | pre-stop record clause and step 0a (M2-PR7b) | v5/v6 `verified_signed_last_good_contract` and `app_deployment_rollback ensure`; a v7 record refuses | a v7 core record through the tier gate and the core resource proof (`app_core_rollback ensure`) |
-| quiesce window over signed blue (M2-PR7b) | v5/v6, start and re-pin | a v7 core blue with no window reason only; one that needs a window refuses before the lease (`window_over_v7_blue`) |
+| quiesce window over signed blue (M2-PR7b) | v5/v6, start and re-pin | a v7 core blue, start and re-pin onto the next v7 version (`app_core_rollback repin`, spike S7) |
 | steps 10b-10c: agentic provisioning, cutover, Agent Evaluation and the retirement after capture | run (`deploy_step_agentic_*.sh`, `deploy_step_agent_eval_and_smoke.sh`) | skipped by name: never sourced, and each refuses the core tier (`deploy_step_core_activation.sh` runs instead) |
 | activation (M2-PR7b) | the cutover's activation, then the Agent Evaluation redeploy | one activation rollover (a first install's is step 5's) |
 | live smoke | `MIP_EXPECT_AGENTIC_CAPABILITIES=1` by default | `MIP_EXPECT_AGENTIC_CAPABILITIES=0`, `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=0`; Genie is still smoked |
@@ -2004,11 +2004,15 @@ verifier, the agent runtime or the Supervisor proxy:
   serving-endpoint binding refuses by name and is never repaired). Step 0a
   (`app_core_rollback ensure`) restores the record-owned bindings a killed
   run left, proves health against the record's commit with no Gateway
-  binding, and restores blue (tier b) when another deployment is active. It
-  never starts a stopped core blue (`blue_stopped`): tier a's start and
-  re-pin for a v7 record waits for spike S7. The pre-stop clause predicts
-  that refusal before the lease (`rollback_record_drift`, naming
-  `blue_stopped`), and step 0a itself refuses it before any binding repair.
+  binding, and restores blue (tier b) when another deployment is active. A
+  stopped core blue is started and re-pinned (tier a, spike S7): the start's
+  new deployment is proven to be blue (its source folder, the record's
+  full-tree digest and env names, health) and the record is re-signed onto
+  it (`tools/databricks/core_blue_repin.py`). A stopped App whose next start
+  would not rerun blue (its newest deployment of any state or its default
+  source is not blue's) refuses (`tier_a_refused`): the pre-stop clause
+  predicts it before the lease (`rollback_record_drift`), and step 0a itself
+  refuses it before any binding repair.
 - **The tier gate.** A core release stands on a core blue. An agentic blue (a
   v5, v6 or v7 agentic record) under a core profile refuses
   (`blue_tier_mismatch`) and no ack lifts it: its restore needs the Gateway
@@ -2020,10 +2024,14 @@ verifier, the agent runtime or the Supervisor proxy:
   blue before the lease as before. Client #1's run 1 needs no transition:
   blue was adopted as core and green is core.
 - **The quiesce window.** The window plan reads a v7 core blue (its env-name
-  set from the record) and plans no window when no reason exists. A v7 blue
-  that needs one refuses before the lease (`window_over_v7_blue`), with the
-  App untouched: the window's start-and-re-pin is written for v5 and v6
-  records, and a v7 one waits for spike S7.
+  set from the record) and plans no window when no reason exists. Spike S7 is
+  recorded, so a v7 core blue that needs a window gets the one v5 and v6 get:
+  the folder's full-tree digest is checked against the record's own
+  `source_tree_sha256`, the start is proven with the record's env-name set,
+  and the window library re-pins it with `app_core_rollback repin` (the
+  dead-man's restart with `repin --from-deadman`) onto the record's next v7
+  version (same provenance and ack, `predecessor_deployment_id` blue). A v7
+  agentic record is still refused (M4-PR1).
 - **Activation** (`scripts/lib/deploy_step_core_activation.sh`): one
   activation rollover over signed blue, with blue's treatment authority
   quiesced immediately before it, exactly as the agentic cutover activates.

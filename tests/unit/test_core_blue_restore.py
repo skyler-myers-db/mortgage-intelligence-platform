@@ -100,26 +100,33 @@ def test_a_signed_record_that_binds_a_serving_resource_never_loads_as_a_core_blu
     assert world.apps.mutations == []
 
 
-def test_a_stopped_core_blue_is_never_started_by_step_0a(world: CoreWorld) -> None:
+def _stopped_on_another_default_source(world: CoreWorld) -> None:
+    """A stopped App whose next start would not rerun blue: its default source is another folder."""
+
     world.compute = "STOPPED"
+    world.active = "deployment-old"  # the default source follows the last active deployment
+
+
+def test_a_stopped_core_app_whose_start_would_not_rerun_blue_is_never_started(world: CoreWorld) -> None:
+    _stopped_on_another_default_source(world)
 
     with pytest.raises(core_blue.CoreBlueRefused) as refused:
         core_blue_restore.ensure_core_blue(world, **world.kwargs())
-    assert refused.value.code == "blue_stopped"
+    assert refused.value.code == "tier_a_refused"
     assert "start" not in world.apps.mutations and world.treatments[-1] == "quiesce"
 
 
-def test_a_stopped_core_blue_refuses_before_any_binding_repair(world: CoreWorld) -> None:
-    """Review of #319: the refusal comes before the repair, so a stopped blue is left exactly as it is."""
+def test_a_stopped_core_app_refuses_tier_a_before_any_binding_repair(world: CoreWorld) -> None:
+    """Review of #319: the refusal comes before the repair, so the App is left exactly as it is."""
 
-    world.compute = "STOPPED"
+    _stopped_on_another_default_source(world)
     job = {"name": "candidate_job", "job": {"id": "999", "permission": "CAN_MANAGE_RUN"}}
     world.resources = [*copy.deepcopy(rr.APP_RESOURCES), job]
     lease_calls = world.lease_calls
 
     with pytest.raises(core_blue.CoreBlueRefused) as refused:
         core_blue_restore.ensure_core_blue(world, **world.kwargs())
-    assert refused.value.code == "blue_stopped"
+    assert refused.value.code == "tier_a_refused"
     assert world.apps.mutations == [] and world.resources[-1] == job, "no binding repair"
     assert world.lease_calls == lease_calls
 

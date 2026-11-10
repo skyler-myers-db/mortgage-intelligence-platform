@@ -32,8 +32,9 @@ source, the folder's unchanged full-tree digest, the snapshot's equal digest
 and the signed record's env-name set. Any failure after the start call, a
 failed proof or anything else that raises, stops the App again and journals
 ``window_refused`` for the dead-man. ``app_deployment_rollback repin --to <id>``
-then re-signs the record and checks health against the re-pinned id, and
-``close`` closes the journal.
+(``app_core_rollback repin`` for a v7 core blue, whose env names and tree are
+the record's own) then re-signs the record and checks health against the
+re-pinned id, and ``close`` closes the journal.
 
 ``plan-wr5`` and ``await-wr5`` plan the Lakebase ownership handover's WR5
 window and prove its start, both read-only (tools/databricks/quiesce_window_wr5.py);
@@ -59,7 +60,7 @@ from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks import quiesce_window_deadman as deadman
 from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_release_contract import ReleaseContractError
-from tools.databricks.app_rollback_record_contract import _load_record, _text
+from tools.databricks.app_rollback_record_contract import V7_RECORD_VERSION, _load_record, _text
 from tools.databricks.app_start_deployment import (
     StartProofError,
     deployment_ids,
@@ -79,7 +80,6 @@ from tools.databricks.quiesce_window_budget import (
     require_admitted,
 )
 from tools.databricks.quiesce_window_facts import (
-    V7WindowOwed,
     app_or_none,
     collect_facts,
     takes_unsigned_rebase,
@@ -330,9 +330,7 @@ def await_window(
     if journal.state_of(current) != "window_started" or current is None:
         raise RuntimeError("no started window to await")
     try:
-        record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-        )
+        record = _window_record(workspace, app_name, scope, lakebase_instance)
         if record["deployment_id"] != current["blue_deployment_id"]:
             raise StartProofError(
                 "start_record_changed",
@@ -357,7 +355,9 @@ def await_window(
             deployment=deployment,
             restore_source=current["restore_source"],
             expected_tree_sha256=current["source_tree_sha256"],
-            expected_env_names=env_names(record["payload"]),
+            expected_env_names=(
+                frozenset(record["env_names"]) if _is_v7(record) else env_names(record["payload"])
+            ),
             digest=digest,
         )
         wait_active(workspace, app_name=app_name)
@@ -377,6 +377,25 @@ def await_window(
         assert_lease_held=assert_lease_held,
     )
     return proof.deployment_id
+
+
+def _is_v7(record: Mapping[str, Any]) -> bool:
+    return record.get("version") == V7_RECORD_VERSION
+
+
+def _window_record(workspace: Any, app_name: str, scope: str, lakebase_instance: str) -> dict[str, Any]:
+    """The signed record a window governs: v5/v6, or a v7 core blue (spike S7); never v7 agentic."""
+
+    record = _load_record(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=lakebase_instance,
+        accept_v7=True,
+    )
+    if _is_v7(record) and record.get("tier") != "core":
+        raise StartProofError("start_record_changed", "the signed record is a v7 agentic blue")
+    return record
 
 
 def close_window(
@@ -401,9 +420,7 @@ def close_window(
         # and the App's active deployment, never the window's blue.
         from tools.databricks.app_deployment_state import active_deployment_id
 
-        record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-        )
+        record = _window_record(workspace, app_name, scope, lakebase_instance)
         if record["deployment_id"] == current["blue_deployment_id"] or (
             active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]
         ):
@@ -414,9 +431,7 @@ def close_window(
     else:
         if journal.state_of(current) != "window_proven" or current is None:
             raise RuntimeError("only a proven window closes on its re-pin")
-        record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-        )
+        record = _window_record(workspace, app_name, scope, lakebase_instance)
         if (
             repinned != current["start_deployment_id"]
             or record["deployment_id"] != repinned
@@ -669,23 +684,19 @@ def main(
         print(f"{_PREFIX} applicable: App {'present' if app is not None else 'absent'}")
         return 0
     if args.command == "plan":
-        try:
-            facts = collect_facts(
-                workspace,
-                app_name=app_name,
-                scope=args.scope,
-                lakebase_instance=args.lakebase_instance,
-                gate_report=_load_json(args.plan_gate_report),
-                binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
-                role_state=args.role_check,
-                verifier_role_state=args.verifier_role_check,
-                jobs_reader_role_state=args.jobs_reader_role_check,
-                migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
-                rebase_unverified_app=args.rebase_unverified_app == "1",
-            )
-        except V7WindowOwed as exc:
-            print(f"{_PREFIX} REFUSED {exc.code}: {exc}", file=sys.stderr)
-            return 2
+        facts = collect_facts(
+            workspace,
+            app_name=app_name,
+            scope=args.scope,
+            lakebase_instance=args.lakebase_instance,
+            gate_report=_load_json(args.plan_gate_report),
+            binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
+            role_state=args.role_check,
+            verifier_role_state=args.verifier_role_check,
+            jobs_reader_role_state=args.jobs_reader_role_check,
+            migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
+            rebase_unverified_app=args.rebase_unverified_app == "1",
+        )
         result = window_plan(
             facts, position=args.position, acknowledgement=os.environ.get(ACK_ENV, "").strip()
         )
