@@ -54,8 +54,9 @@ async function askOnRoute(page: Page): Promise<void> {
 }
 
 /**
- * A reload or close cancels the page's in-flight requests on purpose. The
- * harness ignores only Chromium's name for that (ERR_ABORTED): WebKit on macOS
+ * A reload or close cancels the page's in-flight requests on purpose. For an
+ * API read the harness ignores only Chromium's name for that (ERR_ABORTED;
+ * its asset rule is below): WebKit on macOS
  * reports "cancelled" and Firefox NS_BINDING_ABORTED (WebKit on Linux spells
  * it differently; see allowHeldCompleteCancel). WebKit also surfaces the
  * cancelled first health poll (`/api/v1/health?idle_s=0`) of the unloading
@@ -83,27 +84,16 @@ function allowHeldCompleteCancel(hygiene: Hygiene, browserName: string): void {
   hygiene.allow('request-failed', /^POST https?:\/\/[^/\s]+\/api\/v1\/genie\/message\/complete failed: Load request cancelled$/);
 }
 
-/**
- * The page footer's brand image (PageShell's EntradaWordmark) can be
- * cancelled mid-load and fetched again: Firefox on the e2e-cross-engine
- * runner failed (a) once on `GET .../assets/entrada-wordmark-<hash>.webp
- * failed: NS_BINDING_ABORTED` (CI run 38565698599; it passed on retry). The
- * trace puts that cancel ~640 ms into the first /ask-genie load, before the
- * reload; the same URL was requested again 13 ms later and answered 200, so
- * the image lands and no turn request is involved. The reload / close tests
- * here (a, b, c) all start from that load, and only they call this; no other
- * spec does. It allows exactly that asset (a hashed name, nothing else under
- * /assets) in each engine's cancel text:
- * Firefox NS_BINDING_ABORTED, WebKit "cancelled" (macOS) and "Load request
- * cancelled" (Linux); Chromium's net::ERR_ABORTED never reaches hygiene
- * (hygiene.ts drops it for every test). Any other failed request still fails.
+/*
+ * The footer wordmark (PageShell's EntradaWordmark) cancel that Firefox
+ * reported on the first /ask-genie load (CI run 38565698599, `GET
+ * .../assets/entrada-wordmark-<hash>.webp failed: NS_BINDING_ABORTED`, the
+ * same URL answered 200) needs no allowance here any more: it is not specific
+ * to this spec (forced-colors.firefox hit it on a plain /lead-queue load, CI
+ * run 42864141680), so hygiene.ts forgives, for every test, a Firefox / WebKit
+ * /assets/ cancel whose URL landed in the same test. A cancelled asset that
+ * never lands, and every /api/ cancel not allowed above, still fails.
  */
-function allowWordmarkCancel(hygiene: Hygiene): void {
-  hygiene.allow(
-    'request-failed',
-    /^GET https?:\/\/[^/\s]+\/assets\/entrada-wordmark-[A-Za-z0-9_-]+\.webp failed: (NS_BINDING_ABORTED|cancelled|Load request cancelled)$/,
-  );
-}
 
 /** Whether this engine exposes Web Locks; the unsupported path is annotated. */
 async function webLocks(page: Page, testInfo: TestInfo, browserName: string): Promise<boolean> {
@@ -117,7 +107,6 @@ async function webLocks(page: Page, testInfo: TestInfo, browserName: string): Pr
 test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () => {
   test('(a) a reload while polling resumes the same turn: no second submit, one complete, one answer', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
-    allowWordmarkCancel(hygiene);
     const turn = registerGenieTurn(mockApi);
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
@@ -147,7 +136,6 @@ test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () =>
   test('(b) a reload during the complete call never completes again and shows the interrupted note', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
     allowHeldCompleteCancel(hygiene, browserName);
-    allowWordmarkCancel(hygiene);
     const turn = registerGenieTurn(mockApi, { holdComplete: true });
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
@@ -170,7 +158,6 @@ test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () =>
 
   test('(c) a second page seeded with the first page\'s sessionStorage does not resume while the first holds the Web Lock', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
-    allowWordmarkCancel(hygiene);
     const turn = registerGenieTurn(mockApi);
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
