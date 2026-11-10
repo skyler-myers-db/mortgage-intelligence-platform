@@ -4261,6 +4261,52 @@ keys, and the profile digest `MIP_CLIENT_PROFILE_SHA256`. It uses the same
 plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
 [docs/clients/github-environment.md](clients/github-environment.md).
 
+## Second-client portability proof (CI, offline, M3-PR4)
+
+The ci.yml job `client-portability-proof` runs
+`tests/unit/test_client_portability_proof.py` on every push. It proves that a
+second client onboards with zero code edits. The client is `acme`
+(`tests/fixtures/clients/acme.env`), a synthetic customer install: prod App
+env, agentic tier off, weekly refresh off, and the Cotality share mounted as
+`cotality_prod.mortgage` with unprefixed tables.
+
+Its secrets and its lender record's pin exist only inside the sandbox. The
+proof runs offline against a stub `databricks` CLI and a stub account API.
+Both record the authority each call needs (`tests/fixtures/role_ledger.py`).
+It runs, in order:
+
+1. `python -m tools.clients check`;
+2. `python -m tools.clients.bootstrap_account --plan`;
+3. a deploy-dev.yml `phase: plan` dispatch and an acked `phase: release`
+   dispatch, each replayed with `--dry-run` in a sandbox clone with the profile
+   removed from the tree;
+4. the `bundle_env validate -t client` those dispatches plan.
+
+The proof fails in any of these cases:
+
+- the real checkout changes;
+- a bundle call leaves `-t client` or acme's variables and root leaf;
+- a canonical Cotality token stays in acme's rendered SQL;
+- the pipeline configuration or the App's booted settings are not acme's;
+- an agentic step runs, or the refresh is not PAUSED;
+- a CI step needs account-admin authority;
+- an identifying value reaches the public log or the step summary in any
+  letter case;
+- a value of the client-#1-shaped install reaches acme's run (a client
+  literal);
+- the analytics battery stops being allowed with acme's names;
+- a one-character tamper of the lender record or the accepted exposure is not
+  refused, whatever ack the dispatch carries.
+
+Its client-#1-shaped case (placeholders only) renders SQL byte for byte as
+the default install does. A dispatch with planted defects proves that each
+check can fail.
+
+The owner attestation layer is deferred (M1-PR5). So the integrity it
+exercises is main's: the record's exact-digest pin and the dispatch's exact
+digest acks. Nothing signs anything. backend-tests ignores the module, so it
+runs once per push (`tests/unit/test_ci_client_portability_job.py`).
+
 ## Jobs identity and pinned job parameters (M2-PR5)
 
 The App holds `CAN_MANAGE_RUN` on four bundle jobs (`mip_sync_lifecycle_state`,
