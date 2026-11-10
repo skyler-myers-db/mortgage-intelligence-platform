@@ -28,6 +28,7 @@ from jobs.lakebase_migration_integrity import _split_schema_sql
 from jobs.lakebase_migration_seed import (
     _preflight_seed_schema_parity,
     _tenant_disclosure_seed_sql,
+    render_seed_sql,
 )
 
 MigrationCompat = Literal["expand", "contract"]
@@ -240,6 +241,7 @@ def render_schema_inputs(
     tenant_id: str,
     lender_identity_json: str = "",
     lender_identity_sha256: str = "",
+    seed_operator_email: str = "",
 ) -> tuple[str, tuple[str, str, str, str]]:
     """Return schema.sql and the four texts apply executes, read-only.
 
@@ -248,7 +250,10 @@ def render_schema_inputs(
     """
 
     schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
-    seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+    seed_sql = render_seed_sql(
+        (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8"),
+        seed_operator_email=seed_operator_email,
+    )
     _preflight_seed_schema_parity(schema_sql, seed_sql)
     tenant_disclosure_seed_sql = _tenant_disclosure_seed_sql(
         lender_name=lender_name,

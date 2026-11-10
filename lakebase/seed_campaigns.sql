@@ -13,7 +13,7 @@ INSERT INTO mip_app.sales_team (
 )
 VALUES
     ('sam.manager@summit.example', 'Summit Sales Manager', 'sales_manager', NULL, 'National', 0, true),
-    ('skyler@entrada.ai', 'Entrada Demo Operator', 'admin', NULL, 'National', 0, true),
+    ('{{mip_seed_operator_email}}', 'Entrada Demo Operator', 'admin', NULL, 'National', 0, true),
     ('lo01@summit.example', 'Summit LO 01', 'loan_officer', 'sam.manager@summit.example', 'IL', 35, true),
     ('lo02@summit.example', 'Summit LO 02', 'loan_officer', 'sam.manager@summit.example', 'CA', 35, true),
     ('lo03@summit.example', 'Summit LO 03', 'loan_officer', 'sam.manager@summit.example', 'TX', 35, true),
@@ -74,7 +74,7 @@ VALUES
     (
         '11111111-1111-4111-8111-111111111111',
         'Summit Mortgage Refi — In the Money Q2',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'archived',
         '{"segment": "itm", "min_spread_bps": 75, "states": ["IL","CA","WA","CO"], "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
@@ -85,7 +85,7 @@ VALUES
     (
         '22222222-2222-4222-8222-222222222222',
         'Summit Mortgage Cash-Out — High Equity',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'archived',
         '{"segment": "cashout", "min_equity_pct": 25, "states": ["IL","FL","TX"], "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
@@ -96,7 +96,7 @@ VALUES
     (
         '33333333-3333-4333-8333-333333333333',
         'Summit Mortgage HELOC — Equity/Propensity Intent',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'archived',
         '{"segment": "heloc", "heloc_equity_min_pct": 35, "heloc_propensity_min": 700, "intent_signal": "cotality_heloc_propensity", "filed_permits": "pending_not_inferred", "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
@@ -184,7 +184,7 @@ VALUES
         'B-0CPWBTJMAPFY2',
         'refi',
         'approve',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'Rate spread +401 bps at 26% equity — in-the-money per fn_in_the_money (IL, campaign states); evidence chips all cited.',
         now() - interval '4 days'
     ),
@@ -196,7 +196,7 @@ VALUES
         'B-1IB0UGBTFYM20',
         'cash_out',
         'approve',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'Equity 100% (free-and-clear, TX) clears the 25% cash-out floor; +33 bps spread is below the refi bar — cash-out is the fit per fn_next_best_offer.',
         now() - interval '2 days'
     ),
@@ -208,7 +208,7 @@ VALUES
         'B-102FL7THC6Q3L',
         'refi_plus_heloc',
         'approve',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'Equity 91% clears the 35% HELOC floor with +379 bps refi incentive (IL) — combined Refinance + HELOC per fn_next_best_offer; permit feed pending, equity-led lane.',
         now() - interval '1 day'
     ),
@@ -220,7 +220,7 @@ VALUES
         'B-1BCZXFQYCX715',
         'refi',
         'hold',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'Marginal +87 bps spread at 18% equity (IL) — just over the 75 bps floor; re-review after next FRED publish.',
         now() - interval '12 hours'
     ),
@@ -232,7 +232,7 @@ VALUES
         'B-1VU4FO4XBQPC4',
         'cash_out',
         'reject',
-        'skyler@entrada.ai',
+        '{{mip_seed_operator_email}}',
         'Owner Link resolves 3,564 related properties (TX) — institutional multi-property profile; routed to investor desk instead of consumer cash-out outreach.',
         now() - interval '6 hours'
     )

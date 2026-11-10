@@ -25,6 +25,7 @@ from jobs.lakebase_migration_ledger import (
     SEEDED_REFERENCE_TABLES,
     schema_input_digest_sql,
 )
+from jobs.lakebase_migration_seed import render_seed_sql
 
 ROOT = Path(__file__).resolve().parents[2]
 _SCHEMA = (ROOT / "lakebase" / "schema.sql").read_text(encoding="utf-8")
@@ -427,8 +428,9 @@ def test_apply_appends_the_digest_row_to_the_unchanged_schema_transaction(
 
     lakebase_migrate.main()
 
-    # The four texts apply has always sent, built here independently of main.
-    seed = (ROOT / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+    # The four texts apply has always sent, built here independently of main;
+    # with no operator configured the seed names the synthetic one (M1-PR4).
+    seed = render_seed_sql((ROOT / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8"))
     pre_seed, post_seed = lakebase_migrate._split_schema_sql(_SCHEMA)
     tenant_seed = lakebase_migrate._tenant_disclosure_seed_sql(
         lender_name="Summit Mortgage", lender_nmls_id="", tenant_id=""
@@ -453,7 +455,9 @@ def test_plan_renders_exactly_the_texts_apply_executes() -> None:
 
     assert schema_sql == _SCHEMA
     assert sql_texts[0] == pre_seed and sql_texts[3] == post_seed
-    assert sql_texts[1] == (ROOT / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+    assert sql_texts[1] == render_seed_sql(
+        (ROOT / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+    )
     assert sql_texts[2] == lakebase_migrate._tenant_disclosure_seed_sql(
         lender_name="Summit Mortgage", lender_nmls_id="", tenant_id=""
     )

@@ -3852,6 +3852,53 @@ MIP_LENDER_IDENTITY_JSON=
 MIP_LENDER_IDENTITY_SHA256=
 ```
 
+## Demo seed operator and other required inputs (M1-PR4)
+
+No tracked file names a client value any more:
+`tests/unit/test_no_client_identifiers_committed.py` holds the tree at zero
+workspace hosts, App URLs, `?o=` workspace ids, non-example emails, bare
+16-digit ids, 16-hex and 32-hex ids and UUIDs, outside synthetic values,
+pinned test digests, content-hash files and its reviewed `ALLOWED` entries.
+Docs use symbolic placeholders (`<workspace-host>`, `<app-host>`,
+`<workspace-id>`, `<genie-space-id>`, `<warehouse-id>`, `<deployment-id>`,
+`<operator-email>`). Git history still holds the values the purge removed.
+
+Three values that were committed defaults are now inputs:
+
+- **The demo seed's operator.** `lakebase/seed_campaigns.sql` names its demo
+  operator (the `sales_team` admin row, the archived campaigns' owner and the
+  sample approvals' actor) by the token `{{mip_seed_operator_email}}`. The
+  migrate job renders it from `--seed-operator-email`, which the
+  `seed_operator_email` bundle variable carries; `bundle_env.py -t client`
+  sets that variable from the profile's demo-only `MIP_SEED_OPERATOR_EMAIL`
+  and never from an ambient export, and the deploy's migration plan passes
+  the same value (`deployment_control_value MIP_SEED_OPERATOR_EMAIL`), so
+  plan and apply digest one text. Unset, the seed names the synthetic
+  `operator@summit.example`. An install that seeded an operator before keeps
+  its seed, and its schema-input digest, byte for byte by setting the
+  address it seeded. A customer profile refuses the field.
+- **The App URL of the live checks.** `tools/verify_live.py` takes
+  `--base-url https://<app-host>` (or `MIP_APP_URL`) and `scripts/e2e_live.sh`
+  takes `MIP_APP_URL`; both refuse without it. `databricks apps get
+  <app-name>` prints it as `url`.
+- **The load-test target** recorded in `tools/load_test/baseline.json` reads
+  `https://<app-host>/api/v1`. It is a label (`tools/load_test/baseline.py
+  --target` writes it), never compared, so a regenerated baseline must have
+  its target replaced with the placeholder before it is committed.
+
+The emergency recipe above takes none of these: it ships App source and
+never runs the migrate job or a live check, so its commands are unchanged.
+
+`.env.example` cannot be read or edited from an agent session, so the owner
+adds this line to its "Direct os.environ reads" section and, in the same
+change, moves the name from `DIRECT_ENV_READS_PENDING_TEMPLATE` to
+`DIRECT_ENV_READS` in `tests/unit/test_settings_contract.py`:
+
+```bash
+# demo installs only: the demo seed's operator (lakebase/seed_campaigns.sql's {{mip_seed_operator_email}}); unset seeds operator@summit.example; a customer profile refuses it; docs/deployment.md "Demo seed operator and other required inputs"
+MIP_SEED_OPERATOR_EMAIL=
+```
+
 ## Lender co-branding (optional)
 
 A deployment may draw its lender's reviewed mark beside the tenant name (the
