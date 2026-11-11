@@ -204,13 +204,20 @@ def test_the_plan_refuses_a_schema_the_target_cannot_use_by_count(tmp_path: Path
     assert _plan(server).refusals == []
 
 
-def test_public_counts_unless_the_target_will_own_the_database() -> None:
-    """``public`` is pg_database_owner's: the target uses it once the database is its own."""
+def test_public_never_counts_a_database_the_target_will_not_own_refuses_instead() -> None:
+    """``public`` is pg_database_owner's: the target uses it as the database owner, never by a USAGE grant.
+
+    A USAGE row on ``public`` is one the grants job's exact public-schema gate
+    refuses, and its closure needs pg_database_owner's SET (round 2 of the PR
+    #336 review; tests/integration/test_lakebase_handover_postgres.py).
+    """
 
     assert _plan(FakeServer()).refusals == []
     elsewhere = FakeServer()
     elsewhere.owners["DATABASE:mip_app_state"] = APP_ROLE  # the handover does not move it
-    assert _plan(elsewhere).refusals == ["target_needs_schema_usage"]
+    assert _plan(elsewhere).refusals == ["target_will_not_own_database"]
+    elsewhere.owners["DATABASE:mip_app_state"] = DEPLOYER  # already the target's
+    assert _plan(elsewhere).refusals == []
 
 
 def test_the_usage_check_reads_the_grants_jobs_own_schema_predicate() -> None:

@@ -5,8 +5,10 @@ after the apply, failed "permission denied for table synced" on a
 legacy-owned table there (PostgreSQL 16.15). The fake models PostgreSQL's
 rule, pinned first: a REVOKE needs SOME privilege on the object (owned or
 inherited, granted, or PUBLIC's, including PostgreSQL's default PUBLIC
-EXECUTE on a routine and CONNECT on a database). The real SQL runs in
-tests/integration/test_lakebase_handover_postgres.py.
+EXECUTE on a routine). The database is not counted that way: a database the
+handover leaves to another role refuses ``target_will_not_own_database``,
+because the grants job closes ``public`` as its owner (round 2). The real SQL
+runs in tests/integration/test_lakebase_handover_postgres.py.
 """
 
 from __future__ import annotations
@@ -89,14 +91,21 @@ def test_every_kind_the_grants_job_revokes_on_counts(item: PgObject) -> None:
     assert _refusals(server) == ["target_needs_object_privilege"]
 
 
-def test_a_database_the_handover_leaves_counts_when_the_target_cannot_connect() -> None:
+def test_a_database_the_handover_leaves_refuses_whatever_the_target_may_connect_to() -> None:
+    """Round 2: no privilege on the database stands in for its owner's authority, and nothing is printed for it."""
+
     server = FakeServer()
     server.owners["DATABASE:mip_app_state"] = APP_ROLE
-    server.schemas["public"] = APP_ROLE  # not pg_database_owner's, so the usage check stays quiet
-    server.acl["SCHEMA:public"] = {(DEPLOYER, APP_ROLE, "USAGE"): False}
-    assert _refusals(server) == []  # PUBLIC CONNECT
-    server.acl["DATABASE:mip_app_state"] = owner_entries("DATABASE:", APP_ROLE)
-    assert _refusals(server) == ["target_needs_object_privilege"]
+    assert server.has_privilege(DEPLOYER, "DATABASE:mip_app_state", "CONNECT"), "PUBLIC CONNECT"
+    assert _refusals(server) == ["target_will_not_own_database"]
+    server.acl["DATABASE:mip_app_state"] = owner_entries("DATABASE:", APP_ROLE)  # PUBLIC CONNECT closed
+    assert _refusals(server) == ["target_will_not_own_database"], "never target_needs_object_privilege"
+    with server.read_session() as cursor:
+        lines, refusals = roles.preconditions(cursor, target=DEPLOYER)
+    assert refusals == ["target_will_not_own_database"]
+    assert [line for line in lines if not line.startswith("--")] == [], "no CONNECT grant and no USAGE on public"
+    assert any(line.startswith("-- REFUSED target_will_not_own_database:") for line in lines)
+    assert not any(DEPLOYER in line or APP_ROLE in line for line in lines[2:]), "the remedy names no role"
 
 
 def test_what_the_target_reaches_or_the_grants_job_skips_plans_clean() -> None:
@@ -155,6 +164,10 @@ def test_the_reach_read_uses_the_grants_jobs_own_predicates() -> None:
         assert clause in source, clause
     assert 'routine_schema == "public" and routine_owner == "cloud_admin"' in source, "routines: the same exclusion"
     assert "REVOKE TEMPORARY ON DATABASE" in source, "and the database"
+    closure = re.sub(r"\s+", " ", (REPO / "jobs" / "lakebase_migration_provider_plane.py").read_text(encoding="utf-8"))
+    assert "pg_has_role(current_user, 'pg_database_owner', 'SET')" in closure, "the closure authority the database check reads"
+    assert "pg_has_role(target_role.oid, 'pg_database_owner', 'SET')" in reach.DATABASE_OWNER_SQL
+    assert "'DATABASE'" not in reach.OBJECT_REACH_SQL, "no privilege on the database stands in for its owner's authority"
     flattened = re.sub(r"\s+", " ", reach.OBJECT_REACH_SQL)
     for clause in (reach.RELATION_KINDS, reach.SEQUENCE_KIND, f"NOT ({reach.PROVIDER_PUBLIC})"):
         assert clause in flattened, clause

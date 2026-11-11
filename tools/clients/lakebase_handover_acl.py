@@ -7,11 +7,13 @@ Three facts the owner changes alone do not cover:
   routine in every non-system schema, so it fails "permission denied for
   schema X" for any schema the deployer cannot use (spike S3, answer 4).
   ``schemas_without_usage`` lists them, by the grants job's own predicate,
-  leaving out ``mip_app`` (the handover gives it to the target) and, when the
-  target will own the database, a schema ``pg_database_owner`` owns
-  (``public``: the database owner uses it through that role). USAGE is
-  needed, not enough: each object there the target must REVOKE on is
-  tools/clients/lakebase_handover_reach.py's.
+  leaving out ``mip_app`` (the handover gives it to the target) and a schema
+  ``pg_database_owner`` owns (``public``): the target uses it as, or through,
+  the database owner, which the plan requires on its own
+  (``target_will_not_own_database``), because a USAGE row granted on
+  ``public`` is one the grants job's exact public-schema gate refuses (round
+  2 of the PR #336 review). USAGE is needed, not enough: each object there
+  the target must REVOKE on is tools/clients/lakebase_handover_reach.py's.
 * **The target's own grants.** ``ALTER ... OWNER TO`` rewrites the old owner to
   the new one as grantor and grantee and merges duplicates (PostgreSQL's
   ``aclnewowner``). On the apply, an entry the legacy owner granted the
@@ -54,14 +56,14 @@ NON_SYSTEM_SCHEMA_PREDICATE = (
     "n.nspname <> '__db_system'",
 )
 _PREDICATE = "\n  AND ".join(NON_SYSTEM_SCHEMA_PREDICATE)
-# Read-only: every non-system schema the target cannot use, but mip_app and,
-# when the target will own the database, one pg_database_owner owns.
+# Read-only: every non-system schema the target cannot use, but mip_app and
+# one pg_database_owner owns (the database owner's, module docstring).
 SCHEMA_USAGE_SQL = f"""
 SELECT n.nspname::text
 FROM pg_namespace n
 WHERE {_PREDICATE}
   AND n.nspname <> %(schema)s
-  AND NOT (%(owns_database)s AND pg_get_userbyid(n.nspowner) = 'pg_database_owner')
+  AND pg_get_userbyid(n.nspowner) <> 'pg_database_owner'
   AND NOT COALESCE(
       (SELECT has_schema_privilege(target_role.oid, n.oid, 'USAGE')
        FROM pg_roles target_role WHERE target_role.rolname = %(target)s),
@@ -144,7 +146,6 @@ PRIVILEGES_BY_KIND = {
     "TABLE": ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"),
     "SEQUENCE": ("USAGE", "SELECT", "UPDATE"),
     "FUNCTION": ("EXECUTE",),
-    "DATABASE": ("CREATE", "CONNECT", "TEMPORARY"),
 }
 # GRANT ... ON <keyword>: a view and a materialized view are granted ON TABLE.
 GRANT_KEYWORDS = {
@@ -187,8 +188,8 @@ def membership_statement(target: str, legacy: str) -> str:
     return f"GRANT {quote_ident(target)} TO {quote_ident(legacy)} WITH INHERIT TRUE, SET TRUE"
 
 
-def schemas_without_usage(cursor: Any, *, target: str, owns_database: bool) -> list[str]:
-    cursor.execute(SCHEMA_USAGE_SQL, {"schema": SCHEMA_NAME, "owns_database": owns_database, "target": target})
+def schemas_without_usage(cursor: Any, *, target: str) -> list[str]:
+    cursor.execute(SCHEMA_USAGE_SQL, {"schema": SCHEMA_NAME, "target": target})
     return [str(row[0]) for row in cursor.fetchall()]
 
 

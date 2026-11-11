@@ -12,7 +12,11 @@ like ``--plan``) prints, in order and quoted, the SQL the owner runs before
    apply, INHERIT for the exact revert (``caller_cannot_revert``);
 3. ``GRANT CREATE ON SCHEMA mip_app TO <target>`` (``target_needs_schema_create``);
 4. ``GRANT USAGE ON SCHEMA <s> TO <target>`` for every other non-system
-   schema the target cannot use (``target_needs_schema_usage``);
+   schema the target cannot use (``target_needs_schema_usage``), never
+   ``public``: the target uses it as the database owner, and an App database
+   that neither moves to the target nor belongs to a role the target holds
+   SET and INHERIT of refuses ``target_will_not_own_database`` with no SQL
+   (tools/clients/lakebase_handover_reach.py);
 5. ``GRANT <one privilege> ON <object> TO <target>`` for every object the
    handover leaves to another owner that the target holds nothing on, when
    the legacy owner can grant on it; the rest refuse
@@ -49,7 +53,7 @@ from tools.clients.lakebase_handover_acl import (
     membership_statement,
     schemas_without_usage,
 )
-from tools.clients.lakebase_handover_reach import unreachable_objects
+from tools.clients.lakebase_handover_reach import acts_as_database_owner, unreachable_objects
 from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     SCHEMA_NAME,
@@ -64,7 +68,6 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 FACTS_SQL = """
 SELECT current_user::text,
        current_database()::text,
-       pg_get_userbyid(database_object.datdba)::text,
        EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(target)s),
        CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(target)s)
             THEN pg_has_role(current_user, %(target)s, 'MEMBER WITH ADMIN OPTION') ELSE FALSE END,
@@ -139,12 +142,13 @@ def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
     facts = cursor.fetchone()
     if facts is None:
         raise RuntimeError("the precondition facts returned no row")
-    legacy, database, database_owner = str(facts[0]), str(facts[1]), str(facts[2])
-    target_exists, legacy_admin, extension_present = bool(facts[3]), bool(facts[4]), bool(facts[5])
+    legacy, database = str(facts[0]), str(facts[1])
+    target_exists, legacy_admin, extension_present = bool(facts[2]), bool(facts[3]), bool(facts[4])
     cursor.execute(AUTHORITY_SQL, {"target": target, "schema": SCHEMA_NAME})
     authority = cursor.fetchone() or ("", False, False, False, False, False, False)
     settable, schema_create, database_create, createdb, inherits = (bool(authority[index]) for index in (2, 3, 4, 5, 6))
-    schemas = schemas_without_usage(cursor, target=target, owns_database=database_owner in {legacy, target})
+    schemas = schemas_without_usage(cursor, target=target)
+    owner_authority = acts_as_database_owner(cursor, legacy=legacy, target=target)
     refusals: list[str] = []
     lines = [
         f"-- Lakebase handover preconditions (spike S3, L-A): run in this order as {json.dumps(legacy)}, connected to {json.dumps(database)}.",
@@ -175,6 +179,14 @@ def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
     if schemas:
         lines.append(f"-- 4. The target uses every other non-system schema ({len(schemas)}): the grants job it runs revokes in each.")
         lines.extend(f"{grant_statement(_schema(name), ('USAGE',), target)};" for name in schemas)
+    if not owner_authority:
+        refusals.append("target_will_not_own_database")
+        lines.append(
+            "-- REFUSED target_will_not_own_database: the App database belongs to neither the legacy owner nor the "
+            "target, and the target holds no SET and INHERIT membership in its owner. The grants job the target runs "
+            "closes public as pg_database_owner, which needs both, and its exact gate refuses a grant on public. "
+            "The database's owner gives it to the legacy owner (the handover then moves it), then re-run this mode."
+        )
     if target_exists:
         refusals.extend(_object_privileges(cursor, lines, legacy=legacy, target=target))
     else:

@@ -47,7 +47,7 @@ from typing import Any
 
 from jobs.lakebase_migration_read_only import assert_read_statement
 from tools.clients.lakebase_handover_acl import GRANT_KEYWORDS, SCHEMA_USAGE_SQL, TARGET_ACL_SQL
-from tools.clients.lakebase_handover_reach import OBJECT_REACH_SQL
+from tools.clients.lakebase_handover_reach import DATABASE_OWNER_SQL, OBJECT_REACH_SQL
 from tools.clients.lakebase_handover_rehearse import (
     INSTALL_SCHEMA_SQL,
     OWNER_SQL,
@@ -433,8 +433,8 @@ class FakeCursor:
                 key = f"SCHEMA:{name}"
                 if _SYSTEM_SCHEMA.fullmatch(name) or name == params["schema"]:
                     continue
-                if params["owns_database"] and server.owner_of(key) == DATABASE_OWNER:
-                    continue
+                if server.owner_of(key) == DATABASE_OWNER:
+                    continue  # the database owner's: DATABASE_OWNER_SQL
                 if params["target"] not in server.roles or not server.has_privilege(params["target"], key, "USAGE"):
                     missing.append((name,))
             return missing
@@ -442,11 +442,15 @@ class FakeCursor:
             return self._target_acl(params["target"])
         if statement == OBJECT_REACH_SQL:
             return self._unreachable(params["target"], params["legacy"], params["schema"])
+        if statement == DATABASE_OWNER_SQL:
+            target = params["target"]
+            moves = server.owner_of(server.database_key()) == params["legacy"]
+            return [(moves or (target in server.roles and DATABASE_OWNER in server.effective(target)),)]
         if statement == FACTS_SQL:
             target = params["target"]
             database = server.database_key().partition(":")[2]
             exists = target in server.roles
-            return [(server.caller, database, server.owner_of(server.database_key()), exists, exists and server.admin_edge, "databricks_auth" in server.extensions)]
+            return [(server.caller, database, exists, exists and server.admin_edge, "databricks_auth" in server.extensions)]
         if statement == LEGACY_ROLE_SQL:
             legacy = params["legacy"]
             return [(legacy in server.roles, sum(1 for role in server.roles if role.lower() == legacy.lower() and role != legacy))]
@@ -467,15 +471,12 @@ class FakeCursor:
             return []
         rows = []
         for item in server.objects:
+            if item.kind not in _REVOKED_KINDS or _SYSTEM_SCHEMA.fullmatch(item.schema):
+                continue  # the database is DATABASE_OWNER_SQL's
             owner = server.owner_of(item.key)
-            if item.kind == "DATABASE":
-                keyword, left_out = "DATABASE", owner == legacy  # the handover moves it
-            elif item.kind in _REVOKED_KINDS and not _SYSTEM_SCHEMA.fullmatch(item.schema):
-                keyword = _REVOKED_KINDS[item.kind]
-                # Moved by the handover, or the provider's own (the grants job skips it).
-                left_out = (item.schema == schema and owner == legacy) or (item.schema == "public" and owner == "cloud_admin")
-            else:
-                continue
+            keyword = _REVOKED_KINDS[item.kind]
+            # Moved by the handover, or the provider's own (the grants job skips it).
+            left_out = (item.schema == schema and owner == legacy) or (item.schema == "public" and owner == "cloud_admin")
             if not left_out and not server.has_privilege(target, item.key):
                 rows.append((keyword, item.schema, item.name, item.signature, owner in server.effective(server.caller)))
         return sorted(rows)

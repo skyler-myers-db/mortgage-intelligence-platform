@@ -14,15 +14,19 @@ Lakebase stand-ins on vanilla PostgreSQL: the legacy owner owns both
 databases (``CREATEDB``), L-A's membership is granted by the superuser, the
 provider's own routines in ``public`` belong to ``cloud_admin`` (pgcrypto's
 here, which the grants job skips as it does on Lakebase), and the grants job
-runs with ``allow_absent_*``. Each test builds and drops its own databases
-and roles; ``cloud_admin`` is dropped only when the test created it.
+runs with ``allow_absent_*``, which skips its public-schema gate and closure;
+``Install.close_public_schema`` runs that closure for real, against the
+provider's writer-less ``public`` ACL (spike S2b) with a
+``databricks_superuser`` stand-in. Each test builds and drops its own
+databases and roles; ``cloud_admin`` and ``databricks_superuser`` are dropped
+only when the test created them.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -33,6 +37,7 @@ from psycopg import sql as psql
 from psycopg.conninfo import make_conninfo
 
 from jobs import lakebase_migrate
+from jobs import lakebase_migration_provider_plane as provider_plane
 from jobs.lakebase_migration_read_only import read_only_session
 from tools.clients import handover_journal as journals
 from tools.clients import lakebase_handover as handover
@@ -93,6 +98,7 @@ class Install:
     legacy: str
     target: str
     app: str
+    extra_roles: list[str] = field(default_factory=list)  # dropped after the databases
 
     def kwargs(self, role: str, database: str = "") -> dict[str, Any]:
         return {"conninfo": make_conninfo(self.dsn, dbname=database or self.database), "options": f"-c role={role}"}
@@ -137,6 +143,31 @@ class Install:
         assert refusals == []
         ack = journals.plan_sha256(document, domain=handover.REVERT_DOMAIN)
         return handover.revert(self.read_session, self.connect, journal, ack=ack)
+
+    def role(self, stem: str) -> str:
+        """A NOLOGIN role for one test, dropped with the install."""
+
+        name = f"{self.legacy}_{stem}"
+        with psycopg.connect(self.dsn, autocommit=True) as admin:
+            admin.execute(f"CREATE ROLE {_identifier(name)} NOLOGIN")
+        self.extra_roles.append(name)
+        return name
+
+    def provider_public_acl(self) -> None:
+        """``public`` as a 2026-11 Lakebase database leaves it (spike S2b's writer-less revision), PUBLIC's USAGE closed."""
+
+        with psycopg.connect(self.dsn, autocommit=True) as admin:
+            if not admin.execute("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'databricks_superuser')").fetchone()[0]:
+                admin.execute("CREATE ROLE databricks_superuser NOLOGIN")
+                self.extra_roles.append("databricks_superuser")
+        with psycopg.connect(make_conninfo(self.dsn, dbname=self.database), autocommit=True) as admin:
+            admin.execute("GRANT USAGE, CREATE ON SCHEMA public TO databricks_superuser WITH GRANT OPTION")
+
+    def close_public_schema(self, role: str) -> None:
+        """The grants job's real public-schema closure (gate, authority, revoke, gate), run as ``role``."""
+
+        with psycopg.connect(**self.kwargs(role)) as connection, connection.cursor() as cursor:
+            provider_plane._close_public_schema_boundary(cursor, (self.app,), principal_label="handover test")
 
     def snapshot(self) -> list[tuple[Any, ...]]:
         with psycopg.connect(make_conninfo(self.dsn, dbname=self.database)) as connection:
@@ -191,7 +222,7 @@ def install(monkeypatch: pytest.MonkeyPatch) -> Iterator[Install]:
         with psycopg.connect(dsn, autocommit=True) as admin:
             for database in (current.database, current.other):
                 admin.execute(f"DROP DATABASE IF EXISTS {_identifier(database)} WITH (FORCE)")
-            for role in (current.app, current.target, current.legacy):
+            for role in (*reversed(current.extra_roles), current.app, current.target, current.legacy):
                 admin.execute(f"DROP ROLE IF EXISTS {_identifier(role)}")
             if created_cloud_admin:
                 admin.execute("DROP ROLE IF EXISTS cloud_admin")
@@ -335,3 +366,67 @@ def test_preconditions_name_every_unusable_schema_and_residue_reads_every_databa
         assert residue["owns_object"] >= 3, "the other database and the two schemas"
         with pytest.raises(roles.LegacyRoleNotFound, match="1 role"):
             roles.legacy_residue(cursor, legacy=install.legacy.upper())
+
+
+def _membership(install: Install, role: str, member: str, *, inherit: bool, set_option: bool) -> None:
+    """``role``'s owner (the superuser here) makes ``member`` a member, replacing any membership it had."""
+
+    with psycopg.connect(install.dsn, autocommit=True) as admin:
+        admin.execute(f"REVOKE {_identifier(role)} FROM {_identifier(member)}")
+        if inherit or set_option:
+            admin.execute(f"GRANT {_identifier(role)} TO {_identifier(member)} WITH INHERIT {inherit}, SET {set_option}")
+
+
+def test_a_database_another_role_owns_refuses_until_the_target_may_act_as_its_owner(install: Install, tmp_path: Path) -> None:
+    """Round 2: the handover leaves the App database to another role.
+
+    Before, the plan refused ``target_needs_schema_usage`` for ``public`` and
+    ``--preconditions`` printed a USAGE grant there. That planned clean, but
+    the grants job's exact public-schema gate refuses the row it adds, and its
+    closure needs the database owner's SET. The plan now refuses until the
+    target holds that owner's SET and INHERIT, and prints no SQL for it.
+    """
+
+    owner, target = install.role("database_owner"), _identifier(install.target)
+    _membership(install, owner, install.legacy, inherit=True, set_option=True)
+    with psycopg.connect(install.dsn, autocommit=True) as admin:
+        admin.execute(f"ALTER DATABASE {_identifier(install.database)} OWNER TO {_identifier(owner)}")
+    install.provider_public_acl()
+    install.close_public_schema(install.legacy)  # the reviewed ACL passes the gate, and the legacy role may close it
+    assert install.plan().refusals == ["target_will_not_own_database"]
+    assert install.preconditions() == ([], ["target_will_not_own_database"])
+    with pytest.raises(RuntimeError, match="closure authority mismatch"):
+        install.close_public_schema(install.target)
+    # What --preconditions printed before: the gate refuses its row, and the plan still refuses.
+    install.run(install.legacy, f"GRANT USAGE ON SCHEMA public TO {target}")
+    with pytest.raises(RuntimeError, match="public-schema ACL mismatch"):
+        install.close_public_schema(install.legacy)
+    assert install.plan().refusals == ["target_will_not_own_database"]
+    install.run(install.legacy, f"REVOKE USAGE ON SCHEMA public FROM {target}")
+    # SET alone passes the closure's authority but not the revokes; INHERIT alone the reverse.
+    for inherit, set_option in ((False, True), (True, False)):
+        _membership(install, owner, install.target, inherit=inherit, set_option=set_option)
+        assert install.plan().refusals == ["target_will_not_own_database"], (inherit, set_option)
+    _membership(install, owner, install.target, inherit=True, set_option=True)
+    assert install.plan().refusals == [] and install.preconditions() == ([], [])
+    journal = install.apply(tmp_path / "j.json")
+    assert journal.status == "applied" and not any(entry["kind"] == "DATABASE" for entry in journal.entries)
+    install.grants_job(install.target)
+    install.close_public_schema(install.target)
+
+
+def test_with_the_owners_set_alone_the_grants_job_run_as_the_target_fails(install: Install, tmp_path: Path) -> None:
+    """Positive control for the INHERIT half: SET passes the closure, and the revokes in ``public`` fail."""
+
+    owner = install.role("database_owner")
+    _membership(install, owner, install.legacy, inherit=True, set_option=True)
+    with psycopg.connect(install.dsn, autocommit=True) as admin:
+        admin.execute(f"ALTER DATABASE {_identifier(install.database)} OWNER TO {_identifier(owner)}")
+    _membership(install, owner, install.target, inherit=False, set_option=True)
+    install.provider_public_acl()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(handover, "acts_as_database_owner", lambda *_args, **_kwargs: True)
+        assert install.apply(tmp_path / "j.json").status == "applied"
+    install.close_public_schema(install.target)
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="permission denied for schema public"):
+        install.grants_job(install.target)

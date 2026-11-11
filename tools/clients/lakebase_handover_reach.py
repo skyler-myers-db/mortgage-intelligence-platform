@@ -21,6 +21,18 @@ the legacy owner can grant on (it owns it, or holds its owner's privileges),
 the GRANT of one reviewed privilege (``REMEDY_PRIVILEGES``) that ends the
 refusal, and refuses the rest: their owner grants it.
 
+The database is not one of them. Before any revoke, the grants job closes
+``public`` as ``pg_database_owner`` (jobs/lakebase_migration_provider_plane.py
+refuses "public-schema closure authority mismatch" unless the role running it
+may SET ROLE to it), and the exact public-schema gate refuses any extra ACL
+row there, so neither a privilege on the database nor ``USAGE`` on ``public``
+can stand in for owning it. ``acts_as_database_owner`` is true when the
+handover moves the legacy owner's database to the target, or the target
+already holds ``pg_database_owner``'s SET and INHERIT (it owns the database,
+or is a member of the role that does); otherwise the plan and
+``--preconditions`` refuse ``target_will_not_own_database`` and print no SQL
+for it (round 2 of the PR #336 review, PostgreSQL 16.15).
+
 Not predicted: the column-level and default-privilege revokes. The grants job
 revokes only entries naming the App roles there, which this tool cannot name;
 a grants run before the handover leaves none, and one granted later fails the
@@ -46,9 +58,9 @@ PROVIDER_PUBLIC = "n.nspname = 'public' AND owner.rolname = 'cloud_admin'"
 _PREDICATE = "\n  AND ".join(NON_SYSTEM_SCHEMA_PREDICATE)
 _ANY = {kind: ", ".join(privileges) for kind, privileges in PRIVILEGES_BY_KIND.items()}
 # Read-only. ``moving`` is the legacy role: the handover gives the target each
-# mip_app object it owns, and the database when it owns that. The privilege
-# lists are PRIVILEGES_BY_KIND (any one held is enough); a CASE keeps a
-# sequence function off a table and the reverse.
+# mip_app object it owns. The privilege lists are PRIVILEGES_BY_KIND (any one
+# held is enough); a CASE keeps a sequence function off a table and the
+# reverse. The database is DATABASE_OWNER_SQL's.
 OBJECT_REACH_SQL = f"""
 WITH target_role AS (
     SELECT oid FROM pg_roles WHERE rolname = %(target)s
@@ -85,19 +97,26 @@ WHERE {_PREDICATE}
   AND NOT ({PROVIDER_PUBLIC})
   AND NOT (n.nspname = %(schema)s AND routine.proowner IN (SELECT oid FROM moving))
   AND NOT has_function_privilege(target_role.oid, routine.oid, '{_ANY["FUNCTION"]}')
-UNION ALL
-SELECT 'DATABASE', '', database_object.datname::text, '',
-       pg_has_role(current_user, database_object.datdba, 'USAGE')
-FROM pg_database database_object
-CROSS JOIN target_role
-WHERE database_object.datname = current_database()
-  AND database_object.datdba NOT IN (SELECT oid FROM moving)
-  AND NOT has_database_privilege(target_role.oid, database_object.oid, '{_ANY["DATABASE"]}')
 ORDER BY 1, 2, 3, 4
+"""
+# Read-only: whether the target will hold the App database owner's authority
+# after the handover: the legacy owner's database moves to it, or it may
+# already SET ROLE to pg_database_owner and holds its privileges (INHERIT),
+# the grants job's own closure check plus what its revokes in ``public`` and
+# on the database need. False for a target role that does not exist yet.
+DATABASE_OWNER_SQL = """
+SELECT database_object.datdba IN (SELECT oid FROM pg_roles WHERE rolname = %(legacy)s)
+       OR COALESCE(
+           (SELECT pg_has_role(target_role.oid, 'pg_database_owner', 'SET')
+                   AND pg_has_role(target_role.oid, 'pg_database_owner', 'USAGE')
+            FROM pg_roles target_role WHERE target_role.rolname = %(target)s),
+           FALSE)
+FROM pg_database database_object
+WHERE database_object.datname = current_database()
 """
 # The one privilege per kind ``--preconditions`` grants: the least that gives
 # the target a privilege on the object (reading it, or running it).
-REMEDY_PRIVILEGES = {"TABLE": "SELECT", "SEQUENCE": "SELECT", "FUNCTION": "EXECUTE", "PROCEDURE": "EXECUTE", "DATABASE": "CONNECT"}
+REMEDY_PRIVILEGES = {"TABLE": "SELECT", "SEQUENCE": "SELECT", "FUNCTION": "EXECUTE", "PROCEDURE": "EXECUTE"}
 
 
 @dataclass(frozen=True)
@@ -117,6 +136,14 @@ class Unreachable:
         return grant_statement(item, (REMEDY_PRIVILEGES[self.kind],), target)
 
 
+def acts_as_database_owner(cursor: Any, *, legacy: str, target: str) -> bool:
+    """Read-only: DATABASE_OWNER_SQL; False refuses ``target_will_not_own_database``."""
+
+    cursor.execute(DATABASE_OWNER_SQL, {"legacy": legacy, "target": target})
+    row = cursor.fetchone()
+    return row is not None and bool(row[0])
+
+
 def unreachable_objects(cursor: Any, *, legacy: str, target: str) -> list[Unreachable]:
     """Read-only; empty when the target role does not exist (the plan refuses that on its own)."""
 
@@ -127,4 +154,14 @@ def unreachable_objects(cursor: Any, *, legacy: str, target: str) -> list[Unreac
     ]
 
 
-__all__ = ["OBJECT_REACH_SQL", "PROVIDER_PUBLIC", "RELATION_KINDS", "REMEDY_PRIVILEGES", "SEQUENCE_KIND", "Unreachable", "unreachable_objects"]
+__all__ = [
+    "DATABASE_OWNER_SQL",
+    "OBJECT_REACH_SQL",
+    "PROVIDER_PUBLIC",
+    "RELATION_KINDS",
+    "REMEDY_PRIVILEGES",
+    "SEQUENCE_KIND",
+    "Unreachable",
+    "acts_as_database_owner",
+    "unreachable_objects",
+]

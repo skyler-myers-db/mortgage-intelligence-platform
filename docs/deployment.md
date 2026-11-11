@@ -3663,20 +3663,29 @@ it in your terminal or the mode-0600 report, never in a shared log):
 3. `GRANT CREATE ON SCHEMA "mip_app" TO "<deployer>";`
 4. `GRANT USAGE ON SCHEMA "<schema>" TO "<deployer>";` for every other
    non-system schema the deployer cannot use yet (a synced-table or leftover
-   schema, for example). `public` is left out: once the handover gives the
-   deployer the database, it uses `public` as the database owner. USAGE lets
-   the grants job look up the objects there, but it is not enough on its own:
+   schema, for example). `public` is never printed: the deployer uses it as
+   the database owner. The grants job closes `public` as `pg_database_owner`
+   (it refuses "public-schema closure authority mismatch" unless the role
+   running it may `SET ROLE` to it) and its exact public-schema gate refuses
+   any extra ACL row there, so a USAGE grant on `public` breaks every later
+   release. When the App database belongs to neither the legacy owner (the
+   handover then moves it) nor the deployer, and the deployer holds no
+   `SET` and `INHERIT` membership in its owner, the mode prints no SQL and
+   refuses `target_will_not_own_database`: the database's owner gives it to
+   the legacy owner, then re-run this mode. SET alone fails the grants job's
+   revokes in `public`, and INHERIT alone its closure (PostgreSQL 16.15, PR
+   #336 review round 2). USAGE lets the grants job look up the objects in a
+   schema, but it is not enough on its own:
 5. `GRANT <one privilege> ON <object> TO "<deployer>";` for every table,
    view, sequence and routine the handover leaves to another owner (anything
-   outside `mip_app`, and a `mip_app` object another role owns), and the
-   database when it stays another role's, that the deployer holds no
-   privilege on: `SELECT` on a table, view or sequence, `EXECUTE` on a
-   routine, `CONNECT` on the database. The grants job run as the deployer revokes the App
-   roles' privileges on every one of them, and PostgreSQL refuses a revoke
-   outright from a role that holds nothing on the object: with step 4 alone,
-   a legacy-owned table in a usable schema planned clean and the grants job
-   failed "permission denied for table" after the apply (PostgreSQL 16.15,
-   PR #336 review). The step prints a grant only where the legacy owner can
+   outside `mip_app`, and a `mip_app` object another role owns) that the
+   deployer holds no privilege on: `SELECT` on a table, view or sequence,
+   `EXECUTE` on a routine. The grants job run as the
+   deployer revokes the App roles' privileges on every one of them, and
+   PostgreSQL refuses a revoke outright from a role that holds nothing on the
+   object: with step 4 alone, a legacy-owned table in a usable schema
+   planned clean and the grants job failed "permission denied for table"
+   after the apply (PostgreSQL 16.15, PR #336 review). The step prints a grant only where the legacy owner can
    give one (it owns the object, or holds its owner's privileges); each other
    object refuses `target_needs_object_privilege` until its owner grants the
    deployer a privilege on it. Who owns a synced-table schema's tables on the
@@ -3711,12 +3720,14 @@ precondition PostgreSQL sets for `ALTER ... OWNER TO`: the target's CREATE on
 `mip_app` for the schema's objects (`target_needs_schema_create`), the
 session's CREATE on the database for the schema
 (`caller_needs_database_create`) and CREATEDB for the database
-(`caller_needs_createdb`). It also refuses, once per schema and by count only,
-a non-system schema the target cannot use (`target_needs_schema_usage`): the
-grants job the deployer runs after the handover revokes on every table in
-every non-system schema and failed "permission denied for schema" without it
-(spike S3); each object the handover leaves to another owner that the target
-holds no privilege on (`target_needs_object_privilege`, step 5); and an entry
+(`caller_needs_createdb`). It also refuses an App database the target will
+neither own nor act for as owner (`target_will_not_own_database`, step 4);
+once per schema and by count only, a non-system schema the target cannot use
+(`target_needs_schema_usage`): the grants job the deployer runs after the
+handover revokes on every table in every non-system schema and failed
+"permission denied for schema" without it (spike S3); each object the
+handover leaves to another owner that the target holds no privilege on
+(`target_needs_object_privilege`, step 5); and an entry
 naming the target that the revert could not restore exactly
 (`target_grant_unrevertible`, below). The rehearsal reads the same
 preconditions first. The apply moves

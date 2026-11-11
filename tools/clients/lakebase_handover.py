@@ -62,7 +62,7 @@ from tools.clients.lakebase_handover_acl import (
     schemas_without_usage,
     target_grants,
 )
-from tools.clients.lakebase_handover_reach import unreachable_objects
+from tools.clients.lakebase_handover_reach import acts_as_database_owner, unreachable_objects
 from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     DEFAULT_BUDGET,
@@ -136,10 +136,8 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
         if not target_inherited:
             # The exact inverse needs the target's privileges: refuse before the apply.
             refusals.append("caller_cannot_revert")
-    changes, planned, other, database_owner = [], {}, 0, ""
+    changes, planned, other = [], {}, 0
     for item in _inventory(cursor):
-        if item.kind == "DATABASE":
-            database_owner = item.owner
         if item.owner != legacy:
             other += 1
             continue
@@ -170,9 +168,11 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
     if "DATABASE" in kinds and not createdb:
         refusals.append("caller_needs_createdb")
     if target_exists:
-        # The grants job the target runs next revokes in every non-system schema (S3, answer 4).
-        owns_database = "DATABASE" in kinds or database_owner == target
-        refusals.extend("target_needs_schema_usage" for _schema in schemas_without_usage(cursor, target=target, owns_database=owns_database))
+        # The grants job the target runs next closes public as the database owner (PR #336, round 2) ...
+        if not acts_as_database_owner(cursor, legacy=legacy, target=target):
+            refusals.append("target_will_not_own_database")
+        # ... and revokes in every non-system schema (S3, answer 4).
+        refusals.extend("target_needs_schema_usage" for _schema in schemas_without_usage(cursor, target=target))
         # ... and on every object there, which it must hold a privilege on to REVOKE (PR #336 review).
         refusals.extend("target_needs_object_privilege" for _item in unreachable_objects(cursor, legacy=legacy, target=target))
         # The target's own entries the apply merges away, restored by the revert (S3, answer 3b).
