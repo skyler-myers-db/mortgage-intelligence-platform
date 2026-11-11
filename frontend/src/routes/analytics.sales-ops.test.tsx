@@ -116,6 +116,12 @@ function salesOpsTabButton(): HTMLButtonElement | undefined {
 
 describe('Analytics Sales ops tab', () => {
   beforeEach(() => {
+    // Every period window here is read on one known local day, a Tuesday
+    // (timers stay real). Unpinned, on a Sunday week to date IS the last 7
+    // days (Mon..Sun): pressing "7 days" re-keyed nothing and the preset test
+    // saw a single conversion read.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 6, 14, 11, 0));
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({
@@ -166,6 +172,7 @@ describe('Analytics Sales ops tab', () => {
     queryClient.clear();
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it('selects the Sales ops tab from the ?view=sales-ops deep link and hides the filter row', async () => {
