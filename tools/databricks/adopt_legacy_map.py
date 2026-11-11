@@ -21,11 +21,17 @@ with one GET by id per object:
   key also claims (``duplicate_id``); or a key this deployer's state binds to
   another object (``bound_elsewhere``);
 * **dashboard_parent_moved** (attack O9): a legacy dashboard whose live folder
-  is not ``MIP_DASHBOARD_PARENT_PATH``. Spike S4 has not shown whether a
-  ``parent_path`` change updates in place, so the worst case is assumed: it
-  recreates. An adopted install's dashboards therefore stay in their legacy
-  folder, permanently until S4 (``DASHBOARD_POLICY``; the profile requires the
-  folder inside the legacy root, tools/clients/rules.py).
+  is not ``MIP_DASHBOARD_PARENT_PATH``. Spike S4 measured that ``parent_path``
+  is immutable in the direct engine (``spec:immutable``): a change recreates
+  the dashboard (a new id, the old one trashed, its published revision and URL
+  gone), and the Lakeview API has no in-place move. An adopted install's
+  dashboards therefore stay in their legacy folder permanently
+  (``DASHBOARD_POLICY``; the profile requires the folder inside the legacy
+  root, tools/clients/rules.py). The two folders are compared by
+  ``canonical_folder``: ``lakeview.get`` answers ``/Users/...`` where the
+  profile and the plan say ``/Workspace/Users/...`` (spike S4, both live
+  dashboards), and the CLI plans no change between the two spellings of one
+  folder.
 
 The canonical document of what would change is digested with
 ``bundle_plan_shape.sha256_hex``. That digest is the exact acknowledgement a
@@ -65,6 +71,8 @@ _STATE_KEY = re.compile(
     r"(?:\.(?P<child>[a-z]+))?\Z"
 )
 _ABSENT = (NotFound, ResourceDoesNotExist)
+# The folders the Workspace API also spells without ``/Workspace``.
+_WORKSPACE_ALIASES = ("/Users", "/Shared")
 
 REMEDIES: Mapping[str, str] = MappingProxyType(
     {
@@ -98,8 +106,8 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
             "development-mode form): it was renamed, or the legacy state names another object"
         ),
         "dashboard_parent_moved": (
-            "the legacy dashboard is not in MIP_DASHBOARD_PARENT_PATH. Spike S4 is owed, so a "
-            "parent_path change is assumed to recreate the dashboard: pin "
+            "the legacy dashboard is not in MIP_DASHBOARD_PARENT_PATH. A parent_path change "
+            "recreates the dashboard (spike S4: the field is immutable), so pin "
             "MIP_DASHBOARD_PARENT_PATH to the dashboard's live folder"
         ),
         "foreign_bound": (
@@ -293,6 +301,22 @@ def _root(path: str) -> str:
     return path.removeprefix("/Workspace").rstrip("/").casefold()
 
 
+def canonical_folder(path: str) -> str:
+    """One spelling per folder: ``/Users/...`` and ``/Shared/...`` under ``/Workspace``.
+
+    Only those aliases and a trailing slash: no casefold and no other prefix
+    (an adopted install's folder lies inside its legacy root, under
+    ``/Workspace/Users``), so a folder that differs in anything else is a
+    different folder and refuses.
+    """
+
+    path = path.rstrip("/")
+    for alias in _WORKSPACE_ALIASES:
+        if path == alias or path.startswith(f"{alias}/"):
+            return f"/Workspace{path}"
+    return path
+
+
 def state_entries(document: Mapping[str, Any] | None, where: str) -> tuple[dict[str, str], list[str], list[AdoptRefusal]]:
     """``(<kind>.<key> -> live id, child keys, refusals)`` of one state document."""
 
@@ -381,7 +405,7 @@ class _Planner:
             return ()
         if expected is not None:
             if kind == "dashboards":
-                if live.names[0].rstrip("/") != expected[0].rstrip("/"):
+                if canonical_folder(live.names[0]) != canonical_folder(expected[0]):
                     self.refuse("dashboard_parent_moved", resource, "the live parent_path is not the configured one")
                 if not same_name(kind, live.names[1], expected[1]):
                     self.refuse("renamed", resource, "display_name")
@@ -484,7 +508,7 @@ def compute(
         "already": sorted(already),
         "expected_creates": expected_creates,
         "legacy_children": sorted(legacy_children),
-        "dashboards": {"parent_path_policy": DASHBOARD_POLICY, "owed": "spike S4"},
+        "dashboards": {"parent_path_policy": DASHBOARD_POLICY, "basis": "spike S4: parent_path is immutable"},
     }
     return AdoptPlan(
         phase=phase,

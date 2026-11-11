@@ -2,11 +2,13 @@ import { useSyncExternalStore } from 'react';
 import { Tooltip } from './Tooltip';
 import {
   DATE_UNKNOWN,
+  calendarDate,
   formatDate,
   formatDateTimeShort,
   formatRelative,
   formatUtcTitle,
   isoDateTimeAttr,
+  parseBackendTimestamp,
   type RelativeStyle,
 } from '../../lib/time';
 
@@ -27,8 +29,12 @@ import {
  * `<time>` claiming an instant it does not have.
  *
  * Relative labels stay true while a page sits open: every mounted Timestamp
- * shares one minute clock (a single interval, started by the first one to
- * mount and stopped by the last to unmount).
+ * shares one minute clock (a single timer, started by the first one to
+ * mount and stopped by the last to unmount). The clock is the minute it is
+ * in, so it ticks on the wall clock's minute boundaries, and a value inside
+ * that minute reads "now" (PR #338 review: a 60 s interval from the first
+ * mount trailed the real time by up to 2 minutes, and a fresh read showed
+ * "Fetched in 1m" or "in 2m").
  */
 
 export type TimestampFormat = 'relative' | 'date' | 'datetime';
@@ -43,13 +49,16 @@ interface TimestampProps {
   className?: string;
   /** Plain text rendered when the value is missing or unparseable. */
   fallback?: string;
-  /** Reference instant (tests); default the shared minute clock. */
+  /**
+   * Reference instant (tests), used as given; default the shared minute
+   * clock, where a value inside the clock's minute reads "now".
+   */
   now?: Date | number;
 }
 
 const MINUTE_MS = 60_000;
 const listeners = new Set<() => void>();
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
 
 /** The real clock at minute grain: a relative label never needs more. */
 function minuteNow(): number {
@@ -58,19 +67,30 @@ function minuteNow(): number {
 
 let clockMs = minuteNow();
 
+/**
+ * Tick at the next wall-clock minute, then at every one after it. A timer
+ * that fires early leaves the clock where it is and re-arms for the boundary.
+ * It re-arms before notifying, so the last listener to unsubscribe clears the
+ * live timer.
+ */
+function scheduleTick(): void {
+  timer = setTimeout(() => {
+    clockMs = minuteNow();
+    scheduleTick();
+    listeners.forEach((notify) => notify());
+  }, MINUTE_MS - (Date.now() % MINUTE_MS));
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   if (timer === null) {
     clockMs = minuteNow();
-    timer = setInterval(() => {
-      clockMs = minuteNow();
-      listeners.forEach((notify) => notify());
-    }, MINUTE_MS);
+    scheduleTick();
   }
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0 && timer !== null) {
-      clearInterval(timer);
+      clearTimeout(timer);
       timer = null;
     }
   };
@@ -87,6 +107,18 @@ function getSnapshot(): number {
 /** The shared minute clock (epoch ms). */
 export function useMinuteClock(): number {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * The reference for a relative label read against the minute clock. The
+ * clock is the floor of the minute the real time is in, so a value inside
+ * that minute is as recent as minute grain can tell, and reads "now", never
+ * "in 1m". A value in a later minute keeps the clock and stays ahead.
+ */
+function minuteGrainReference(value: TimestampProps['value'], clock: number): number {
+  if (calendarDate(value)) return clock;
+  const at = parseBackendTimestamp(value)?.getTime();
+  return at !== undefined && at > clock && at < clock + MINUTE_MS ? at : clock;
 }
 
 export function Timestamp({
@@ -107,7 +139,7 @@ export function Timestamp({
       ? formatDate(value, { now: reference })
       : format === 'datetime'
         ? formatDateTimeShort(value, { now: reference })
-        : formatRelative(value, { now: reference, style: relativeStyle, nowLabel });
+        : formatRelative(value, { now: now ?? minuteGrainReference(value, clock), style: relativeStyle, nowLabel });
   return (
     <Tooltip content={formatUtcTitle(value)}>
       <time className={className} dateTime={dateTime}>

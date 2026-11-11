@@ -217,11 +217,11 @@ def adoption_refusals(profile: ClientProfile) -> list[str]:
 
     ``MIP_LEGACY_BUNDLE_ROOT`` names the root whose bundle state the adopt
     phase binds from, so it is never the client target's own root. Spike S4
-    has not shown whether a dashboard ``parent_path`` change updates in place
-    or recreates (losing the dashboard's id, history and shares), so an
-    adopted install keeps its dashboards in their legacy folder, permanently
-    until S4 says otherwise: ``MIP_DASHBOARD_PARENT_PATH`` is required and
-    must lie inside the legacy root.
+    measured that a dashboard ``parent_path`` change recreates the dashboard
+    (the field is immutable: a new id, the old one trashed, its published
+    revision and URL lost), so an adopted install keeps its dashboards in
+    their legacy folder permanently: ``MIP_DASHBOARD_PARENT_PATH`` is required
+    and must lie inside the legacy root.
     """
 
     root = profile.legacy_bundle_root
@@ -241,12 +241,13 @@ def adoption_refusals(profile: ClientProfile) -> list[str]:
     if parent is None:
         lines.append(
             "MIP_DASHBOARD_PARENT_PATH: is required when MIP_LEGACY_BUNDLE_ROOT is set: an "
-            "adopted install's dashboards stay in their legacy folder (spike S4 is owed)"
+            "adopted install's dashboards stay in their legacy folder (spike S4: a move "
+            "recreates them)"
         )
     elif _real(parent) and not (parent == root or parent.startswith(f"{root}/")):
         lines.append(
             "MIP_DASHBOARD_PARENT_PATH: must lie inside MIP_LEGACY_BUNDLE_ROOT: an adopted "
-            "install's dashboards stay in their legacy folder (spike S4 is owed)"
+            "install's dashboards stay in their legacy folder (spike S4: a move recreates them)"
         )
     return lines
 

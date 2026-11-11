@@ -7,6 +7,13 @@ has no delete, create or grant method, so a stray call fails the test, and
 it records every update in ``updates``. ``fail_on`` makes the update of one
 object raise before it lands; ``land_then_fail`` makes it land and then raise.
 
+Pipeline datasets behave as spike S4 measured them: an owner update on a
+streaming table or materialized view is refused (``PipelineOwnerRefused``,
+with the measured message; nothing changes), ``pipelines.get`` answers the
+effective ``run_as_user_name`` and a ``spec`` without run_as, and
+``set_run_as`` (a pipeline run_as update) re-owns every dataset the pipeline
+publishes to the new identity at once, before any run.
+
 Every value is synthetic: example-domain owners and the fixed catalog ``mip``.
 """
 
@@ -16,11 +23,18 @@ import copy
 from types import SimpleNamespace
 from typing import Any
 
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import DatabricksError, NotFound
 
 LEGACY = "legacy-owner@example.com"
 TARGET = "acme-data-owners"
 OTHER = "another-team@example.com"
+JOBS = "00000000-0000-4000-8000-0000000000c2"
+PIPELINE = "pipeline-PLACEHOLDER"
+PIPELINE_TYPES = frozenset({"STREAMING_TABLE", "MATERIALIZED_VIEW"})
+
+
+class PipelineOwnerRefused(DatabricksError):
+    """The owner PATCH spike S4 saw refused for a pipeline dataset (its error class was not recorded)."""
 
 
 def estate() -> dict[str, Any]:
@@ -48,14 +62,16 @@ def estate() -> dict[str, Any]:
             "mip.gold.lead_scores_v": {"owner": LEGACY, "type": "VIEW"},
             "mip.gold.portfolio_metrics": {"owner": LEGACY, "type": "METRIC_VIEW"},
             "mip.gold.owned_elsewhere": {"owner": OTHER, "type": "MANAGED"},
-            "mip.silver.parcel_stream": {"owner": LEGACY, "type": "STREAMING_TABLE", "pipeline_id": "pipeline-PLACEHOLDER"},
-            "mip.silver.parcel_rollup": {"owner": LEGACY, "type": "MATERIALIZED_VIEW", "pipeline_id": "pipeline-PLACEHOLDER"},
+            "mip.silver.parcel_stream": {"owner": LEGACY, "type": "STREAMING_TABLE", "pipeline_id": PIPELINE},
+            "mip.silver.parcel_rollup": {"owner": LEGACY, "type": "MATERIALIZED_VIEW", "pipeline_id": PIPELINE},
             "mip.audit.action_log": {"owner": OTHER, "type": "MANAGED"},
             "mip.information_schema.tables": {"owner": "System user", "type": "VIEW"},
         },
         "volumes": {"mip.gold.exports": LEGACY},
         "functions": {"mip.gold.fn_lead_score": LEGACY, "mip.gold.fn_rate_spread": LEGACY},
         "models": {"mip.gold.propensity_model": LEGACY},
+        # The governed pipeline runs as the legacy owner until the release.
+        "pipelines": {PIPELINE: LEGACY},
     }
 
 
@@ -78,6 +94,13 @@ class _Api:
 
     def update(self, name: str, *, owner: str) -> Any:
         self._owner_of(name)
+        row = self._fake.doc[self._section][name]
+        if isinstance(row, dict) and (row.get("pipeline_id") or row.get("type") in PIPELINE_TYPES):
+            kind = "materialized view" if row.get("type") == "MATERIALIZED_VIEW" else "streaming table"
+            raise PipelineOwnerRefused(
+                f"Change owner on a {kind} managed by a DLT pipeline is not supported, "
+                "consider changing the owner of the DLT pipeline itself"
+            )
         if name in self._fake.fail_on:
             raise RuntimeError("injected update failure")
         rows = self._fake.doc[self._section]
@@ -146,6 +169,17 @@ class _Models(_Api):
         return self._children(catalog_name, schema_name)
 
 
+class _Pipelines:
+    def __init__(self, fake: FakeUc) -> None:
+        self._fake = fake
+
+    def get(self, *, pipeline_id: str) -> Any:
+        run_as = self._fake.doc.get("pipelines", {}).get(pipeline_id)
+        if run_as is None:
+            raise NotFound("pipeline not found")
+        return SimpleNamespace(pipeline_id=pipeline_id, run_as_user_name=run_as, spec=SimpleNamespace(name="pipeline"))
+
+
 class FakeUc:
     def __init__(self, doc: dict[str, Any] | None = None) -> None:
         self.doc = copy.deepcopy(doc or estate())
@@ -159,6 +193,15 @@ class FakeUc:
         self.volumes = _Leaves(self, "volumes")
         self.functions = _Leaves(self, "functions")
         self.registered_models = _Models(self, "models")
+        self.pipelines = _Pipelines(self)
+
+    def set_run_as(self, pipeline_id: str, identity: str) -> None:
+        """A pipeline run_as update: every dataset it publishes is the new identity's at once (spike S4)."""
+
+        self.doc["pipelines"][pipeline_id] = identity
+        for row in self.doc["tables"].values():
+            if row.get("pipeline_id") == pipeline_id:
+                row["owner"] = identity
 
     def owners(self) -> dict[str, str]:
         """Every object's owner, for an exact before/after comparison."""

@@ -3389,17 +3389,26 @@ of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
 pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
 unsupported kind fails its bind, and the run undoes the binds before it.
 
-**Dashboards (attack O9).** Spike S4 (a dashboard `parent_path` move on
-throwaway resources: update in place, or recreate?) has not run, because it
-needs resources only the owner can delete. The worst case is assumed: a move
-recreates the dashboard, losing its id, history and shares. So
-`MIP_DASHBOARD_PARENT_PATH` stays pinned at the legacy dashboards' live folder
-and is permanent for this install (the profile requires it inside
-`MIP_LEGACY_BUNDLE_ROOT`; the adopt plan refuses a legacy dashboard outside it
-and records `pinned_permanent`; the post-bind gate refuses a dashboard
-recreate or move). The other branch, moving both dashboards into the
-deployer's root and updating the pin with the state together, stays unbuilt
-until S4 shows the move is an in-place update.
+**Dashboards (attack O9).** Spike S4 measured a dashboard `parent_path` move
+on throwaway resources (CLI v1.10.0, direct engine): `parent_path` is
+`spec:immutable`, so a changed folder plans `recreate` (a new dashboard id,
+the old one trashed, its published revision and URL gone), and the Lakeview
+API has no in-place move (an update carrying only `parent_path` is accepted
+and ignored). A `display_name` change, such as the development-mode prefix
+dropping, is an in-place update. So `MIP_DASHBOARD_PARENT_PATH` stays pinned
+at the legacy dashboards' live folder, permanently for this install (the
+profile requires it inside `MIP_LEGACY_BUNDLE_ROOT`; the adopt plan refuses a
+legacy dashboard outside it and records `pinned_permanent`; the post-bind
+gate refuses a dashboard recreate or move). Moving them into the deployer's
+root is a recreate, so it is only ever an owner decision, never a deploy.
+
+`lakeview.get` answers a dashboard's folder as `/Users/<owner>/...`, while
+`MIP_DASHBOARD_PARENT_PATH` must be `/Workspace/...` (spike S4 read both
+live client-#1 dashboards that way), and the CLI plans no change between the
+two spellings of one folder. The adopt map compares the two through
+`adopt_legacy_map.canonical_folder`, which aliases exactly `/Users` and
+`/Shared` to their `/Workspace` spelling and drops a trailing slash; any
+other difference is another folder and refuses `dashboard_parent_moved`.
 
 **Archiving the legacy root (cutover step 16).**
 `python -m tools.clients.archive_legacy_root` is read-only by default. It plans
@@ -3594,6 +3603,8 @@ and the journal. Neither tool has run live.
 python -m tools.clients.handover_uc_ownership --plan --report-out <private report>
 python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal <new path>
 python -m tools.clients.handover_uc_ownership --verify
+# after the release (step 10):
+python -m tools.clients.handover_uc_ownership --verify --released
 ```
 
 The target is `<MIP_IDENTITY_PREFIX>-data-owners`. The plan enumerates the
@@ -3610,13 +3621,36 @@ refuses explicitly: the metastore (`metastore`), a Delta Sharing catalog
 `foreign_securable`), a system catalog (`system_catalog`), an object the
 System user owns (never a change), and the users, account users or admins
 vocabulary as the target. The first failure stops the apply (exit 3).
-`--verify` is read-only: nothing left to move, and every pipeline dataset
-paired exactly. `--interim-days N` (1 to 14, default 14) sets the suggested
-pairs' expiry.
+`--verify` is read-only: nothing left to move, every pipeline dataset the
+legacy owner still owns paired exactly, and every pipeline dataset owned by
+its own pipeline's live `run_as_user_name` and by an approved principal: the
+jobs identity (`MIP_IDENTITY_IDS_JSON.jobs`), or the legacy owner until the
+release (`tools/clients/handover_pipeline_owner.py`: `pipeline_unresolved`,
+`pipeline_run_as_unreadable`, `pipeline_owner_not_run_as`,
+`pipeline_owner_unapproved`). The platform keeps a dataset's owner equal to
+its pipeline's run_as, so the approved-owner rule is what refuses: another
+identity running a pipeline into the governed catalog, or a run_as moved off
+the jobs identity. `--verify --released`, after the release, no longer admits
+the legacy owner, pair or not. `--interim-days N` (1 to 14, default 14) sets
+the suggested pairs' expiry.
 
-**Pipeline-managed datasets.** Spike S4 (does `ALTER OWNER` on a
-pipeline-published streaming table or materialized view hold, and survive the
-pipeline's run_as change?) has not run, so they are excluded. The private
+**Pipeline-managed datasets.** Spike S4 measured that a pipeline-published
+streaming table or materialized view can never change owner by itself: the
+REST owner PATCH and every `ALTER ... OWNER TO` form were refused, for every
+actor tried, metastore owner included
+(`CHANGE_OWNER_NOT_ALLOWED_FOR_PIPELINE_TABLE`). Its owner is always the
+pipeline's run_as identity, and it flips the moment the pipeline's run_as
+setting changes, before any run; grants on the datasets survive the flip. So
+the plan excludes them for good. Until the release they are the legacy
+identity's, which the pipeline runs as; the release's bundle apply moves the
+pipeline's run_as to the jobs identity and with it every dataset, at once,
+while blue serves. From then on the jobs identity (`MIP_IDENTITY_IDS_JSON.jobs`)
+owns them permanently, never `<MIP_IDENTITY_PREFIX>-data-owners`: a group
+cannot be a run_as. `--verify --released` after the release proves that end
+state: every pipeline dataset in the governed catalog is owned by the jobs
+identity, and its pipeline runs live as it. The release postflight's live
+run_as check (below, "Workspace ACLs") already refuses the release when the
+governed pipeline does not. The private
 report (`--report-out`; the printed lines carry counts only) suggests one
 interim owner pair per dataset, `(full_name, owner, expires_at)`, at most 14
 days ahead, as rows (`suggested_interim_pairs`) and as the single-line value
@@ -3631,8 +3665,9 @@ the metastore. The deploy's pre-stop probe set holds no pipeline dataset, so
 it passes none: no deploy probe judges a pipeline dataset today, so no
 production caller hands pairs to the policy yet, and `--verify` matches each
 dataset with the same `build_pairs` output from the same profile field.
-Unset the field after the pipeline update or a journaled re-own moves the
-datasets.
+A pair covers the window from this handover to the release's bundle apply;
+no journaled re-own exists. Unset the field once `--verify --released`
+passes after the release; the pairs then match nothing.
 
 **Lakebase (step 8).** After the deployer's Postgres role exists (by the
 mechanism the S3 rehearsal picks), run as the legacy owner:
@@ -4641,8 +4676,9 @@ identity that holds no workspace admin.
   `mip_growth_agent_monitor_scheduler`.
 * The CLI v1.10.0 bundle schema declares `run_as` on `resources.Pipeline`,
   so the pipeline does not need spike S4's fallback (staying on the
-  deployer). S4's live half, ALTER OWNER on the pipeline's published
-  datasets after a run_as change, stays with the cutover.
+  deployer). S4's live half: no ALTER can re-own the pipeline's published
+  datasets; they follow its run_as, so they are the jobs identity's for good
+  ("Pipeline-managed datasets" above).
 * `tests/unit/test_jobs_identity_shape.py` pins the split.
 
 **Workspace ACLs.** The jobs identity holds no workspace admin and only a
@@ -4663,12 +4699,26 @@ job runs as it, runs `tools/databricks/jobs_identity_acl.py apply`:
   a new dependency cannot ship without its grant.
 * It resolves each object from the bundle summary, and refuses unless the
   summary's jobs-identity jobs run as the profile's jobs principal.
+* Before any grant it reads the **live** `run_as_user_name` of every
+  jobs-identity job and pipeline by id (`jobs.get`, `pipelines.get`; a
+  pipeline's spec never carries run_as) and refuses, exit 4 and nothing
+  granted, unless each runs as the jobs principal: `live_run_as_drift` for one
+  that runs as anyone else, `live_run_as_unreadable` for a blank answer or a
+  missing object. The summary is configuration, and spike S4 measured that
+  the direct-engine plan cannot see a pipeline's run_as (`input_only`): a
+  drifted pipeline planned `skip` and a deploy left it drifted. A job's drift
+  the plan does see and the apply repairs. A pipeline's needs a reviewed
+  change by the owner, then a re-run.
 * It adds only what the identity lacks, by the permissions API's PATCH, then
   re-reads every object. It never removes or lowers a grant, so the App's
   `CAN_MANAGE_RUN` bindings, the verifier's warehouse `CAN_USE` and other
   teams' grants stay. Bundle `permissions:` blocks would set each object's
   whole ACL on every deploy and drop those, which is why this is a deploy
-  step.
+  step. For the same reason no tool sets (PUT) a job's or pipeline's ACL:
+  spike S4 measured that `jobs set-permissions` replaces the whole ACL
+  (setting IS_OWNER dropped another principal's `CAN_MANAGE_RUN`).
+  `tests/unit/test_job_pipeline_acl_writes.py` refuses any such call in the
+  tree.
 * `plan` reads only. Output names bundle keys, never object ids or
   principals. `tests/unit/test_jobs_identity_acl.py` pins all of this.
 

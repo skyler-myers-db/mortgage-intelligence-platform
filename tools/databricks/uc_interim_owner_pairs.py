@@ -1,11 +1,15 @@
 """Interim owner pairs: exact, expiring exceptions to the approved-owner policy (M2-PR8).
 
-Spike S4 has not shown that ``ALTER OWNER`` on a pipeline-published streaming
-table or materialized view is accepted, nor that it survives the pipeline's
-run_as change. The ownership handover (tools/clients/handover_uc_ownership.py)
-therefore leaves those datasets with their current owner, and its ``--plan``
-writes one pair per dataset, ``(full_name, owner, expires_at)``, to the
-private ``--report-out`` report, also as the single-line value
+Spike S4 measured that a pipeline-published streaming table or materialized
+view can never change owner by itself: the REST owner PATCH and every ``ALTER
+... OWNER TO`` form are refused for any actor
+(``CHANGE_OWNER_NOT_ALLOWED_FOR_PIPELINE_TABLE``). Its owner is always the
+pipeline's run_as identity and flips the moment that setting changes. The
+ownership handover (tools/clients/handover_uc_ownership.py) therefore leaves
+those datasets with their current owner, the legacy identity the pipeline
+runs as until the release, and its ``--plan`` writes one pair per dataset,
+``(full_name, owner, expires_at)``, to the private ``--report-out`` report,
+also as the single-line value
 (``canonical_pairs``). The reviewed pairs are per-client configuration,
 ``MIP_UC_INTERIM_OWNER_PAIRS_JSON`` (identifying: a GitHub Environment secret
 or ``.env.local``, never the tree); the client profile parses the field
@@ -20,8 +24,14 @@ A pair is an exception for exactly one object and one owner:
   (``prestop_owner_equivalent`` does not read pairs);
 * ``expires_at`` lies at most 14 days ahead whenever the pairs are read, so a
   pair cannot outlive the cutover by being re-read; and
-* an expired pair refuses its object (``expired``): the handover's journaled
-  re-own, or the pipeline update after release, must have moved it by then.
+* an expired pair refuses its object (``expired``). A pair is meant to cover
+  the UC handover (cutover step 7) until the release's bundle apply moves the
+  pipeline's run_as to the jobs identity, which re-owns every dataset at once;
+  no journaled re-own exists. From then on the pairs match nothing and the
+  field is unset. The jobs identity's ownership is not an exception to pair
+  but the permanent rule: ``handover_uc_ownership --verify --released``
+  asserts that every pipeline dataset is owned by the jobs identity, which
+  its pipeline runs as live (tools/clients/handover_pipeline_owner.py).
 
 Refusal lines name pair indexes and rules, never a value.
 """
