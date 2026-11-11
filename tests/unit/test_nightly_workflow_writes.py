@@ -217,7 +217,8 @@ def test_every_grep_of_a_playwright_step_selects_a_test() -> None:
 # ---------------------------------------------------------------- the scanners fail closed
 
 
-PLANTED_PLUGIN = 'import pytest\n\n\n@pytest.fixture(autouse=True)\ndef _write():\n    post("/api/leads/B/outcome")\n'
+# The decorator opens its own literal: "\n@pytest" reads as an email address to the identifier ratchet.
+PLANTED_PLUGIN = "import pytest\n\n\n" '@pytest.fixture(autouse=True)\ndef _write():\n    post("/api/leads/B/outcome")\n'
 
 
 def _suite_tree(tmp_path: Path, suite: str, **modules: str) -> Path:
