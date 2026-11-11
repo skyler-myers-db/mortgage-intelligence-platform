@@ -31,6 +31,9 @@ CURRENT_OPERATOR_DOCS = [
     ROOT / "docs" / "implementation-plan.md",
     ROOT / "docs" / "testing.md",
     ROOT / "docs" / "module0-rehearsal-checklist.md",
+    ROOT / "docs" / "clients" / "onboarding.md",
+    ROOT / "docs" / "clients" / "first-client-cutover.md",
+    ROOT / "docs" / "clients" / "review-modes.md",
 ]
 
 CURRENT_DEPLOYMENT_GUIDANCE_SURFACES = [

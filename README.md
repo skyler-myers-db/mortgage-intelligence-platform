@@ -99,15 +99,21 @@ before it mutates workspace resources and fails closed when the pair is absent
 from the reviewed registry.
 
 ```bash
-./scripts/deploy.sh -t client --dry-run   # the governed deploy's plan, no changes
-make deploy-dev                           # prints the CI dispatch command
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true
+./scripts/deploy.sh -t client --phase plan --dry-run   # the same plan locally, no Databricks call
+make deploy-dev                                        # prints the dispatch command; deploys nothing
 ```
 
-The command of record is `./scripts/deploy.sh -t client`, run in CI per client
-environment: profile resolution and live identity checks, build, env-aware
-direct bundle validate/plan/deploy, app snapshot promotion, refresh jobs,
-Genie rebinding, and smoke checks. `make deploy-dev` no longer deploys from a
-workstation; it prints the dispatch command. `make bundle-validate` validates
+The command of record is the governed dispatch of `deploy-dev.yml`: one client
+environment and one phase (`plan`, `release`, `data`, `adopt` or `unadopt`) per
+run, approved in that client's GitHub Environment, plan first. It runs
+`./scripts/deploy.sh -t client --phase <phase>` in CI: profile resolution and
+live identity checks, build, env-aware direct bundle validate/plan/deploy, app
+snapshot promotion, refresh jobs, Genie rebinding, and smoke checks. A live
+phase, `plan` included, is CI-only: outside GitHub Actions `scripts/deploy.sh`
+runs a phase only with `--dry-run`. `make deploy-dev` no longer deploys from a
+workstation; it prints the dispatch command. Onboarding a client, in order, is
+[`docs/clients/onboarding.md`](docs/clients/onboarding.md). `make bundle-validate` validates
 the client target through `tools/databricks/bundle_env.py` against the
 workspace your own CLI auth names, with the filled client profile in
 `.env.local`; it changes no resource, but the CLI creates the root's empty
@@ -123,12 +129,19 @@ proof checks, refreshes, and smoke gates remain one reviewable flow.
   checklist, tenancy posture, first-boot verification, and handover.
 - [`docs/deployment.md`](docs/deployment.md) — local, app, bundle, OTLP, and
   release-checklist details.
+- [`docs/clients/onboarding.md`](docs/clients/onboarding.md) — a new client from
+  profile to working App and per-client nightly, config-only;
+  [`docs/clients/first-client-cutover.md`](docs/clients/first-client-cutover.md)
+  adopts the first client's existing install; and
+  [`docs/clients/review-modes.md`](docs/clients/review-modes.md) says what the
+  single-maintainer approval does and does not prove.
 - [`docs/runbook.md`](docs/runbook.md) — operator diagnostics for cold starts,
   dependency breakers, caches, auth, Lakebase, Genie, and geo/footprint issues.
 - [`docs/disaster-recovery.md`](docs/disaster-recovery.md) — Lakebase PITR,
   gold rebuild, app rollback, Genie re-provisioning, audit archival, RTO/RPO.
 - [`docs/runbook-multi-catalog.md`](docs/runbook-multi-catalog.md) —
-  non-default catalog deployment and `MIP_DEFAULT_CATALOG` workflow.
+  how the code renders a non-default `MIP_DEFAULT_CATALOG` (a rename is refused
+  by the client profile today).
 - [`docs/load-baseline.md`](docs/load-baseline.md) — committed read/write load
   baseline and how to rerun `tools/load_test/`.
 - [`docs/security-and-compliance.md`](docs/security-and-compliance.md) and
