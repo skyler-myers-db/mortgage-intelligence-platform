@@ -79,7 +79,7 @@ collect_quiesce_window_binding_payload() {
 plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
-  local probe_dir role_rc=0 verifier_rc=0 jobs_reader_rc=0 plan_rc=0 rebase
+  local probe_dir role_rc=0 verifier_rc=0 jobs_reader_rc=0 plan_rc=0 rebase seed_operator_email
   local -a plan_args=(--position "$position") migration_verifier_args=()
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -182,6 +182,12 @@ plan_quiesce_window() {
     # plan exits 2 for a refusing plan and still prints its report. It renders
     # the seed with the operator the migrate job's bundle variable carries
     # (the profile's MIP_SEED_OPERATOR_EMAIL, M1-PR4), so both digest one text.
+    # The profile strips the value and reads .env.local's when the shell's is
+    # blank; nonblank_control_value applies the same rule.
+    if ! seed_operator_email="$(nonblank_control_value MIP_SEED_OPERATOR_EMAIL)"; then
+      echo "${RED}[deploy] MIP_SEED_OPERATOR_EMAIL could not be resolved; nothing was changed.${RST}" >&2
+      exit 2
+    fi
     "$PYTHON" jobs/lakebase_migrate.py --mode plan \
       --app-name "$_GRANTS_APP_NAME" \
       --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
@@ -189,7 +195,7 @@ plan_quiesce_window() {
       --lender-name "$MIP_LENDER_NAME" \
       --lender-nmls-id "$MIP_LENDER_NMLS_ID" \
       --tenant-id "$MIP_TENANT_ID" \
-      --seed-operator-email "$(deployment_control_value MIP_SEED_OPERATOR_EMAIL)" \
+      --seed-operator-email "$seed_operator_email" \
       "${migration_verifier_args[@]}" \
       --jobs-reader-client-id "$CLIENT_JOBS_PRINCIPAL" > "$probe_dir/migration.json" || true
     plan_args+=(--migration-plan "$probe_dir/migration.json")

@@ -3875,8 +3875,9 @@ Three values that were committed defaults are now inputs:
   `seed_operator_email` bundle variable carries; `bundle_env.py -t client`
   sets that variable from the profile's demo-only `MIP_SEED_OPERATOR_EMAIL`
   and never from an ambient export, and the deploy's migration plan passes
-  the same value (`deployment_control_value MIP_SEED_OPERATOR_EMAIL`), so
-  plan and apply digest one text. Unset, the seed names the synthetic
+  the same value (`nonblank_control_value MIP_SEED_OPERATOR_EMAIL`: a shell
+  value `str.strip()` empties is unset and `.env.local`'s is read, as the
+  profile reads it), so plan and apply digest one text. Unset, the seed names the synthetic
   `operator@summit.example`. An install that seeded an operator before keeps
   its seed, and its schema-input digest, byte for byte by setting the
   address it seeded. A customer profile refuses the field.

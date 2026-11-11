@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -136,12 +137,77 @@ def test_the_bundle_passes_the_variable_to_the_migrate_job() -> None:
     assert bundle["variables"]["seed_operator_email"]["default"] == ""
 
 
-def test_the_deploys_migration_plan_renders_the_same_operator() -> None:
-    lifecycle = (ROOT / "scripts" / "lib" / "deploy_quiesce_window_lifecycle.sh").read_text(encoding="utf-8")
-    plan = lifecycle[lifecycle.index('"$PYTHON" jobs/lakebase_migrate.py --mode plan') :]
+_LIB = ROOT / "scripts" / "lib"
+_LIFECYCLE = (_LIB / "deploy_quiesce_window_lifecycle.sh").read_text(encoding="utf-8")
+_PLAN_OPERATOR_START = '    if ! seed_operator_email="$('
+# _client_validate patches subprocess.run itself (bundle_env.subprocess is the module).
+_RUN = subprocess.run
+
+
+def test_the_deploys_migration_plan_passes_the_operator_it_resolved() -> None:
+    plan = _LIFECYCLE[_LIFECYCLE.index('"$PYTHON" jobs/lakebase_migrate.py --mode plan') :]
     plan = plan[: plan.index("\n    plan_args+=")]
 
-    assert '--seed-operator-email "$(deployment_control_value MIP_SEED_OPERATOR_EMAIL)"' in plan
+    assert '--seed-operator-email "$seed_operator_email"' in plan
+    assert _LIFECYCLE.index(_PLAN_OPERATOR_START) < _LIFECYCLE.index('"$PYTHON" jobs/lakebase_migrate.py --mode plan')
+
+
+def _plan_operator(cwd: Path) -> str:
+    """The operator the deploy's migration plan resolves in ``cwd``, run as the lifecycle runs it.
+
+    The identity library is sourced as deploy.sh sources it, so the shell's
+    value and ``.env.local`` in ``cwd`` are read by the deploy's own helpers.
+    """
+
+    start = _LIFECYCLE.index(_PLAN_OPERATOR_START)
+    block = _LIFECYCLE[start : _LIFECYCLE.index("\n    fi\n", start) + len("\n    fi\n")]
+    harness = (
+        "set -euo pipefail\nRED=''; RST=''\n"
+        f'. "{_LIB / "deploy_identity_lifecycle.sh"}"\n'
+        f'resolve() {{\n  local seed_operator_email\n{block}  printf "op=%s\\n" "$seed_operator_email"\n}}\nresolve\n'
+    )
+    completed = _RUN(
+        ["bash", "-c", harness],
+        cwd=cwd,
+        env={**os.environ, "PYTHON": sys.executable, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.splitlines()[-1].removeprefix("op=")
+
+
+@pytest.mark.parametrize(
+    ("shell", "expected"),
+    [
+        (None, OPERATOR),
+        ("", OPERATOR),
+        ("   ", OPERATOR),
+        ("\t", OPERATOR),
+        ("\u00a0\u3000", OPERATOR),
+        ("  shell.operator@summit.example ", "shell.operator@summit.example"),
+    ],
+    ids=["unset", "empty", "spaces", "tab", "unicode_space", "shell_wins"],
+)
+def test_the_deploys_migration_plan_renders_the_seed_the_bundle_binds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, shell: str | None, expected: str
+) -> None:
+    # Review of M1-PR4: the profile strips the shell value and reads
+    # .env.local's when it is blank (tools/clients/environment.from_local);
+    # the plan once passed a whitespace-only shell value on, so it rendered the
+    # synthetic operator while apply rendered the profile's.
+    if shell is not None:
+        monkeypatch.setenv(SEED_OPERATOR_EMAIL_ENV, shell)
+    profile = {**paychex_shaped_profile(), SEED_OPERATOR_EMAIL_ENV: OPERATOR}
+    bound = _client_validate(monkeypatch, tmp_path, profile)["BUNDLE_VAR_seed_operator_email"]
+    planned = _plan_operator(tmp_path)
+
+    assert bound == expected
+    assert render_seed_sql(TEMPLATE, seed_operator_email=planned) == render_seed_sql(
+        TEMPLATE, seed_operator_email=bound
+    )
 
 
 def _client_validate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: dict[str, str]) -> dict[str, str]:
