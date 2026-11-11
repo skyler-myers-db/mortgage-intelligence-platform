@@ -72,12 +72,12 @@ fi
 # that left requirements.txt unchanged, and the App kept its old wheels. It
 # reinstalls only when the bytes of requirements.txt change, never following
 # the -c uv.lock / -r requirements.in includes (confirmed the same day by the
-# first deploy carrying the digest line), so a lock bump needs a restamp (docs/deployment.md, "App Python dependencies: the
-# deps-digest line").
-# tools/requirements_digest.py exits 0 current and 1 stale (it prints the
-# remedy); anything else is a hard error. A dry run reports and continues; a
-# real run refuses with exit 2 before any workspace call. Isolated
-# shell-contract copies carry no tool: a dry run skips, a real run refuses.
+# first deploy carrying the digest line), so a lock bump needs a restamp
+# (docs/deployment.md, "App Python dependencies: the deps-digest line").
+# tools/requirements_digest.py exits 0 current and 1 stale (it prints the remedy);
+# anything else is a hard error. A dry run reports and continues; a real run refuses
+# with exit 2 before any workspace call. A shell-contract copy without the tool: a dry
+# run skips, a real run refuses.
 REQUIREMENTS_DIGEST_STATE="skipped"
 if [[ -f tools/requirements_digest.py ]]; then
   _requirements_digest_rc=0
@@ -150,20 +150,12 @@ fi
 # Early SQL runs on the warehouse this deployer's bundle state binds
 # (resources.sql_warehouses.mip_serverless_sql, tools/databricks/bundle_state.py;
 # M1-PR3); an operator DATABRICKS_WAREHOUSE_ID naming another refuses. A first
-# install's state binds none until the step-4 apply: the operator's value is
-# the bootstrap warehouse until then, and the deploy switches to the bundle's
-# right after. With neither, it refuses. A dry run reads no state.
-# The adopt phases run no SQL (B1): every step they run, from here to their
-# exit before step 0a, reads no warehouse (scripts/lib/
-# deploy_adopt_phase_lifecycle.sh; tests/unit/test_adopt_phases_read_no_warehouse.py).
-# They read no bundle state here and leave DATABRICKS_WAREHOUSE_ID unset, so no
-# child sees an ambient value; a step that ever needed one would meet step 0a's
-# empty-warehouse refusal or its tool's own. Every other phase is unchanged.
+# install's state binds none until the step-4 apply, so the operator's value bootstraps; neither refuses; a dry run reads none.
+# The adopt phases run no SQL (B1, test_adopt_phases_read_no_warehouse.py): no state read, id unset.
 _OPERATOR_WAREHOUSE_ID="$(deployment_control_value DATABRICKS_WAREHOUSE_ID)"
 BUNDLE_STATE_WAREHOUSE_ID=""
 if [[ "${DEPLOY_PHASE:-}" == "adopt" || "${DEPLOY_PHASE:-}" == "unadopt" ]]; then
-  _GRANTS_WAREHOUSE_ID=""
-  WAREHOUSE_SOURCE="none (--phase ${DEPLOY_PHASE} runs no SQL)"
+  _GRANTS_WAREHOUSE_ID="" WAREHOUSE_SOURCE="none (--phase ${DEPLOY_PHASE} runs no SQL)"
   unset DATABRICKS_WAREHOUSE_ID
 else
   if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -259,19 +251,15 @@ fi
 
 # >>> scheduled-refresh (data-freshness design 2026-10-26)
 # mip_scheduled_refresh's pause status is decided here, never in a bundle
-# target: the variable defaults to PAUSED. The client profile's own
-# MIP_SCHEDULED_REFRESH decides it (tools/clients/policy.py, M1-PR3), for any
-# install class: on unpauses the schedule and mails its failures to the
-# profile's MIP_SCHEDULED_REFRESH_RECIPIENTS (email addresses; the profile
-# refuses `on` without them and refuses an application id among them, so a
-# service-principal deployer never swallows the alert); off keeps it PAUSED
-# and mails nobody. bundle_env writes those recipients into the bundle's
-# variable-overrides.json and the step-9c postflight proves the live job
-# carries exactly them. A shell export of MIP_SCHEDULED_REFRESH reaches the
-# profile like any field (shell before .env.local). Pure, so it also runs in
-# DRY_RUN. A Jobs-UI unpause is reverted by the next deploy, and any apply
-# outside this script re-pauses the live schedule; this switch is the durable
-# one (docs/runbook.md "Weekly scheduled refresh").
+# target (default PAUSED): the profile's MIP_SCHEDULED_REFRESH (policy.py,
+# M1-PR3), any install class. on unpauses it and mails failures to
+# MIP_SCHEDULED_REFRESH_RECIPIENTS (emails; the profile refuses `on` without
+# them or with an application id, so an SP deployer never swallows the alert);
+# off keeps it PAUSED and mails nobody. bundle_env writes the recipients into
+# variable-overrides.json; the step-9c postflight proves the live job carries
+# exactly them. A shell export reaches the profile like any field. Pure, so it
+# runs in DRY_RUN. A Jobs-UI unpause or any outside apply is reverted; this
+# switch is the durable one (docs/runbook.md "Weekly scheduled refresh").
 case "$CLIENT_SCHEDULED_REFRESH" in
   on) BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED ;;
   off) BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED ;;
