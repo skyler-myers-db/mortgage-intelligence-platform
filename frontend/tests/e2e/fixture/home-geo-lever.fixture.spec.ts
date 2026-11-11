@@ -162,6 +162,12 @@ test.describe("the briefing's age", () => {
     await page.clock.runFor(1_500);
     await expect.poll(() => page.evaluate((key) => window.sessionStorage.getItem(key) !== null, QUERY_CACHE_KEY)).toBe(true);
     await page.clock.fastForward('03:00:00');
+    // Freeze Date on a minute boundary (timers keep running; the reload replays
+    // it), as the harness's own fixtureNow does. install() made the clock flow,
+    // so the fresh read was stamped 15:00:00 + the run's real seconds, while
+    // FetchedAt reads it against a minute-floored clock: a stamp 45 s or more
+    // past that minute read "Fetched in 1m", not "Fetched now".
+    await page.clock.setFixedTime(new Date('2026-07-20T15:00:00Z'));
   }
 
   /** Hold Home's two hero reads at the network until `release()`; the mock API answers them then (degrade rules included). */
