@@ -232,6 +232,29 @@ def test_an_adopted_record_for_another_deployment_refuses_adoption(world: World)
     assert _refusal(world) == "record_present"
 
 
+def test_the_record_present_refusal_names_the_supersede_selector_as_a_digest(world: World) -> None:
+    """B2: the dispatch's supersedes_deployment value, a sha256, never the deployment id."""
+
+    world.apply()
+    world.redeploy("deployment-green")
+    with pytest.raises(AdoptLiveRefused) as refused:
+        adopt_live.compute_plan(world, "adopt", world.target(), world.readers())
+
+    message = str(refused.value)
+    selector = sha256_text("deployment-blue")
+    assert f"operation_acks supersedes_deployment={selector}" in message
+    assert "deployment-blue" not in message and "deployment-green" not in message
+    assert "--supersede" in message, "the local route is still named"
+
+
+def test_a_captured_record_names_no_supersede_selector(world: World) -> None:
+    contract.save_versioned_record(world, scope=rr.SCOPE, record=rr.v6_record())
+    with pytest.raises(AdoptLiveRefused) as refused:
+        adopt_live.compute_plan(world, "adopt", world.target(), world.readers())
+
+    assert "supersedes_deployment" not in str(refused.value), "only an adopted record is superseded"
+
+
 def test_a_re_run_on_the_same_deployment_is_idempotent(world: World) -> None:
     first = world.apply()
     puts = len(world.secrets.puts)

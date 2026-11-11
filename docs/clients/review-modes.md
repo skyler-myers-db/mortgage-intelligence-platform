@@ -51,9 +51,12 @@ review.
   exact sha256 ack over a purpose-named body that a read-only plan printed
   (`tools/clients/dispatch_acks.py`, `tools/databricks/operation_ack.py`):
   the `profile` ack (`owner_attestation`) on every mutating phase, and the
-  operation acks a tool printed (`adopt_plan`, `quiesce_window`,
-  `database_instance_update`, `genie_pin`, `accepted_exposure_plan`,
-  `data_ledger_supersede`, `data_ledger_rerun`). The run recomputes each body
+  operation acks a tool printed (`adopt_plan`, `adopt_live`, `supersede`,
+  `unadopt`, `quiesce_window`, `database_instance_update`, `genie_pin`,
+  `accepted_exposure_plan`, `data_ledger_supersede`, `data_ledger_rerun`,
+  and the selector `supersedes_deployment`, a digest of the superseded
+  record's deployment id and never a switch), each admitted only in the
+  phases that read it. The run recomputes each body
   right before it relies on it and refuses on any difference. An ack for one
   purpose never satisfies another. An ack binds the reviewed bytes; it does
   not prove that anyone other than the dispatcher reviewed them.

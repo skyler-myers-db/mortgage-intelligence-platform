@@ -25,6 +25,23 @@ The operation acks keep their own purposes and their own tools: the dispatch
 input ``operation_acks`` carries ``purpose=<sha256>`` pairs from the closed
 map ``OPERATION_ACKS``, each admitted only in the phases whose run reads it,
 and the deploy job exports each under the name its tool recomputes it from.
+The input is the only carrier: ``deploy-dev.yml``'s input set is pinned at
+ten (tests/unit/test_deploy_dev_workflow_contract.py), and no ack is ever a
+profile field.
+
+Each entry has a kind. An ``ack`` is a purpose digest its tool recomputes
+from a canonical body and compares exactly. The one ``selector``,
+``supersedes_deployment`` (``MIP_ADOPT_LIVE_SUPERSEDE``), is no ack: it is the
+sha256 of the adopted record's deployment id, which picks adopt-live's
+supersede mode and which the ``supersede`` ack's plan commits to. It is a
+digest, never a switch: ``yes``, ``true`` or ``1`` fail the entry shape.
+
+The carrier checks each entry alone and pairs none. A pair the adopt phases
+need is refused one layer later, still before the lease and with nothing
+changed: the bind's ``adopt_plan`` without adopt-live's own ack
+(scripts/lib/deploy_adopt_phase_lifecycle.sh, ``run_adopt_live_plan``), and a
+selector that names no adopted record (adopt-live's ``supersede_mismatch``).
+An exported ack its run does not read is never a mutation's authority.
 """
 
 from __future__ import annotations
@@ -46,20 +63,39 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 _PAIR = re.compile(r"([a-z_]+)=([0-9a-f]{64})")
 
 
+KINDS = frozenset({"ack", "selector"})
+
+
 @dataclass(frozen=True)
 class OperationAck:
-    """One existing purpose ack: the env name its tool reads and the phases that read it."""
+    """One reviewed purpose: the env name its tool reads, the phases that read it, and its kind."""
 
     env: str
     phases: frozenset[str]
+    kind: str = "ack"
+
+    def __post_init__(self) -> None:
+        if self.kind not in KINDS or not self.phases <= PHASES:
+            raise ValueError("an operation ack has an unreviewed kind or phase")
 
 
+# Every phase listed reads the env in its own deploy.sh path (the readers are
+# pinned in tests/unit/test_dispatch_preflight.py). genie_pin is never read by
+# data, which never pins: an ack there could only hide a lost pin.
 OPERATION_ACKS: dict[str, OperationAck] = {
     "adopt_plan": OperationAck("MIP_ADOPT_PLAN_ACK", frozenset({"adopt", "unadopt"})),
-    "quiesce_window": OperationAck("MIP_ACK_QUIESCE_WINDOW", frozenset({"release"})),
+    "adopt_live": OperationAck("MIP_ACK_ADOPT_LIVE", frozenset({"adopt"})),
+    "supersede": OperationAck("MIP_ACK_SUPERSEDE", frozenset({"adopt"})),
+    "supersedes_deployment": OperationAck("MIP_ADOPT_LIVE_SUPERSEDE", frozenset({"adopt"}), kind="selector"),
+    "unadopt": OperationAck("MIP_ACK_UNADOPT", frozenset({"unadopt"})),
+    # A plan reads it at its pre-lease window plan (read-only), so the plan
+    # that predicted a window can complete; a release still needs it exact.
+    "quiesce_window": OperationAck("MIP_ACK_QUIESCE_WINDOW", frozenset({"plan", "release"})),
     "database_instance_update": OperationAck("MIP_ACK_DATABASE_INSTANCE_UPDATE", frozenset({"plan", "release"})),
-    "genie_pin": OperationAck("MIP_GENIE_PIN_ACK", frozenset({"release"})),
-    "accepted_exposure_plan": OperationAck("MIP_ACK_ACCEPTED_EXPOSURE_PLAN", frozenset({"plan", "release"})),
+    "genie_pin": OperationAck("MIP_GENIE_PIN_ACK", frozenset({"plan", "release", "adopt", "unadopt"})),
+    "accepted_exposure_plan": OperationAck(
+        "MIP_ACK_ACCEPTED_EXPOSURE_PLAN", frozenset({"plan", "release", "adopt", "unadopt"})
+    ),
     "data_ledger_supersede": OperationAck("MIP_ACK_DATA_LEDGER_SUPERSEDE", frozenset({"data"})),
     "data_ledger_rerun": OperationAck("MIP_ACK_DATA_LEDGER_RERUN", frozenset({"data"})),
 }

@@ -69,6 +69,7 @@ GET or a list.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -316,6 +317,14 @@ def _core_signed_verdict(
         return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_DRIFT, str(exc)),), ())
     payload = record.get("restore_payload") is not None
     if not in_place and not stranded and not payload:
+        # The supersede's selector, a digest and never the id (operation_acks, B2).
+        selector = (
+            "; through deploy-dev.yml: operation_acks supersedes_deployment="
+            f"{hashlib.sha256(str(record['deployment_id']).encode('utf-8')).hexdigest()} "
+            "with the supersede ack its read-only plan prints"
+            if record.get("provenance") == "adopted"
+            else ""
+        )
         return RollbackRecordVerdict(
             (
                 PrestopRefusal(
@@ -325,7 +334,7 @@ def _core_signed_verdict(
                     "refuse it (no_restore_payload) under the lease after quiescing its "
                     "treatment; restore blue's deployment with the owner break-glass, or "
                     "re-sign the adopted record onto the live deployment (--phase adopt with "
-                    "MIP_ADOPT_LIVE_SUPERSEDE), then re-run",
+                    f"MIP_ADOPT_LIVE_SUPERSEDE{selector}), then re-run",
                 ),
             ),
             (),

@@ -706,10 +706,14 @@ databricks apps start <app-name> -p <owner-profile>
   start makes a new deployment, which is still not the record's, so it
   restores service, never the record. The record's governed exit is an
   adopt-live supersede onto the live deployment (`--phase adopt` with
-  `MIP_ADOPT_LIVE_SUPERSEDE` and its `MIP_ACK_SUPERSEDE` ack), and on `main` no
-  `deploy-dev.yml` input carries either
+  `MIP_ADOPT_LIVE_SUPERSEDE` and its `MIP_ACK_SUPERSEDE` ack). Through
+  `deploy-dev.yml` both ride `operation_acks`: the selector
+  `supersedes_deployment=<sha256>` (the drift remedy prints it, a digest of the
+  record's deployment id) and `supersede=<sha256>` beside the bind's
+  `adopt_plan=<sha256>`, after a read-only dispatch with the selector alone
+  printed both digests
   ([docs/clients/first-client-cutover.md](clients/first-client-cutover.md),
-  blocker B2).
+  10B, "Supersede").
 
 ## App Python dependencies: the deps-digest line
 
@@ -2981,7 +2985,11 @@ only for a **window reason** the read-only plan predicted
 
 The plan runs after each bundle plan gate: before the lease (`pre-lease`, so
 `--phase plan` prints it) and again under the lease right before the non-App
-apply (`pre-apply`, the time-of-check recheck). Its private report is written
+apply (`pre-apply`, the time-of-check recheck). A plan dispatch may carry the
+window's ack (`operation_acks` `quiesce_window=<sha256>`, read only by that
+read-only pre-lease plan): the first plan refuses `window_unacked` and prints
+the window's sha256, and the plan re-run with it completes, so it reaches the
+active deployment's digest and the PlanReport. Its private report is written
 mode 0600 and its public line carries codes, booleans, counts and digests
 only. A window opens only when `MIP_ACK_QUIESCE_WINDOW` equals the plan's
 sha256 at both positions; that sha256 covers the reasons, blue's deployment,
@@ -3187,7 +3195,13 @@ sum are in the window's canonical body, so `MIP_ACK_QUIESCE_WINDOW` covers
 them; a plan with no reason has no budget, and its body and digest are M0-PR8's.
 The admission itself depends on the clock and is never in the digest: the plan
 prints it (`admission <state>: <n> s left, <m> s required`) before the lease
-and again under it, refusing `window_budget_refused`, and `quiesce_window open`
+and again under it, refusing `window_budget_refused`. `--phase plan` forecasts
+it instead (`--admission-forecast release`, pre-lease only): judged against a
+release dispatched now, `quiesce_window_budget.RELEASE_JOB_SECONDS` (the
+release job's 330 minutes), since the plan job's own 30 minutes admit no window
+(each needs about an hour) and a plan opens none (`open` takes a pre-apply
+plan only); the line reads `admission (forecast for a release dispatched now)
+<state>`, and the release decides it again against its own deadline. `quiesce_window open`
 decides it again before its dead-man submit and once more after the arm,
 right before the journal write and the stop. A missing,
 unparseable, past or more than six hours away deadline refuses (fail closed). A
@@ -3518,6 +3532,13 @@ run time; they are never committed. The profile then requires
 `MIP_DASHBOARD_PARENT_PATH` inside the legacy root (see the dashboards below).
 
 **The run.** Both phases run the same read-only steps as `--phase plan`, with
+the step-0 Genie pin check (no phase guard) and the pre-stop probes in their
+adopt mode, so an adopt or unadopt dispatch carries the `genie_pin` and
+`accepted_exposure_plan` acks those read (`operation_acks`, the dispatch
+preflight above). Until a signed record names the governed Genie space, the
+adopt phases' bundle plan, binds and summary still refuse an unpinned space
+(`no pin names the governed Genie space yet`, bundle_env), whatever
+`genie_pin` says: the cutover runbook's B4(c), a follow-up. They run with
 the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
 or `--phase unadopt` accepts an App the deployer's state does not bind, and its
 unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound
@@ -3712,7 +3733,15 @@ adopt.
 `single_maintainer_audited`), so each mode prints the sha256 of its plan's
 purpose-named canonical body (`tools/databricks/operation_ack.py`):
 `MIP_ACK_ADOPT_LIVE`, `MIP_ACK_SUPERSEDE` or `MIP_ACK_UNADOPT`, a one-run shell
-export and never a `.env.local` line. The bind's `MIP_ADOPT_PLAN_ACK` without
+export and never a `.env.local` line. Through `deploy-dev.yml` each is an
+`operation_acks` pair: `adopt_live=<sha256>` (phase adopt),
+`supersede=<sha256>` with the selector `supersedes_deployment=<sha256 of the
+adopted record's deployment id>` (phase adopt; the selector alone runs the
+read-only supersede plan, which prints the supersede ack), and
+`unadopt=<sha256>` (phase unadopt), beside the bind's `adopt_plan=<sha256>`.
+`record_present` over this install's own adopted record of another
+deployment, and the pre-stop probe's `rollback_record_drift` remedy, print the
+selector's value (a digest, never the id). The bind's `MIP_ADOPT_PLAN_ACK` without
 it refuses before the lease. The body names its purpose, so an ack for one
 purpose never satisfies another, and whenever the slot holds a record the plan
 names that exact signed version's sha256 (`record_sha256`), so an ack covers
@@ -5301,10 +5330,24 @@ satisfies another:
 - `owner_attestation` must be the exact `profile` ack (purpose, client and
   profile digest) for every mutating phase; a plan prints it;
 - `operation_acks` carries `purpose=<sha256>` pairs from a closed map
-  (`adopt_plan`, `quiesce_window`, `database_instance_update`, `genie_pin`,
-  `accepted_exposure_plan`, `data_ledger_supersede`, `data_ledger_rerun`),
-  each admitted only in the phases whose run reads it and exported for this
-  job under the name its own tool recomputes it from;
+  (`tools/clients/dispatch_acks.OPERATION_ACKS`), each admitted only in the
+  phases whose run reads it and exported for this job under the name its own
+  tool recomputes it from: `adopt_plan` (adopt, unadopt), `adopt_live` and
+  `supersede` (adopt), `unadopt` (unadopt), `quiesce_window` (plan, release;
+  a plan reads it at its pre-lease window plan), `database_instance_update`
+  (plan, release), `genie_pin` and `accepted_exposure_plan` (plan, release,
+  adopt, unadopt; never data, which never pins and skips the probes),
+  `data_ledger_supersede` and `data_ledger_rerun` (data), and the one
+  selector, `supersedes_deployment` (adopt): the sha256 of the adopted
+  record's deployment id that picks adopt-live's supersede mode, exported as
+  `MIP_ADOPT_LIVE_SUPERSEDE`. A selector is a digest, never a switch (`yes`,
+  `true` or `1` fail the entry shape). Every value is 64 lowercase hex, each
+  purpose at most once, and a refusal names purposes and phases, never a
+  value. The carrier pairs no entries: half an adoption (the bind's
+  `adopt_plan` without adopt-live's own ack, which the read-only adopt run
+  printed beside it) refuses one layer later, in `run_adopt_live_plan`,
+  still before the lease, and a selector that names no adopted record
+  refuses in adopt-live (`supersede_mismatch`);
 - the environment's protection rules are read with the job's token and must
   be the review mode's (the maintainer as the one required reviewer,
   `can_admins_bypass=false`, a branch policy of exactly `{main}`). Spike S8 is

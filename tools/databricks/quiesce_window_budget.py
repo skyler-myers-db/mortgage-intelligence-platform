@@ -54,6 +54,12 @@ DEADMAN_GUARD_S = STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"] + DEADMAN_GUAR
 # The GitHub-hosted job cap: a deadline further out is a mistake, and a
 # dead-man that long would outlive the lease (four hours) by hours.
 MAX_HORIZON_S = 6 * 60 * 60
+# deploy-dev.yml's release job budget (its timeout-minutes, pinned with the
+# workflow's table in tests/unit/test_plan_phase_window_ack.py). --phase plan
+# forecasts a window's admission for a release dispatched now against it: the
+# plan job's own 30 minutes admit no window (each needs about an hour), and it
+# opens none; the release decides again against its own deadline.
+RELEASE_JOB_SECONDS = 330 * 60
 ADMISSION_STATES = frozenset(
     {
         "not_required",

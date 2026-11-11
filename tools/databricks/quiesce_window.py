@@ -75,6 +75,7 @@ from tools.databricks.app_start_deployment import (
 )
 from tools.databricks.quiesce_window_budget import (
     DEADMAN_GUARD_S,
+    RELEASE_JOB_SECONDS,
     admission,
     parse_deadline,
     require_admitted,
@@ -550,6 +551,8 @@ def _parser() -> argparse.ArgumentParser:
     # The job's deadline (MIP_JOB_DEADLINE_EPOCH, M0-PR9); empty refuses a window.
     for mode in (plan, sub.choices["open"], sub.choices["start"]):
         mode.add_argument("--deadline-epoch", default="")
+    # --phase plan's pre-lease plan only: the admission a release dispatched now gets.
+    plan.add_argument("--admission-forecast", choices=("release",), default="")
     # open publishes this run's staged release for the dead-man (M0-PR9).
     opener = sub.choices["open"]
     for flag in (
@@ -590,10 +593,16 @@ def _print_plan(summary: dict[str, Any], *, refused: bool) -> None:
     )
     admitted = summary["admission"]
     if admitted.get("state") not in {"not_evaluated", "not_required"}:
+        forecast = " (forecast for a release dispatched now)" if admitted.get("forecast") else ""
         print(
-            f"{_PREFIX} admission {admitted['state']}: {admitted['remaining_seconds']} s left, "
+            f"{_PREFIX} admission{forecast} {admitted['state']}: {admitted['remaining_seconds']} s left, "
             f"{admitted['required_seconds']} s required (window + restore + margin)"
         )
+        if forecast:
+            print(
+                f"{_PREFIX} this plan opens no window; the release decides the admission again "
+                "against its own deadline, before its lease and under it"
+            )
     if summary["deadman_recovery"]:
         print(
             f"{_PREFIX} an earlier window's dead-man restarted blue: this run re-pins it under "
@@ -689,6 +698,8 @@ def main(
         print(f"{_PREFIX} applicable: App {'present' if app is not None else 'absent'}")
         return 0
     if args.command == "plan":
+        if args.admission_forecast and args.position != "pre-lease":
+            raise SystemExit(f"{_PREFIX} --admission-forecast goes with --position pre-lease only")
         facts = collect_facts(
             workspace,
             app_name=app_name,
@@ -705,12 +716,15 @@ def main(
         result = window_plan(
             facts, position=args.position, acknowledgement=os.environ.get(ACK_ENV, "").strip()
         )
+        # A forecast is the plan phase's: it holds no lease and opens no window
+        # (open takes a pre-apply plan only), and the release re-decides.
+        now = time.time()
+        deadline = int(now) + RELEASE_JOB_SECONDS if args.admission_forecast else args.deadline_epoch
         decided = admission(
-            result.canonical.get("budget") if result.reasons else None,
-            args.deadline_epoch,
-            now=time.time(),
+            result.canonical.get("budget") if result.reasons else None, deadline, now=now
         )
-        result = with_admission(result, decided.public(), admitted=decided.admitted)
+        public = decided.public() | ({"forecast": "release"} if args.admission_forecast else {})
+        result = with_admission(result, public, admitted=decided.admitted)
         _write_private(args.out, result.full())
         _print_plan(result.public_summary(), refused=result.refused)
         return 2 if result.refused else 0

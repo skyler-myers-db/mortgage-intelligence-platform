@@ -22,6 +22,7 @@ last test sweeps every state for that parity.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -302,6 +303,18 @@ def test_another_newer_deployment_without_a_payload_is_refused_before_the_lease(
         _ensure(world)
     assert getattr(refused.value, "code", None) == "no_restore_payload"
     assert world.apps.mutations == []
+
+
+def test_the_drift_remedy_names_the_dispatch_selector_as_a_digest(world: CoreWorld) -> None:
+    """B2: through deploy-dev.yml the supersede is operation_acks supersedes_deployment=<sha256>."""
+
+    world.activate_green()
+    world.compute = "STOPPED"
+
+    message = _verdict(world).refusals[0].message
+    selector = hashlib.sha256(world.record()["deployment_id"].encode("utf-8")).hexdigest()
+    assert f"operation_acks supersedes_deployment={selector}" in message
+    assert world.record()["deployment_id"] not in message, "a digest, never the id"
 
 
 def test_another_newer_deployment_with_a_payload_is_still_tier_bs_note(world: CoreWorld) -> None:
