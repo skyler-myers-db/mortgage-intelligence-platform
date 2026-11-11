@@ -6,11 +6,13 @@ with no restart, and that only the migration job's revoke takes it back. So
 the step files record the send (``APP_ROLE_REGRANT_OWED``) and the migration
 block runs that job inside the same window, after the binding update, even
 when the migration plan has nothing to change; a skip with a send recorded
-refuses. Resources are sent only in a WR1 window (or an ungoverned run): a
-run with no WR1, a window opened for WR4 included, proves the bindings equal
-and applies a description-only difference online, with no send and so no
-re-grant. The harness is ``tests/unit/test_quiesce_window_shell.py``'s: the
-real libraries and step lines, a fake ``$PYTHON`` that records each call.
+refuses. The binding step sends resources only in a WR1 window (or an
+ungoverned run): a run with no WR1, a window opened for WR4 included, proves
+the bindings equal, with no send and so no re-grant. A description-only
+difference is applied online only while blue serves: every create-update
+the spikes measured ran on a serving App, and a WR4 window has stopped it.
+The harness is ``tests/unit/test_quiesce_window_shell.py``'s: the real
+libraries and step lines, a fake ``$PYTHON`` that records each call.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ def test_the_step_text_records_every_send_and_applies_a_description_only_differe
 
     assert no_window < diff < fixup < otherwise < update < owed < migrate < close
     # The fix-up never sends resources and runs only once the diff proved them equal.
-    fixup_call = text[fixup : text.index("\n    assert_expected_app_identity", fixup)]
+    fixup_call = text[fixup : text.index("\n      assert_expected_app_identity", fixup)]
     assert '--payload "$APP_RESOURCE_BINDING_PAYLOAD"' in fixup_call
     assert '--expected-app-id "$_EXISTING_APP_ID"' in fixup_call
     first_install = at("databricks apps create", text.index('step "create stopped Databricks App'))
@@ -137,20 +139,31 @@ def _binding_step(
 
 
 @pytest.mark.parametrize(
-    ("state", "reasons"),
-    (("blue_serving", "-"), ("window_open", "WR4"), ("window_open", "WR2,WR4"), ("blue_degraded", "-")),
+    ("state", "reasons", "fixups"),
+    (
+        ("blue_serving", "-", 1),
+        ("window_open", "WR4", 0),
+        ("window_open", "WR2,WR4", 0),
+        ("blue_degraded", "-", 1),
+    ),
     ids=("no-window", "wr4-window", "wr2-wr4-window", "blue-degraded"),
 )
 def test_a_run_with_no_wr1_never_sends_resources_and_owes_no_revoke(
-    tmp_path: Path, state: str, reasons: str
+    tmp_path: Path, state: str, reasons: str, fixups: int
 ) -> None:
-    """Review of #337: a WR4 window used to send an equal set and re-grant CREATE ON DATABASE."""
+    """Review of #337: a WR4 window used to send an equal set and re-grant CREATE ON DATABASE.
+
+    Round 2: the description fix-up runs only while blue serves. A WR4 window
+    has stopped the App, and no spike measured a create-update on a stopped one.
+    """
 
     result, calls = _binding_step(tmp_path, state, reasons)
 
     assert result.returncode == 0, result.stderr
     assert not _has(calls, "apps update") and not _has(calls, "app_resource_bindings verify")
-    assert _has(calls, "app_resource_bindings diff") == 1 and _has(calls, "app_description_fixup") == 1
+    assert _has(calls, "app_resource_bindings diff") == 1
+    assert _has(calls, "app_description_fixup") == fixups
+    assert ("leave the App description to a later release" in result.stdout) is (fixups == 0)
     assert "owed=0" in result.stdout
 
 

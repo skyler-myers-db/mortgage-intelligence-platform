@@ -116,6 +116,41 @@ def test_a_description_only_difference_opens_no_window_and_keeps_the_digest() ->
     assert "app_role_regrant" not in equal.canonical, "a plan with no reason keeps M0-PR8's body"
 
 
+@pytest.mark.parametrize(
+    "facts",
+    (
+        replace(WR1, description_state="differs"),
+        replace(BLUE, description_state="differs", instance_update_sha256="c" * 64),
+    ),
+    ids=("wr1-update-carries-it", "wr4-window-stopped-the-app"),
+)
+def test_a_window_open_at_the_binding_step_names_no_online_fix_up(facts: WindowFacts) -> None:
+    """Round 2 of #337: the plan names only what the binding step applies online, blue serving.
+
+    A WR1 window's binding update carries the bundle's description. A WR4
+    window opens before the non-App apply and has stopped the App, where no
+    spike measured a create-update, so the step leaves the description.
+    """
+
+    plan = _acked(facts)
+
+    assert plan.code == "window" and set(plan.reasons) & {"WR1", "WR4"}
+    assert plan.public_summary()["online_fixups"] == []
+    equal = _acked(replace(facts, description_state="equal"))
+    assert equal.sha256 == plan.sha256, "the fix-up is never part of the window's digest"
+
+
+def test_a_wr2_or_wr3_window_still_names_the_online_fix_up_it_opens_after() -> None:
+    """WR2 and WR3 open after the binding step: blue still serves when the fix-up runs."""
+
+    wr2 = replace(BLUE, description_state="differs", role_state="drift")
+
+    plan = _acked(wr2)
+
+    assert (plan.code, plan.reasons) == ("window", ("WR2",))
+    assert plan.public_summary()["online_fixups"] == ["description"]
+
+
 def test_an_unreviewed_description_state_never_reaches_a_public_summary() -> None:
     plan = window_plan(replace(BLUE, description_state="edited"), position="pre-apply", acknowledgement="")
 

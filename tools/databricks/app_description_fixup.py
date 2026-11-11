@@ -26,6 +26,11 @@ afterwards that the identity, the resource bindings, the active and pending
 deployments and the compute state are unchanged and the description is the
 payload's. Exit 0 when applied, equal or left, 2 on a refusal. It prints
 names and states only, never a value.
+
+Every create-update the spikes measured ran on a serving App (compute
+ACTIVE). The binding step therefore runs this only while blue serves; a
+window that already stopped the App (WR4) leaves a differing description to
+a later release.
 """
 
 from __future__ import annotations

@@ -14,7 +14,9 @@ A release keeps blue serving. It stops the App only for a window reason:
   ``binding_send`` in the body, and its budget). A description-only
   difference is no reason: the release applies it online with a
   create-update masked to ``description`` (no restart, no role change; S2,
-  S2b), and the public summary names it as an ``online_fixups`` entry;
+  S2b), and the public summary names it as an ``online_fixups`` entry when
+  no window is open at the binding step (a WR1 update carries it, a WR4
+  window leaves it to a later release);
 * **WR2** Lakebase role rotation: ``converge_lakebase_oauth_role --check``
   drifts for the App, verifier or jobs-reader role, or a ``noop`` migration
   plan reads the jobs reader's grants as drift (M2-PR5; absent included) or
@@ -271,8 +273,8 @@ class WindowPlan:
             "refusals": list(self.refusals),
             "admission": dict(self.admission) or {"state": "not_evaluated"},
             "deadman_recovery": deadman_recovery(self.facts, position=self.position),
-            # Applied online whatever the window (spike S2): never a reason.
-            "online_fixups": online_fixups(self.facts),
+            # What the binding step applies online (spike S2): never a reason.
+            "online_fixups": online_fixups(self.facts, self.reasons),
             "app_role_regrant": list(self.canonical.get("app_role_regrant") or ()),
         }
 
@@ -401,10 +403,23 @@ def with_admission(plan: WindowPlan, admission: Mapping[str, Any], *, admitted: 
     )
 
 
-def online_fixups(facts: WindowFacts) -> list[str]:
-    """What the release applies online, outside any window: a differing description (S2, S2b)."""
+# The reasons whose window is open at the binding step: WR4 opens before the
+# non-App apply, WR1 at the binding step itself (deploy_step_bundle_apply.sh).
+BINDING_STEP_WINDOW_REASONS = frozenset({"WR1", "WR4"})
 
-    return ["description"] if facts.description_state == "differs" else []
+
+def online_fixups(facts: WindowFacts, reasons: tuple[str, ...] = ()) -> list[str]:
+    """What the binding step applies online while blue serves: a differing description (S2, S2b).
+
+    Only with no window open at that step. A WR1 window's binding update
+    carries the bundle's description itself. A WR4 window has already
+    stopped the App, and every create-update the spikes measured ran on a
+    serving App, so the step leaves the description to a later release.
+    """
+
+    if facts.description_state != "differs" or BINDING_STEP_WINDOW_REASONS & set(reasons):
+        return []
+    return ["description"]
 
 
 def deadman_recovery(facts: WindowFacts, *, position: str) -> bool:

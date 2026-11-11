@@ -21,6 +21,12 @@ S2-4 and S2b answers 1, 3b and 4). What they measured:
 * A secret binding to a key the scope does not hold refuses the whole update
   atomically (S2b 3b): nothing changes and nothing is re-granted.
 
+Not measured: a create-update on a STOPPED App. Every create-update the
+spikes recorded ran with compute ACTIVE and the App RUNNING (S2b answer 4
+among them). So the release's description fix-up runs
+only while blue serves (``scripts/lib/deploy_step_bundle_apply.sh``); a WR4
+window that stopped the App leaves it to a later release.
+
 Not measured: what a resources send does with a binding's OWN
 ``description`` when the sent binding omits it (every spike payload carried
 one). The fakes take the worst case: the sent array replaces the live one

@@ -352,10 +352,10 @@ PYEOF
   fi
   if [[ -n "${QUIESCE_WINDOW_STATE:-}" ]] && ! quiesce_window_has_reason WR1; then
     # No WR1 (no window, or a window opened for another reason such as WR4):
-    # resources are sent only for a binding diff (spike S2: every send, an
-    # identical array included, re-grants CREATE ON DATABASE to the App's
-    # Lakebase role). The bindings must already equal the bundle's as a set
-    # (an order-only difference is equal), read again now under the lease
+    # this step sends resources only for a binding diff (spike S2: every
+    # send, an identical array included, re-grants CREATE ON DATABASE to the
+    # App's Lakebase role). The bindings must already equal the bundle's as a
+    # set (an order-only difference is equal), read again now under the lease
     # (time of check, time of use). A diff refuses and sends nothing.
     step "prove the App's resource bindings already equal the bundle (no WR1, no resources send)"
     if ! "$PYTHON" -m tools.databricks.app_resource_bindings diff \
@@ -366,16 +366,24 @@ PYEOF
     fi
     # A description-only difference is the one online fix-up (spikes S2 and
     # S2b): a create-update masked to description restarts nothing, makes no
-    # deployment and leaves the App's role alone, in a window or not.
-    step "apply the bundle's App description online when it differs (description only, no resources)"
-    assert_expected_app_identity "$_GRANTS_APP_NAME"
-    run "$PYTHON" -m tools.databricks.app_description_fixup \
-      --app-name "$_GRANTS_APP_NAME" \
-      --payload "$APP_RESOURCE_BINDING_PAYLOAD" \
-      --expected-app-id "$_EXISTING_APP_ID" \
-      --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID" \
-      --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID"
-    assert_expected_app_identity "$_GRANTS_APP_NAME"
+    # deployment and leaves the App's role alone. Every create-update the
+    # spikes measured ran on a serving App, so it runs only while blue
+    # serves; a window already open here (WR4) has stopped the App, and the
+    # description waits for a later release (the window plan's
+    # online_fixups says the same).
+    if [[ "$QUIESCE_WINDOW_STATE" == "blue_serving" || "$QUIESCE_WINDOW_STATE" == "blue_degraded" ]]; then
+      step "apply the bundle's App description online when it differs (description only, no resources)"
+      assert_expected_app_identity "$_GRANTS_APP_NAME"
+      run "$PYTHON" -m tools.databricks.app_description_fixup \
+        --app-name "$_GRANTS_APP_NAME" \
+        --payload "$APP_RESOURCE_BINDING_PAYLOAD" \
+        --expected-app-id "$_EXISTING_APP_ID" \
+        --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID" \
+        --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID"
+      assert_expected_app_identity "$_GRANTS_APP_NAME"
+    else
+      step "leave the App description to a later release: the App is stopped in a window for ${QUIESCE_WINDOW_REASONS:-}"
+    fi
   else
     assert_expected_app_identity "$_GRANTS_APP_NAME"
     run databricks apps update "$_GRANTS_APP_NAME" \
