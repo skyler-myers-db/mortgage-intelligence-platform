@@ -88,7 +88,7 @@ def _runs(job: dict[str, Any]) -> list[str]:
     return [str(step.get("run", "")) for step in job["steps"]]
 
 
-def _triggers(workflow: dict[str, Any]) -> Any:
+def _triggers(workflow: dict[Any, Any]) -> Any:
     # PyYAML reads the bare key ``on`` as the boolean True.
     return workflow.get("on", workflow.get(True))
 
