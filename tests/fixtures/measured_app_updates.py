@@ -21,6 +21,14 @@ S2-4 and S2b answers 1, 3b and 4). What they measured:
 * A secret binding to a key the scope does not hold refuses the whole update
   atomically (S2b 3b): nothing changes and nothing is re-granted.
 
+Not measured: what a resources send does with a binding's OWN
+``description`` when the sent binding omits it (every spike payload carried
+one). The fakes take the worst case: the sent array replaces the live one
+whole, so an omitted per-binding description is gone. No caller may rely on
+the API keeping it by name; the restore re-sends each live one
+(``app_rollback_resource_contract``), and the binding diff treats it as
+display text (``app_resource_bindings.BINDING_DISPLAY_FIELDS``).
+
 ``tests/unit/test_fake_app_updates_measured.py`` drives every fake through
 these and fails when one answers the way a caller hoped instead.
 """
@@ -143,6 +151,8 @@ def apply_create_update(
     body = _as_dict(app) if app is not None else {}
     applied: dict[str, Any] = {}
     if "resources" in fields:
+        # Whole replacement: an omitted per-binding description is gone (the
+        # unmeasured worst case, module docstring).
         resources = copy.deepcopy(body.get("resources") or [])
         _check_secret_keys(resources, secret_keys)
         target.resources = resources

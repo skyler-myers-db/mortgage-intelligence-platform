@@ -1,19 +1,27 @@
 """Cutover run 1 on client #1, as spike S2 read the live App: no WR1 window (S2 re-run).
 
-Spike S2 (2026-11-10, read-only ``apps get``) found run 1's binding diff on
-origin/main non-empty, for three reasons: the live description is empty
+Spike S2 (read-only ``apps get`` of the live App) found run 1's binding diff
+on origin/main non-empty, for three reasons: the live description is empty
 against the bundle's, the live App has 11 bindings against the bundle's 14
 (the three optional Salesforce secret bindings missing live), and
 ``growth_agent_scheduler_job`` sits in another position. Each was a WR1
 window, and every binding send re-grants CREATE ON DATABASE to the App role.
+The same read shows a fourth difference the S2 summary did not print: the
+three secret bindings ``cotality_id_mask_secret``,
+``genie_action_current_secret`` and ``genie_action_previous_secret`` carry no
+description of their own, while the bundle declares one for each. Every
+other field of every live binding (kind, target, permission, secret key and
+the other eight descriptions) equals the bundle's.
 
-With this change the same shape plans no window: the bindings compare as a
-set (order is equal), the Salesforce bindings follow the profile's
-``MIP_SALESFORCE_BINDINGS`` (off: client #1's eleven), and the description is
-an online fix-up (a create-update masked to description, no restart and no
-role change). Switching the connector on is the one WR1 left, and its window
-names the re-grant its migration job revokes. Every value is a placeholder;
-only the measured shape (binding names, their order, an empty description)
+With this change that measured shape plans no window: the bindings compare
+as a set (order is equal) on their access contract (a binding's own
+description is display text: ``BINDING_DISPLAY_FIELDS``, reported apart),
+the Salesforce bindings follow the profile's ``MIP_SALESFORCE_BINDINGS``
+(off: client #1's eleven), and the App description is an online fix-up (a
+create-update masked to description, no restart and no role change).
+Switching the connector on is the one WR1 left, and its window names the
+re-grant its migration job revokes. Every value is a placeholder; only the
+measured shape (binding names, their order, which descriptions are missing)
 is the spike's. Whether run 1 needs another window (WR2-WR4) depends on facts
 the spike did not read (the live App role's ACL among them).
 """
@@ -48,12 +56,20 @@ NOOP = {
 }
 
 
-def _live_order(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """The live App's order S2 read: the scheduler binding last, the rest as the bundle declares."""
+# The live bindings S2's read shows with no description of their own.
+UNDESCRIBED = ("cotality_id_mask_secret", "genie_action_current_secret", "genie_action_previous_secret")
+
+
+def _measured_live(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The live bindings S2 read: the scheduler last, three secrets undescribed, the rest the bundle's."""
 
     resources = copy.deepcopy(payload["resources"])
     scheduler = next(item for item in resources if item["name"] == "growth_agent_scheduler_job")
-    return [item for item in resources if item is not scheduler] + [scheduler]
+    live = [item for item in resources if item is not scheduler] + [scheduler]
+    for item in live:
+        if item["name"] in UNDESCRIBED:
+            item.pop("description")
+    return live
 
 
 @pytest.fixture(autouse=True)
@@ -89,9 +105,13 @@ def test_run_1_on_the_measured_live_shape_plans_no_window_and_one_online_fix_up(
     payload = bindings.build_resource_binding_payload(
         bundle_summary(), app_name=APP_NAME, salesforce_bindings=False
     )
-    world.resources = _live_order(payload)
+    assert all(item["description"] for item in payload["resources"]), "the bundle describes every binding"
+    world.resources = _measured_live(payload)
     world.description = ""  # S2: the live description reads empty
     assert [item["name"] for item in world.resources] != [item["name"] for item in payload["resources"]]
+    assert bindings.binding_description_drift(expected=payload, live={"resources": world.resources}) == sorted(
+        UNDESCRIBED
+    )
 
     found = _collect(world, payload)
 
@@ -107,7 +127,7 @@ def test_run_1_on_the_measured_live_shape_plans_no_window_and_one_online_fix_up(
 def test_switching_the_connector_on_is_the_one_wr1_left_and_it_names_its_re_grant() -> None:
     on = bindings.build_resource_binding_payload(bundle_summary(), app_name=APP_NAME, salesforce_bindings=True)
     off = bindings.build_resource_binding_payload(bundle_summary(), app_name=APP_NAME, salesforce_bindings=False)
-    live = {"name": APP_NAME, "description": "", "resources": _live_order(off)}
+    live = {"name": APP_NAME, "description": "", "resources": _measured_live(off)}
 
     lines = bindings.binding_diff(expected=on, live=live)
 
@@ -136,7 +156,7 @@ def test_switching_the_connector_on_is_the_one_wr1_left_and_it_names_its_re_gran
 
 def test_the_online_fix_up_changes_the_description_alone_on_the_measured_shape() -> None:
     off = bindings.build_resource_binding_payload(bundle_summary(), app_name=APP_NAME, salesforce_bindings=False)
-    apps = FakeApps(files=FakeFiles(), env_names=["APP_ENV"], resources=_live_order(off))
+    apps = FakeApps(files=FakeFiles(), env_names=["APP_ENV"], resources=_measured_live(off))
     before = apps._app()
 
     outcome = apply_bundle_description(

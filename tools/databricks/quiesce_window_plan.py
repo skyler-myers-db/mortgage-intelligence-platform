@@ -4,7 +4,9 @@ A release keeps blue serving. It stops the App only for a window reason:
 
 * **WR1** binding diff: the App's live resource bindings differ from the
   bundle's, compared as a set keyed by binding name (an order-only difference
-  is equal), or a binding id is unresolved. Spike S2 measured that every
+  is equal) on their access contract (a binding's own description is display
+  text, ``app_resource_bindings.BINDING_DISPLAY_FIELDS``, never a reason), or
+  a binding id is unresolved. Spike S2 measured that every
   update that carries resources, an identical array included, grants CREATE
   ON DATABASE to the App's Lakebase role again with no restart, and only the
   migration job's revoke takes it back: a WR1 window runs that job after its

@@ -5,8 +5,9 @@ A fake that answers the way the code hoped is the defect class wave 6 fixes:
 ``apps update`` and its fakes kept the description, while the real PATCH
 cleared it (S2). Each fake below is driven through the measured shapes in
 ``tests/fixtures/measured_app_updates.py``; the restore is then proven on
-them to keep the description, to send resources only when they differ, and
-to say that the send re-granted CREATE ON DATABASE.
+them to keep the description (the App's and each kept binding's), to send
+resources only when they differ, and to say that the send re-granted CREATE
+ON DATABASE.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from tests.fixtures.measured_app_updates import (
 )
 from tests.fixtures.quiesce_window_estate import FakeApps, FakeFiles
 from tools.databricks.app_rollback_resource_contract import (
+    BINDING_DESCRIPTION_NOTICE,
     ROLE_REGRANT_NOTICE,
     restore_signed_app_resource_contract,
     validated_app_resource_contract,
@@ -176,3 +178,71 @@ def test_the_restore_refuses_when_the_description_changed_under_it() -> None:
     apps.create_update = clearing_create_update  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="description"):
         restore_signed_app_resource_contract(SimpleNamespace(apps=apps), app_name=rr.APP_NAME, resources=SIGNED)
+
+
+# --- a binding's own description (unmeasured: the fakes take the worst case) ------------
+
+LIVE_DESCRIPTIONS = {"genie_space": "Governed Genie space.", "sql_warehouse": "Serverless SQL warehouse."}
+
+
+def _described(resources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {**item, "description": LIVE_DESCRIPTIONS[item["name"]]} if item["name"] in LIVE_DESCRIPTIONS else item
+        for item in copy.deepcopy(resources)
+    ]
+
+
+def _descriptions(resources: list[Any]) -> dict[str, str]:
+    return {item["name"]: item["description"] for item in resources if item.get("description")}
+
+
+def test_a_resources_send_that_omits_a_binding_description_drops_it(fake: tuple[Any, Any]) -> None:
+    """No spike sent a binding without its description, so every fake must take the worst case.
+
+    A fake that kept it by name would let a restore that sends the signed
+    contract (which holds no description) look harmless.
+    """
+
+    apps, state = fake
+    state.resources = _described(CANDIDATE)
+    apps.create_update(
+        app_name=rr.APP_NAME,
+        update_mask="resources",
+        app=App.from_dict({"name": rr.APP_NAME, "resources": SIGNED}),
+    ).result()
+
+    assert _descriptions(state.resources) == {}
+
+
+def test_the_restore_re_sends_each_kept_binding_description(
+    fake: tuple[Any, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    apps, state = fake
+    state.resources = _described(CANDIDATE)
+
+    assert restore_signed_app_resource_contract(
+        SimpleNamespace(apps=apps), app_name=rr.APP_NAME, resources=SIGNED
+    ) is True
+    assert _descriptions(state.resources) == LIVE_DESCRIPTIONS, "kept bindings keep their own text"
+    assert validated_app_resource_contract(state.resources) == SIGNED
+    assert state.description == DESCRIPTION
+    assert capsys.readouterr().err.strip() == ROLE_REGRANT_NOTICE
+
+
+def test_a_binding_description_the_api_drops_anyway_is_a_names_only_notice_not_a_refusal(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    apps, state = _window_estate_apps()
+    state.resources = _described(CANDIDATE)
+
+    def stripping_create_update(app_name: str, update_mask: str, *, app: Any = None) -> Any:
+        state.resources = validated_app_resource_contract(copy.deepcopy(SIGNED))
+        return SimpleNamespace(result=lambda timeout=None: None)
+
+    apps.create_update = stripping_create_update  # type: ignore[method-assign]
+    assert restore_signed_app_resource_contract(
+        SimpleNamespace(apps=apps), app_name=rr.APP_NAME, resources=SIGNED
+    ) is True
+    err = capsys.readouterr().err
+    assert f"{BINDING_DESCRIPTION_NOTICE}: genie_space, sql_warehouse" in err
+    assert not any(text in err for text in LIVE_DESCRIPTIONS.values()), "names only"

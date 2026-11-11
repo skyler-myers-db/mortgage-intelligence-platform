@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ _RESOURCE_REFERENCE_RE = re.compile(
     r"(?P<field>[A-Za-z0-9_]+)\}\Z"
 )
 _SECRET_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_PREFIX = "[mip-app-bindings]"
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -152,10 +154,14 @@ def _assert_exact_transition(
         raise ValueError("updated App identity does not match the binding payload")
     if description_differs(expected=expected, live=after):
         raise ValueError("updated App description does not exactly match the binding payload")
-    if _bindings_by_name(after.get("resources") or [], label="updated") != _bindings_by_name(
-        expected.get("resources"), label="expected"
-    ):
+    updated = _bindings_by_name(after.get("resources") or [], label="updated")
+    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
+    if _access_contract(updated) != _access_contract(reviewed):
         raise ValueError("updated App resource bindings do not exactly match the bundle")
+    drift = binding_description_drift(expected=expected, live=after)
+    if drift:
+        # Display text, never the bindings' contract: names only, no failure.
+        print(f"{_PREFIX} {_description_drift_line(drift)}", file=sys.stderr)
     if before is not None:
         for field in ("active_deployment", "pending_deployment"):
             if after.get(field) != before.get(field):
@@ -170,6 +176,25 @@ def _assert_exact_transition(
         state = str((after.get("compute_status") or {}).get("state") or "")
         if state != "STOPPED":
             raise ValueError(f"first-install App compute is not stopped: {state!r}")
+
+
+# A binding's own ``description`` is display text. It grants nothing and
+# selects no resource, and the signed rollback contract and adopt-live's
+# reviewed bindings already leave it out (``validated_app_resource_contract``
+# keeps only the name and the kind's target and permission). The diff and the
+# post-update verifier compare that same access contract; the per-binding
+# description is reported apart (``binding_description_drift``) and is never
+# a window reason. Client #1's live App has three secret bindings with no
+# description (spike S2's read-only ``apps get``): a WR1 window for that
+# would restart the App and re-grant CREATE ON DATABASE to its role for text.
+BINDING_DISPLAY_FIELDS = frozenset({"description"})
+
+
+def _access_contract(bindings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        name: {key: value for key, value in binding.items() if key not in BINDING_DISPLAY_FIELDS}
+        for name, binding in bindings.items()
+    }
 
 
 def _bindings_by_name(value: Any, *, label: str) -> dict[str, dict[str, Any]]:
@@ -207,20 +232,22 @@ def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]
 
     The bindings are compared as a set keyed by binding name: an order-only
     difference is equal. Empty exactly when the post-update verifier would
-    accept ``live``'s bindings as the payload's. The description is not a
-    binding: ``description_differs`` reads it apart, because spike S2 measured
-    that a create-update masked to ``description`` changes it with no
-    restart and no role change, while every send of resources re-grants
-    CREATE ON DATABASE to the App's Lakebase role. Reviewed binding names come
-    from the bundle and are printed; live-only names are counted. No resource
-    id, name or other value is ever printed.
+    accept ``live``'s bindings as the payload's. Neither description is part
+    of the comparison. The App's ``description_differs`` reads apart, because
+    spike S2 measured that a create-update masked to ``description`` changes
+    it with no restart and no role change, while every send of resources
+    re-grants CREATE ON DATABASE to the App's Lakebase role. A binding's own
+    description is display text (``BINDING_DISPLAY_FIELDS``), reported by
+    ``binding_description_drift``. Reviewed binding names come from the
+    bundle and are printed; live-only names are counted. No resource id, name
+    or other value is ever printed.
     """
 
     _assert_source_free(expected)
     if str(live.get("name") or "") != str(expected.get("name") or ""):
         raise ValueError("live App identity does not match the binding payload")
-    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
-    observed = _bindings_by_name(live.get("resources") or [], label="live")
+    reviewed = _access_contract(_bindings_by_name(expected.get("resources"), label="expected"))
+    observed = _access_contract(_bindings_by_name(live.get("resources") or [], label="live"))
     lines: list[str] = []
     for name, binding in reviewed.items():
         if name not in observed:
@@ -233,6 +260,32 @@ def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]
     if unreviewed:
         lines.append(f"{len(unreviewed)} unreviewed live binding(s) (update removes them)")
     return lines
+
+
+def binding_description_drift(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """The reviewed bindings present live whose own description is not the bundle's (names only).
+
+    Display text, never a window reason: no online fix exists (only a send
+    of resources carries it, and every send re-grants CREATE ON DATABASE), so
+    the release's own resources send carries the bundle's descriptions and
+    nothing else repairs them. A missing description reads "".
+    """
+
+    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
+    observed = _bindings_by_name(live.get("resources") or [], label="live")
+    return sorted(
+        name
+        for name, binding in reviewed.items()
+        if name in observed
+        and str(binding.get("description") or "") != str(observed[name].get("description") or "")
+    )
+
+
+def _description_drift_line(names: list[str]) -> str:
+    return (
+        f"binding descriptions differ (display text, never a window; a resources send carries "
+        f"the bundle's): {', '.join(names)}"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -272,15 +325,17 @@ def main(argv: list[str] | None = None) -> int:
         expected, live = _load_object(args.expected), _load_object(args.live)
         lines = binding_diff(expected=expected, live=live)
         for line in lines:
-            print(f"[mip-app-bindings] diff: {line}")
+            print(f"{_PREFIX} diff: {line}")
         if not lines:
-            print("[mip-app-bindings] live App resource bindings equal the bundle payload (as a set)")
+            print(f"{_PREFIX} live App resource bindings equal the bundle payload (as a set)")
         if description_differs(expected=expected, live=live):
             # Never a drift code: the release applies it online (spike S2).
             print(
-                "[mip-app-bindings] description: differs (an online fix-up: a create-update "
+                f"{_PREFIX} description: differs (an online fix-up: a create-update "
                 "masked to description, no window)"
             )
+        if drift := binding_description_drift(expected=expected, live=live):
+            print(f"{_PREFIX} {_description_drift_line(drift)}")
         return CHECK_DRIFT if lines else CHECK_EXACT
     if args.command == "build":
         payload = build_resource_binding_payload(

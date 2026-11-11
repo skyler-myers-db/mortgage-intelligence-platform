@@ -18,8 +18,9 @@ online, at its binding step, while blue serves. It never sends resources, so
 it never re-grants CREATE ON DATABASE to the App's role.
 
 The tool reads the App and proves its immutable identity first. It does
-nothing when the description already equals the payload's, refuses to clear
-one (a payload with no description), and otherwise applies it and proves
+nothing when the description already equals the payload's (both empty
+included), refuses to clear a live one (a payload with no description while
+the App has one), and otherwise applies it and proves
 afterwards that the identity, the resource bindings, the active and pending
 deployments and the compute state are unchanged and the description is the
 payload's. Exit 0 when applied or already equal, 2 on a refusal. It prints
@@ -98,12 +99,14 @@ def apply_bundle_description(
 ) -> str:
     """``equal`` when nothing was needed, ``applied`` after the proven online fix-up."""
 
-    if not description.strip():
-        raise DescriptionFixupRefused("the bundle declares no App description; a live one is never cleared")
     before = _plain(workspace.apps.get(app_name))
     _assert_identity(before, app_name=app_name, identity=identity)
     if str(before.get("description") or "") == description:
         return "equal"
+    if not description.strip():
+        # The shell runs this at every no-WR1 binding step: an install whose
+        # bundle declares no description is "equal" while the App has none too.
+        raise DescriptionFixupRefused("the bundle declares no App description; a live one is never cleared")
     from databricks.sdk.service.apps import App
 
     workspace.apps.create_update(

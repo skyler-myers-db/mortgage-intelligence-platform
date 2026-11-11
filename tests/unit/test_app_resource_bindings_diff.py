@@ -3,7 +3,10 @@
 Spike S2: the bindings compare as a set keyed by name (an order-only
 difference is equal), and the description is read apart
 (``description_differs``): a create-update masked to description is the
-release's online fix-up, never a window.
+release's online fix-up, never a window. A binding's own description is
+display text (``BINDING_DISPLAY_FIELDS``): the diff and the verifier compare
+the access contract, and ``binding_description_drift`` names the bindings
+whose text differs (client #1's live App has three undescribed secrets).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from tests.unit.test_app_resource_bindings import _summary
 from tools.databricks import app_resource_bindings as bindings
 from tools.databricks.app_resource_bindings import (
     _assert_exact_transition,
+    binding_description_drift,
     binding_diff,
     build_resource_binding_payload,
     description_differs,
@@ -94,6 +98,9 @@ def _resource(live: dict[str, Any], name: str) -> dict[str, Any]:
         (lambda live: live["resources"].reverse(), []),
         (lambda live: live.update(description="Edited in the UI"), []),
         (lambda live: live.update(description=""), []),
+        # A binding's own description is display text, never a binding diff.
+        (lambda live: _resource(live, "database").update(description="Edited in the UI"), []),
+        (lambda live: _resource(live, "sql_warehouse").update(description=""), []),
         (
             lambda live: _resource(live, "migration_job").update(
                 job={"id": 12345}, serving_endpoint={"name": "x"}
@@ -176,6 +183,7 @@ _FIELD_VALUES = st.sampled_from(("a", "b", 1, None))
 _BINDING = st.fixed_dictionaries(
     {"name": st.sampled_from(("sql_warehouse", "database", "job", "secret"))},
     optional={
+        "description": st.sampled_from(("", "Governed warehouse.", "edited")),
         "database": st.dictionaries(
             st.sampled_from(("instance_name", "permission")), _FIELD_VALUES
         ),
@@ -261,3 +269,81 @@ def test_cli_diff_reports_a_description_only_difference_and_exits_exact(
     out = capsys.readouterr().out
     assert "equal the bundle payload (as a set)" in out
     assert "description: differs (an online fix-up" in out
+
+
+def _described() -> dict[str, Any]:
+    """The fixture payload with a description on every binding, as databricks.yml declares them."""
+
+    payload = _payload()
+    for item in payload["resources"]:
+        item["description"] = f"Reviewed {item['name']} binding."
+    return payload
+
+
+def _undescribed(live: dict[str, Any], *names: str) -> dict[str, Any]:
+    for name in names:
+        _resource(live, name).pop("description")
+    return live
+
+
+def test_a_binding_description_is_reported_apart_by_name_only() -> None:
+    payload = _described()
+    live = _undescribed(_live(payload), "database", "migration_job")
+    _resource(live, "sql_warehouse")["description"] = "Edited in the UI"
+
+    assert binding_diff(expected=payload, live=live) == []
+    assert binding_description_drift(expected=payload, live=live) == [
+        "database",
+        "migration_job",
+        "sql_warehouse",
+    ]
+    assert binding_description_drift(expected=payload, live=_live(payload)) == []
+
+
+def test_a_binding_description_absent_live_is_no_drift_for_a_missing_binding() -> None:
+    live = _live(_described())
+    live["resources"].remove(_resource(live, "database"))
+
+    assert binding_description_drift(expected=_described(), live=live) == []
+    assert binding_diff(expected=_described(), live=live) == ["binding database: missing (update adds it)"]
+
+
+def test_the_verifier_accepts_a_send_whose_binding_text_differs_and_says_so(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    after = _undescribed(_live(_described()), "database")
+
+    _assert_exact_transition(
+        expected=_described(), after=after, before=None, require_stopped_without_deployment=False
+    )
+    err = capsys.readouterr().err
+    assert "binding descriptions differ (display text, never a window" in err and err.rstrip().endswith(
+        ": database"
+    )
+    assert not any(value in err for value in _VALUES)
+
+
+def test_the_verifier_still_refuses_an_access_difference_beside_a_text_one() -> None:
+    after = _undescribed(_live(_described()), "database")
+    _resource(after, "database")["database"]["permission"] = "CAN_CONNECT"
+
+    with pytest.raises(ValueError, match="do not exactly match the bundle"):
+        _assert_exact_transition(
+            expected=_described(), after=after, before=None, require_stopped_without_deployment=False
+        )
+
+
+def test_cli_diff_names_undescribed_bindings_and_exits_exact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    expected_path, live_path = tmp_path / "expected.json", tmp_path / "live.json"
+    expected_path.write_text(json.dumps(_described()), encoding="utf-8")
+    live_path.write_text(json.dumps(_undescribed(_live(_described()), "database")), encoding="utf-8")
+
+    status = bindings.main(["diff", "--expected", str(expected_path), "--live", str(live_path)])
+
+    assert status == CHECK_EXACT, "a binding's own description is no window"
+    out = capsys.readouterr().out
+    assert "equal the bundle payload (as a set)" in out
+    assert "binding descriptions differ (display text, never a window; a resources send carries " in out
+    assert out.rstrip().endswith("the bundle's): database")

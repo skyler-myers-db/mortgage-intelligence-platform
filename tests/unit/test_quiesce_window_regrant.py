@@ -22,6 +22,7 @@ from dataclasses import replace
 
 import pytest
 
+from tools.databricks import quiesce_window_facts as window_facts
 from tools.databricks.quiesce_window_plan import (
     STEP_BUDGET_S,
     WindowFacts,
@@ -120,3 +121,42 @@ def test_an_unreviewed_description_state_never_reaches_a_public_summary() -> Non
 
     with pytest.raises(ValueError, match="description state"):
         plan.public_summary()
+
+
+_PLAN = {
+    "mode": "plan",
+    "blue_restorable": True,
+    "migrations": {"pending": []},
+    "jobs_reader_grants": "exact",
+}
+
+
+@pytest.mark.parametrize("decision", ("noop", "apply"))
+@pytest.mark.parametrize("value", (None, "unchecked", "drift"), ids=("missing", "unchecked", "unreviewed"))
+def test_a_plan_that_never_read_the_re_grant_is_incomplete_unless_it_refused(
+    decision: str, value: str | None
+) -> None:
+    """A noop plan without ``app_role_regrant`` would read as exact and skip the revoke (S2)."""
+
+    plan = {**_PLAN, "decision": decision}
+    if value is not None:
+        plan["app_role_regrant"] = value
+
+    with pytest.raises(ValueError, match="CREATE ON DATABASE"):
+        window_facts._migration(plan)
+
+
+@pytest.mark.parametrize("value", (None, "unchecked"), ids=("missing", "unchecked"))
+def test_a_refusing_plan_records_the_re_grant_as_unchecked(value: str | None) -> None:
+    plan = {**_PLAN, "decision": "refuse"}
+    if value is not None:
+        plan["app_role_regrant"] = value
+
+    assert window_facts._migration(plan)["app_role_regrant"] == "unchecked"
+
+
+@pytest.mark.parametrize("value", ("exact", "owed"))
+def test_a_plan_that_read_the_re_grant_carries_it(value: str) -> None:
+    assert window_facts._migration({**_PLAN, "decision": "noop", "app_role_regrant": value})[
+        "app_role_regrant"
+    ] == value
