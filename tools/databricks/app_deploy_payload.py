@@ -182,6 +182,14 @@ SALESFORCE_UNBOUND_NOTICE = (
     "salesforce-* secrets are not bound and delivery reports salesforce_not_configured; set "
     "MIP_SALESFORCE_BINDINGS=on in the client profile to bind them."
 )
+# The default (an unset switch) never turns off a connector the operator
+# configured: with every input set, the profile must say on or off. An
+# explicit off keeps the notice above (review of #337).
+SALESFORCE_SWITCH_UNSET_REFUSAL = (
+    "every Salesforce connector input is set but MIP_SALESFORCE_BINDINGS is unset: set it to on "
+    "to bind the connector's three secrets (a WR1 window adds the bindings) or to off to leave "
+    "the connector unbound"
+)
 PREVIOUS_SECRET_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_SECRET_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 
@@ -224,6 +232,26 @@ def _salesforce_input(key: str, dotenv: dict[str, str]) -> str:
     if key in SALESFORCE_SECRET_ENVS:
         return runtime_secret_text(value) or ""
     return value
+
+
+def salesforce_connector_configured(dotenv: dict[str, str] | None = None) -> bool:
+    """Every connector input set (a placeholder secret reads unset), env first, then ``.env.local``."""
+
+    values = _dotenv_overlay() if dotenv is None else dotenv
+    return all(_salesforce_input(name, values) for name in SALESFORCE_REQUIRED_VARS)
+
+
+def salesforce_switch_refusal(dotenv: dict[str, str] | None = None) -> str | None:
+    """``SALESFORCE_SWITCH_UNSET_REFUSAL`` for a configured connector whose switch is unset, else None.
+
+    The deploy preflight runs this before any mutation
+    (``resolve_salesforce_bindings_switch``); ``build_payload`` repeats it.
+    """
+
+    values = _dotenv_overlay() if dotenv is None else dotenv
+    if _env_value(SALESFORCE_BINDINGS_ENV, values):
+        return None
+    return SALESFORCE_SWITCH_UNSET_REFUSAL if salesforce_connector_configured(values) else None
 
 
 def _salesforce_placeholder_notice(dotenv: dict[str, str]) -> str | None:
@@ -545,12 +573,13 @@ def build_payload(
 
     if salesforce_notice := _salesforce_placeholder_notice(dotenv):
         print(salesforce_notice, file=sys.stderr)
-    salesforce_configured = all(
-        _salesforce_input(name, dotenv) for name in SALESFORCE_REQUIRED_VARS
-    )
+    salesforce_configured = salesforce_connector_configured(dotenv)
     # The profile's switch decides whether the App binds the secrets at all
-    # (tools/databricks/app_optional_bindings.py); off is the default.
+    # (tools/databricks/app_optional_bindings.py); off is the default, and an
+    # unset switch refuses a configured connector rather than drop it.
     salesforce_bound = salesforce_bindings_on(_env_value(SALESFORCE_BINDINGS_ENV, dotenv))
+    if refusal := salesforce_switch_refusal(dotenv):
+        raise ValueError(refusal)
     if salesforce_configured and not salesforce_bound:
         print(SALESFORCE_UNBOUND_NOTICE, file=sys.stderr)
     if salesforce_configured and salesforce_bound:

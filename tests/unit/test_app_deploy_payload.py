@@ -715,19 +715,15 @@ _CONFIGURED_SALESFORCE = {
 }
 
 
-@pytest.mark.parametrize("switch", (None, "off"), ids=("unset", "off"))
-def test_a_configured_connector_binds_nothing_while_the_profile_switch_is_off(
-    monkeypatch, capsys, switch: str | None
-) -> None:
+def test_a_configured_connector_binds_nothing_while_the_profile_switch_is_off(monkeypatch, capsys) -> None:
     """Spike S2b: a valueFrom naming a binding the App lacks does not fail the
     deployment, it starts the App with the env var unset. With the profile's
-    MIP_SALESFORCE_BINDINGS off (the default) the release applies none of the
+    MIP_SALESFORCE_BINDINGS explicitly off the release applies none of the
     three Salesforce bindings, so the payload must name none of them."""
 
     for name, value in _CONFIGURED_SALESFORCE.items():
         monkeypatch.setenv(name, value)
-    if switch is not None:
-        monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", switch)
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "off")
 
     env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
 
@@ -736,6 +732,22 @@ def test_a_configured_connector_binds_nothing_while_the_profile_switch_is_off(
     err = capsys.readouterr().err
     assert app_deploy_payload.SALESFORCE_UNBOUND_NOTICE in err
     assert "sf-client-secret" not in err and "sf-password" not in err
+
+
+def test_a_configured_connector_with_the_switch_unset_refuses_rather_than_drop_it(monkeypatch, capsys) -> None:
+    """Review of #337: the default never turns off a connector the operator configured."""
+
+    for name, value in _CONFIGURED_SALESFORCE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("MIP_SALESFORCE_BINDINGS", raising=False)
+
+    with pytest.raises(ValueError, match="MIP_SALESFORCE_BINDINGS is unset") as refused:
+        build_payload(source_code_path="/Workspace/app/files", install_class="customer")
+    assert str(refused.value) == app_deploy_payload.SALESFORCE_SWITCH_UNSET_REFUSAL
+    assert app_deploy_payload.salesforce_switch_refusal() == app_deploy_payload.SALESFORCE_SWITCH_UNSET_REFUSAL
+    monkeypatch.delenv("SALESFORCE_PASSWORD")
+    assert app_deploy_payload.salesforce_switch_refusal() is None, "a partial connector is not configured"
+    build_payload(source_code_path="/Workspace/app/files", install_class="customer")
 
 
 def test_the_switch_on_binds_all_three_and_an_unreviewed_value_refuses(monkeypatch) -> None:
