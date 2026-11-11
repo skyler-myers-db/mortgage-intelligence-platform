@@ -57,7 +57,7 @@ Each is a code change; nothing in this runbook works around one.
 | # | Blocks | What happens | The follow-up |
 |---|---|---|---|
 | B1 | step 10 | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
-| B2 | step 10 | adopt-live's ack `MIP_ACK_ADOPT_LIVE` has no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live` is not one. A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`) to `OPERATION_ACKS`. |
+| B2 | step 10, and its rollback | adopt-live's acks have no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live`, `unadopt` and `supersede` are not among them (nor is `MIP_ADOPT_LIVE_SUPERSEDE`, which selects a supersede). A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`; an acked `phase=unadopt` refuses the same way for `MIP_ACK_UNADOPT`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `unadopt` (`MIP_ACK_UNADOPT`, phase `unadopt`) and the supersede pair to the dispatch. |
 | B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
 
 Two smaller gaps are noted at their steps: the freeze marker needs a signing
@@ -582,8 +582,10 @@ the 2 jobs the legacy install never had; the active deployment is unchanged (the
 "Signing the live deployment as an adopted blue"). Exit 3 from the bind: its
 undo is unproven; dispatch `phase=unadopt`.
 
-**Rollback:** dispatch `phase=unadopt` (with its own acks): the exact unbind
-plus a tombstone record version. Nothing is deleted.
+**Rollback:** dispatch `phase=unadopt` (with its own acks: `adopt_plan` for
+its unbind plan and, once B2 is fixed, adopt-live's `unadopt` ack): the exact
+unbind plus a tombstone record version. Nothing is deleted. While B2 stands, an
+acked adopt refuses before the lease, so there is nothing to roll back.
 
 ## Step 11. Plan #3
 

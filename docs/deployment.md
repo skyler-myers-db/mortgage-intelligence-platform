@@ -693,6 +693,16 @@ databricks apps start <app-name> -p <owner-profile>
   `blue_restorable` false, the dead-man's `deadman_left_stopped`): blue's code
   would serve the migrated schema. That outage is the acknowledged one; escalate
   instead.
+- **An adopted record with no restore payload that no longer matches the App**
+  (`no_restore_payload`, `tier_a_refused`, or the pre-stop clause's
+  `rollback_record_drift`, whose remedies name the owner break-glass): a raw
+  start makes a new deployment, which is still not the record's, so it
+  restores service, never the record. The record's governed exit is an
+  adopt-live supersede onto the live deployment (`--phase adopt` with
+  `MIP_ADOPT_LIVE_SUPERSEDE` and its `MIP_ACK_SUPERSEDE` ack), and on `main` no
+  `deploy-dev.yml` input carries either
+  ([docs/clients/first-client-cutover.md](clients/first-client-cutover.md),
+  blocker B2).
 
 ## App Python dependencies: the deps-digest line
 
@@ -3210,7 +3220,7 @@ journal close). A WR1 window restarted on the dead runner's applied bindings
 re-pins only from that same commit, whose bundle payload is exactly those
 bindings: re-run the dead window's commit, then roll forward. An App no longer
 serving the dead-man's start (stopped or restarted by hand) needs the owner
-break-glass below. Any other open journal still refuses before the lease
+break-glass (under the emergency recipe). Any other open journal still refuses before the lease
 (`window_journal_open`): a contract window the dead-man left stopped, a start
 it could not prove, or a dead-man that has not reached its deadline. That is
 the owner break-glass case: a raw `apps start` with the owner's U2M profile
