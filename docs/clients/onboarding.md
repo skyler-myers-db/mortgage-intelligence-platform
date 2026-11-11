@@ -16,10 +16,10 @@ is not onboarded from nothing: it is **adopted**. Client #1 is that case, and
 
 | Stage | State on `main` |
 |---|---|
-| Profile, bootstrap, GitHub Environments | Built and tested against fakes only. No client environment has been created by these tools yet. |
+| Profile, bootstrap, GitHub Environments | Built, and tested against fakes only (their guides record no live run yet). |
 | `phase=plan` dispatch | Built. CI only. |
 | **First install through `deploy-dev.yml`** | **Blocked.** A first install needs a bootstrap SQL warehouse (`DATABRICKS_WAREHOUSE_ID`) until its bundle apply creates its own. That name is no client profile field, so `deploy-dev.yml` carries none and the preflight refuses: `this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID ...` (exit 2, nothing changed). A profile field for it is a code follow-up. The first-install phase order is also open: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). |
-| Adopting an existing install through `deploy-dev.yml` | **Blocked** by the same warehouse refusal and two missing dispatch acks ([first-client-cutover.md](first-client-cutover.md), "Blockers"). |
+| Adopting an existing install through `deploy-dev.yml` | **Blocked** by the same warehouse refusal, by adopt-live's ack, which no dispatch input carries, and by the unverified-frontend ack its first release needs ([first-client-cutover.md](first-client-cutover.md), "Blockers"). |
 | Data phase, per-client nightly | Built. The nightly validates only a client whose catalog is `mip`. |
 | Owner hardware-key attestation (plan M1-PR5) | **Deferred.** Not built. See "Deferred" below. |
 
@@ -202,7 +202,8 @@ the exact ack the refusal prints for that client, environment and commit.
 
 - **The App `MIP_APP_NAME` names already exists** in the workspace and the
   deployer's bundle state does not bind it: every plan refuses `adoption:
-  existing install not adopted`. Adopt it (`phase=adopt`, docs/deployment.md
+  existing install not adopted` (and, for its catalog, `install marker: ...
+  adopt it first`). Adopt it (`phase=adopt`, docs/deployment.md
   "Adopting an existing install" and "Signing the live deployment as an
   adopted blue"), in the order [first-client-cutover.md](first-client-cutover.md)
   gives, after both ownership handovers. Never set

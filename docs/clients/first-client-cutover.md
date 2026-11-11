@@ -56,9 +56,9 @@ Each is a code change; nothing in this runbook works around one.
 
 | # | Blocks | What happens | The follow-up |
 |---|---|---|---|
-| B1 | step 9's adopt readout, step 10 | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
+| B1 | step 10 | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
 | B2 | step 10 | adopt-live's ack `MIP_ACK_ADOPT_LIVE` has no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live` is not one. A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`) to `OPERATION_ACKS`. |
-| B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
+| B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
 
 Two smaller gaps are noted at their steps: the freeze marker needs a signing
 key no shell holds (step 1), and an open quiesce window that the owner
@@ -111,7 +111,7 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 6 | Plan #1 | CI | ready |
 | 7 | Unity Catalog ownership handover | owner | ready |
 | 8 | Lakebase ownership handover | owner | ready |
-| 9 | Plan #2 | CI | ready (adopt readout blocked, B1) |
+| 9 | Plan #2 | CI | ready |
 | 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2)** |
 | 11 | Plan #3 | CI | after 10 |
 | 12 | Release (run 1) | CI | **blocked (B3)** |
@@ -123,16 +123,15 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 18 | Run 2 prerequisites (agentic tier) | owner | optional; not wired (step 18) |
 | 19 | Run 2 | CI | optional |
 
-The plan's revision 1 listed 17 steps. Revision 2 (the reviewed plan this
-runbook follows) moved adopt after both handovers (attack O8), added plans #2
-and #3, and split run 2 into steps 18-19. Revision 1's step 6 (adopt) is
-step 10 here, its 9 is 11, its 10 is 12, its 11 to 15 are 13 to 17, and its 16
-and 17 are 18 and 19.
+The plan's revision 1 listed 17 steps. Revision 2, the reviewed plan this
+runbook follows, moved adopt after both ownership handovers (attack O8) and
+added step 5 (the profile attestation) and step 9 (plan #2). Revision 1's steps
+1-4, 7 and 8 keep their numbers; its 5 (plan #1) is step 6 here, its 6 (adopt)
+is 10, its 9 is 11, its 10 (release) is 12, and its 11 to 17 are 13 to 19.
 
 Every dispatch below is the command of record, a `deploy-dev.yml` (or
 `nightly.yml`) dispatch on `main`, approved by the environment's reviewer in
-the run's page. Approve
-only the run you dispatched, after reading its inputs.
+the run's page. Approve only the run you dispatched, after reading its inputs.
 
 ---
 
@@ -168,8 +167,9 @@ databricks apps list-deployments <app-name> -p <owner-profile>
 ```
 
 **Proof:** the snapshot is hashed; the newest deployment's env-name set has no
-`MIP_AGENT_*` or Gateway name. The plan's "one Genie turn" needs a running
-App; take it at step 10A.
+`MIP_AGENT_*` or Gateway name; one real turn in the governed Genie space (its
+own UI works with the App stopped) answers, and a `BUDGET_EXCEEDED` means the
+owner restores the budget before step 12.
 
 **Rollback:** read-only. Lift the freeze by message.
 
@@ -317,7 +317,9 @@ digests:
 - `MIP_CLIENT_PROFILE_SHA256`, the profile digest `github_environment` records
   (`python -m tools.clients digest` prints it locally);
 - the `profile` ack, `owner_attestation=<profile-ack>`, which every mutating
-  dispatch needs and every plan prints. A changed profile changes the ack.
+  dispatch needs and every plan prints. A changed profile changes the ack: the
+  pairs added at step 7 and removed at step 13, and the refresh switch at step
+  15, each need the ack of a plan dispatched after the change.
 
 **Who:** the owner reads the plan's profile ack before passing it. **Proof:**
 the dispatch preflight reports `profile_ack` exact. **Refusal:** `profile_ack`
@@ -335,18 +337,23 @@ gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f ac
 `admins`, on the profile's workspace and metastore: this also answers spike
 S5, the federation audience); the dispatch preflight prints the profile ack
 and the environment-protection result; then the client live checks refuse
-`adoption: existing install not adopted`, and the run stops there (exit 2,
-nothing changed). That is the expected outcome, and on `main` the only
-refusal plan #1 can show: the live checks run before the pre-stop probes, so
-the plan's other expected refusals (UC owner policy, Lakebase executor) are not
-reached until the adopt phase. The public summary leaks no identifier.
+with two lines that both mean "not adopted yet", and the run stops there
+(exit 2, nothing changed): `adoption: existing install not adopted` and
+`install marker: MIP_DEFAULT_CATALOG exists without mip.install_key` (an
+install from before the marker: "adopt it first"). That is the expected
+outcome, and on `main` the only refusals plan #1 can show: the live checks run
+before the pre-stop probes, so the plan's other expected refusals (UC owner
+policy, Lakebase executor) are not reached until the adopt phase. The public
+summary leaks no identifier.
 
 **Refusals and what to do:** `check-dispatch` names a repository-level profile
 name (delete it, step 4); `environment_protections_drift` (re-run
 `github_environment`); `environment_protections_unreadable` (spike S8(a) owed:
 a mutating phase then needs `protections_unverified_ack=<sha256>`, the exact
 ack the refusal prints); an OIDC proof mismatch, `tree_scan`, or any live-check
-line other than adoption: **stop the cutover** and fix the cause.
+line other than those two (the Cotality share, the storage root, the account
+principal, a marker naming another install): **stop the cutover** and fix the
+cause.
 
 **Rollback:** read-only.
 
@@ -356,7 +363,7 @@ line other than adoption: **stop the cutover** and fix the cause.
 go-ahead, with the owner's profile). **Announce** steps 7 to 12 to the owner
 and peers as one contiguous sequence; the App stays stopped until step 10A.
 
-**Preconditions:** step 6 showed only the adoption refusal; the interim
+**Preconditions:** step 6 showed only the two not-adopted lines; the interim
 membership (step 4) is in place. Pairs expire within 14 days, so steps 7 to 12
 must finish inside that window.
 
@@ -486,19 +493,12 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_hando
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true
 ```
 
-**Proof:** exactly the adoption refusal, as in step 6; nothing new. The
-adoption's own read-only readout (the bind plan, the pre-stop probes in their
-adopt mode and adopt-live's preconditions) comes from a `phase=adopt` dispatch
-without acks, which is blocked by B1 on `main`:
-
-```bash
-gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
-```
-
-Once B1 is fixed, that run is read-only: it prints the adopt plan's sha256 and
-adopt-live's plan sha256 and stops before the lease. Expect: 16 legacy keys to
-bind, 2 planned creates, no delete, recreate or instance change, the
-dashboards `pinned_permanent`, and `s7_default_source: not_settable`.
+**Proof:** exactly the two not-adopted lines, as in step 6; nothing new, and
+nothing else refuses: the handovers changed no profile field the live checks
+read. A `plan` cannot show more of an unadopted install. The adoption's own
+read-only readout (the bind plan, the pre-stop probes in their adopt mode and
+adopt-live's preconditions) is step 10B's first dispatch, which needs the
+running App of step 10A.
 
 **Rollback:** read-only. If anything else refuses, revert steps 7 and 8 or fix
 the cause.
@@ -551,8 +551,11 @@ gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f o
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="adopt_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
 ```
 
-The first run is read-only and prints both digests. The second binds the 16
-legacy keys into the deployer's state, judges the post-bind plan in adopt mode,
+The first run is read-only (the readout plan #2 cannot give): it prints the
+adopt plan's sha256 and adopt-live's plan sha256 and stops before the lease.
+Expect 16 legacy keys to bind, 2 planned creates, no delete, recreate or
+instance change, the dashboards `pinned_permanent`, and `s7_default_source:
+not_settable`. The second binds the 16 legacy keys into the deployer's state, judges the post-bind plan in adopt mode,
 then (B2) needs adopt-live's ack too, which no dispatch input carries today.
 Once B2 is fixed it copies the live folder create-only into the deployer's
 `app-src/adopted-<id12>-<digest12>`, re-hashes it and signs one v7 core record.
@@ -637,8 +640,9 @@ The data jobs are deferred to step 14.
 
 **B3:** the pre-activation proof refuses green activation with
 `unverified_frontend_unacked` because the adopted frontend is unverified and no
-dispatch input carries `restore_unverified_frontend`. Blue keeps serving. Do not
-dispatch step 12 until the follow-up lands.
+dispatch input carries `restore_unverified_frontend`. Blue keeps serving, but
+the run has already applied the bundle and taken any window the plan admitted.
+Do not dispatch step 12 until the follow-up lands.
 
 **Proof:** green SUCCEEDED; health `git_sha` equals the dispatched commit; the
 env-name diff equals the plan's; jobs run as the planned identities and are
@@ -682,7 +686,10 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ow
 
    It passes only when every pipeline dataset in the governed catalog is owned
    by the jobs identity, which its pipeline runs as. Then unset
-   `MIP_UC_INTERIM_OWNER_PAIRS_JSON` (`.env.local` and the environment secret).
+   `MIP_UC_INTERIM_OWNER_PAIRS_JSON`: remove it from `.env.local`, delete the
+   environment secret by hand (`github_environment` names a secret the profile
+   no longer sets and leaves it), and re-run `github_environment` so the
+   recorded profile digest follows.
 5. With the owner's OK, remove the legacy owner's interim membership of
    `<prefix>-data-owners` in the account console, then dispatch a plan and watch
    the next App-triggered lifecycle run (now as the jobs identity) with
