@@ -15,10 +15,12 @@ and reproduces one of S7's critical findings against origin/main 711af8be:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from tests.fixtures import measured_apps as measured
 from tests.fixtures.measured_apps import VirtualClock, virtual_start_clock
 from tests.fixtures.quiesce_window_estate import (
     APP_NAME,
@@ -87,6 +89,37 @@ def test_a_start_is_found_only_after_the_measured_delay_polled_at_most_every_5_s
 
     assert created == "deployment-start-1" != BLUE_ID and estate.apps.starts == 1
     assert clock.sleeps and max(clock.sleeps) <= 5.0, "the id shows ~100 s later, pending ~1 s"
+
+
+def test_a_start_is_awaited_through_the_measured_compute_start_and_an_install(clock: VirtualClock) -> None:
+    """Time, not reads: the id shows at the measured 108 s and settles only after an install.
+
+    A start wait cut below S7's measured compute start (review of #334: a
+    30 s deadline shipped green against a read-count fake) refuses here.
+    """
+
+    estate = _stopped()
+    shown_at = max(measured.COMPUTE_START_S)
+    settled_at = shown_at + max(measured.TERMINAL_AFTER_S) + measured.REAL_APP_INSTALL_FLOOR_S
+    apps, tick, get_deployment = estate.apps, estate.apps._tick, estate.apps.get_deployment
+
+    def timed_tick(*, is_get: bool) -> None:
+        if clock.now >= shown_at:  # nothing of the start shows before the compute is ACTIVE
+            tick(is_get=is_get)
+
+    def timed_get_deployment(name: str, deployment_id: str) -> Any:
+        found = get_deployment(name, deployment_id)
+        if deployment_id == BLUE_ID or clock.now >= settled_at:
+            return found
+        # The real App's install is still running: a copy, the fake's own state untouched.
+        return SimpleNamespace(**{**vars(found), "status": SimpleNamespace(state="IN_PROGRESS")})
+
+    apps._tick = timed_tick  # type: ignore[method-assign]
+    apps.get_deployment = timed_get_deployment  # type: ignore[method-assign]
+    created = starts.start_app(estate.workspace, app_name=APP_NAME)
+    assert created == "deployment-start-1" and clock.now >= shown_at
+    settled = starts.wait_for_terminal(estate.workspace, app_name=APP_NAME, deployment_id=created)
+    assert settled.status.state == "SUCCEEDED" and clock.now >= settled_at
 
 
 def test_an_active_deployment_from_the_baseline_is_never_taken_as_the_starts(clock: VirtualClock) -> None:

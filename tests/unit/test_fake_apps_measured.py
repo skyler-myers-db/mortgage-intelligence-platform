@@ -54,6 +54,24 @@ def test_the_measurements_are_the_spikes() -> None:
     measured.check_create_update_mask("description")
 
 
+def test_every_start_wait_covers_the_measured_start_and_an_install() -> None:
+    """The real App's start budget never shrinks below S7's trivial App plus an install."""
+
+    from tools.databricks import app_start_deployment as starts
+    from tools.databricks import quiesce_window_deadman as deadman
+    from tools.databricks.quiesce_window_plan import STEP_BUDGET_S
+
+    floor = (
+        max(measured.COMPUTE_START_S)
+        + max(measured.TERMINAL_AFTER_S)
+        + measured.REAL_APP_INSTALL_FLOOR_S
+    )
+    assert floor <= starts.START_WAIT_TIMEOUT_S, "the find and terminal waits"
+    assert floor <= deadman.DEADMAN_START_WAIT_S, "the dead-man's start wait"
+    assert floor <= STEP_BUDGET_S["start"], "the window's start budget"
+    assert starts.START_ID_POLL_INTERVAL_S <= 5.0, "the pending id shows for about 1 s"
+
+
 # --- the quiesce-window estate (tests/fixtures/quiesce_window_estate.py) -------------------
 
 

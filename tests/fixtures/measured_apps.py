@@ -42,6 +42,10 @@ COMPUTE_START_S = (96, 108)
 PENDING_VISIBLE_S = 1
 TERMINAL_AFTER_S = (3, 6)
 STOP_S = (40, 45)
+# Not a measurement: the least every start wait and start budget keeps for the
+# real App's own install on top of the trivial App's measured start, until the
+# first governed run measures it (the window's "start" budget is 600 s).
+REAL_APP_INSTALL_FLOOR_S = 300
 # Reads after a start that show nothing of its deployment: more than one, so
 # "the start response, then one GET" never sees it, as measured.
 HIDDEN_READS = 3
