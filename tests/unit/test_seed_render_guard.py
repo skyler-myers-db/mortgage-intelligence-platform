@@ -5,7 +5,8 @@ apply would write the literal token as an operator address. This guard scans
 every module that names the seed, or could enumerate its directory, and holds
 each mention to a path read straight into render_seed_sql (the operator's
 rendering is pinned in test_lakebase_seed_operator.py). The analysis is in
-tests/fixtures/seed_render_scan.py; the reviewed sets and the cases are here.
+tests/fixtures/seed_render_scan.py and seed_inspector_reach.py; the reviewed
+sets and the cases are here.
 """
 
 from __future__ import annotations
@@ -15,12 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.seed_render_scan import (
-    ENUMERATION,
-    inspector_reaches,
-    raw_seed_uses,
-    scan_seed_uses,
-)
+from tests.fixtures.seed_inspector_reach import inspector_reaches
+from tests.fixtures.seed_render_scan import ENUMERATION, raw_seed_uses, scan_seed_uses
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -84,6 +81,8 @@ _REVIEWED_ENUMERATIONS = frozenset(
 
 _SEED_LITERAL = '"lakebase/seed_campaigns.sql"'
 _READ = f'Path({_SEED_LITERAL}).read_text(encoding="utf-8")'
+# A line that makes a module name the lakebase directory as a path, so every enumeration in it counts.
+_AWARE = "LAKEBASE = ROOT / 'lakebase'\n"
 
 
 def _in_function(body: str) -> str:
@@ -147,6 +146,36 @@ def _in_function(body: str) -> str:
         ("LAKEBASE = 'lakebase'\nfor p in ROOT.rglob('seed_*.sql'):\n    client.execute(p.read_text())\n", 0),
         ("LAKEBASE = 'lakebase'\nfor top, _dirs, files in os.walk(ROOT):\n    client.execute(files)\n", 0),
         ("for p in (ROOT / 'sql').glob('../lakebase/*.sql'):\n    client.execute(p.read_text())\n", 0),
+        # Round 4: a proven directory's name covers only what it holds itself.
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor p in staged.glob('lakebase/*.sql'):\n    client.execute(p.read_text())\n", 0),
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor p in sorted(staged.rglob('*.sql')):\n    client.execute(p.read_text())\n", 0),
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor p in staged.glob('**/*.sql'):\n    client.execute(p.read_text())\n", 0),
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor top, _dirs, files in os.walk(staged):\n    client.execute(files)\n", 0),
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor top, _dirs, files in staged.walk():\n    client.execute(files)\n", 0),
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor p in staged.glob(f'{{sub}}'):\n    client.execute(p.read_text())\n", 0),
+        (f"{_AWARE}for p in ROOT.glob(f'sql/{{name}}'):\n    client.execute(p.read_text())\n", 0),
+        # The lakebase directory copied, moved or linked under another name: no name proves anything.
+        ("def test_staged(tmp_path, client):\n    staged = tmp_path / 'checkout'\n"
+         "    shutil.copytree(ROOT / 'lakebase', staged / 'lakebase')\n"
+         "    for p in sorted(staged.glob('lakebase/*.sql')):\n        client.execute(p.read_text())\n", 0),
+        ("def test_staged(tmp_path, client):\n    shutil.copytree(ROOT / 'lakebase', tmp_path / 'sql')\n"
+         "    for p in (tmp_path / 'sql').glob('*.sql'):\n        client.execute(p.read_text())\n", 0),
+        ("def test_staged(tmp_path, client):\n    (tmp_path / 'sql').symlink_to(LAKEBASE_DIR)\n"
+         "    for p in (tmp_path / 'sql').iterdir():\n        client.execute(p.read_text())\n", 0),
+        (f"{_AWARE}def test_staged(tmp_path, client):\n    (tmp_path / 'lakebase').rename(tmp_path / 'sql')\n"
+         "    for p in (tmp_path / 'sql').iterdir():\n        client.execute(p.read_text())\n", 0),
+        # The directory spelled only in the enumeration's own expression, in a module that names no path.
+        ("from tests.fixtures.paths import LAKEBASE_DIR\nfor p in LAKEBASE_DIR.glob('*.sql'):\n"
+         "    client.execute(p.read_text())\n", 0),
+        ("def test_apply(lakebase_dir, client):\n    for p in sorted(lakebase_dir.glob('*.sql')):\n"
+         "        client.execute(p.read_text())\n", 0),
+        ("SQL_DIR = Path(os.environ.get('MIP_LAKEBASE_SQL_DIR', 'lakebase'))\n"
+         "for p in sorted(SQL_DIR.glob('*.sql')):\n    client.execute(p.read_text())\n", 0),
+        ("for p in importlib.resources.files('lakebase').iterdir():\n    client.execute(p.read_text())\n", 0),
+        ("from tests.fixtures.paths import LAKEBASE_DIR\ndef _sql_dir():\n    return LAKEBASE_DIR\n"
+         "for p in _sql_dir().glob('*.sql'):\n    client.execute(p.read_text())\n", 0),
+        ("parser.add_argument('--sql-dir', default='lakebase')\nargs = parser.parse_args()\n"
+         "for p in Path(args.sql_dir).glob('*.sql'):\n    client.execute(p.read_text())\n", 0),
     ],
     ids=[
         "comment", "two_sites", "two_sites_open", "direct", "concatenated", "transaction", "helper",
@@ -156,6 +185,12 @@ def _in_function(body: str) -> str:
         "global_text", "global_path", "nonlocal_text",
         "glob_via_dir_helper", "glob_via_parameter", "glob_via_attribute", "glob_via_imported_dir",
         "glob_via_a_rebound_name", "glob_module_form", "rglob_from_an_unknown_root", "os_walk", "pattern_escapes",
+        "a_pattern_with_its_own_directory", "rglob_from_a_proven_directory", "doublestar_from_a_proven_directory",
+        "os_walk_from_a_proven_directory", "path_walk_from_a_proven_directory", "a_formatted_pattern",
+        "a_formatted_value_holding_a_directory",
+        "copytree_then_glob", "copytree_under_another_name", "symlink_under_another_name", "rename_under_another_name",
+        "imported_dir_alone", "fixture_parameter", "environ_default", "importlib_resources_files",
+        "helper_returning_an_imported_dir", "option_default",
     ],
 )
 def test_a_raw_seed_use_is_found(source: str, reads: int) -> None:
@@ -191,12 +226,24 @@ def test_a_raw_seed_use_is_found(source: str, reads: int) -> None:
          "client.execute(sql)\n", 0),
         ("LAKEBASE = 'lakebase'\nfor node in ast.walk(tree):\n    client.execute(node)\n", 0),
         ("checks = [ClosureEntry('lakebase', 'upload')]\nfor p in root.glob('*'):\n    client.execute(p.name)\n", 0),
+        # Round 4: one level of a proven directory, a pattern whose own directory is another, a string's
+        # replace (not a move), and a label several bindings away from the operand of a link.
+        (f"{_AWARE}staged = ROOT / 'checkout'\nfor p in staged.glob('sql/*.sql'):\n    client.execute(p.read_text())\n", 0),
+        (f"{_AWARE}label = 'lakebase'.replace('lake', 'x')\nfor p in (ROOT / 'wheelhouse').iterdir():\n"
+         "    client.execute(p.name)\n", 0),
+        ("TAMPERS = {'drop': (lambda root: (root / 'source/lakebase/schema.sql').unlink(), 'gone')}\n"
+         "def test_tamper(tmp_path, client, tamper):\n    change, _message = TAMPERS[tamper]\n"
+         "    root = _built(tmp_path, change)\n    (root / 'dist/link.js').symlink_to(root / 'dist/index.html')\n"
+         "    for p in (root / 'wheelhouse').iterdir():\n        client.execute(p.name)\n", 0),
+        ("LABELS = {'lakebase': 'upload'}\nfor p in sorted(Path(os.environ['OUT']).glob('*.json')):\n"
+         "    client.execute(p.read_text())\n", 0),
     ],
     ids=[
         "direct", "named", "module_constant", "migrate_job", "live_contract", "joinpath",
         "importlib_resources", "docstring", "assert_message", "exception_text", "schema_glob",
         "another_directory", "a_named_subdirectory", "a_pattern_that_cannot_match", "dependency_label",
         "ast_walk", "label_only",
+        "a_pattern_whose_directory_is_another", "a_string_replace", "a_label_far_from_a_link", "a_json_glob",
     ],
 )
 def test_a_rendered_seed_is_not_a_raw_use(source: str, reads: int) -> None:
@@ -209,14 +256,15 @@ def test_the_raw_template_reaches_only_render_seed_sql() -> None:
     Every module that names the seed, or could enumerate its directory, is
     scanned; every mention of it in code is a path read straight into
     render_seed_sql, and a shape the scan cannot follow is red, not skipped.
-    An enumeration that can list the seed is red unless its directory is
-    proven another or it is reviewed in _REVIEWED_ENUMERATIONS. Only a
-    reviewed inspector, which executes nothing, may read it raw to look at its
-    text, and no other module may import that text from it (the next test).
-    What it cannot see: a module that never spells the seed's name in code,
-    nor the lakebase directory as a path (a whole-repo rglob, a name built
-    from pieces, a helper module handed the directory by another);
-    _SEED_READERS turns red if a known applier moves to one.
+    An enumeration that can list the seed is red unless it lists one level of
+    a directory proven another or it is reviewed in _REVIEWED_ENUMERATIONS.
+    Only a reviewed inspector, which executes nothing, may read it raw to look
+    at its text, and no other module may import that text from it (the next
+    test). What it cannot see: a module that never spells the seed's name in
+    code, nor the lakebase directory as a path or in an enumeration's own
+    expression (a whole-repo rglob, a name built from pieces, a directory
+    handed in by another module under a name without the word, a copy made by
+    a subprocess); _SEED_READERS turns red if a known applier moves to one.
     """
 
     readers: set[str] = set()
@@ -276,14 +324,38 @@ def _tracked_python(*pathspecs: str) -> list[str]:
         (f"def _init():\n    global SEED_SQL\n    SEED_SQL = {_READ}\n", {"SEED_SQL"}),
         (f"with open({_SEED_LITERAL}) as fh:\n    SEED = fh.read()\n", {"fh", "SEED"}),
         ("TEXTS = [p.read_text() for p in Path('lakebase').glob('*.sql')]\n", {"TEXTS"}),
+        # Round 4: a container store, a function's locals, a default, a store through a parameter or self.
+        (f"TEMPLATE = {_READ}\nSQL: dict[str, str] = {{}}\nSQL['seed'] = TEMPLATE\n", {"TEMPLATE", "SQL"}),
+        (f"TEMPLATE = {_READ}\nclass NS:\n    pass\nNS.seed = TEMPLATE\n", {"TEMPLATE", "NS"}),
+        (f"TEMPLATE = {_READ}\nSQL = {{}}\nSQL.update(seed=TEMPLATE)\n", {"TEMPLATE", "SQL"}),
+        (f"TEXTS = []\nTEXTS.append({_READ})\n", {"TEXTS"}),
+        (f"TEMPLATE = {_READ}\nSQL = {{}}\nSQL[TEMPLATE] = 1\n", {"TEMPLATE", "SQL"}),
+        (f"TEMPLATE = {_READ}\ndef _template_text() -> str:\n    text = TEMPLATE\n    return text\n",
+         {"TEMPLATE", "_template_text"}),
+        (f"TEMPLATE = {_READ}\ndef seed():\n    text = TEMPLATE\n    yield text\n", {"TEMPLATE", "seed"}),
+        (f"TEMPLATE = {_READ}\ndef seed(text=TEMPLATE):\n    return text\n", {"TEMPLATE", "seed"}),
+        (f"TEMPLATE = {_READ}\nCACHE = {{}}\ndef _load():\n    CACHE['seed'] = TEMPLATE\n", {"TEMPLATE", "CACHE"}),
+        (f"TEMPLATE = {_READ}\ndef fill(out):\n    out.append(TEMPLATE)\n", {"TEMPLATE", "fill"}),
+        (f"TEMPLATE = {_READ}\nclass Holder:\n    def __init__(self):\n        self.text = TEMPLATE\n",
+         {"TEMPLATE", "Holder"}),
+        (f"globals()['SEED'] = {_READ}\n", {"*"}),
+        (f"if True:\n    def _init():\n        global SEED\n        SEED = {_READ}\n", {"_init", "SEED"}),
         # What an inspector keeps to itself.
         (f"_SEED = render_seed_sql({_READ})\nOPERATOR = 'demo.operator@summit.example'\n", set()),
         (f"def test_the_seed_archives_campaigns():\n    seed = {_READ}\n    assert 'archived' in seed\n", set()),
         ("def found(node):\n    pending = [n for n in node if 'seed_campaigns' in n]\n    return len(pending)\n", set()),
+        ("def found(lines):\n    hits = [line for line in lines if 'seed_campaigns' in line]\n    return hits\n", set()),
+        (f"def rendered_seed():\n    text = render_seed_sql({_READ})\n    return text\n", set()),
+        (f"TEMPLATE = {_READ}\ndef tokens():\n    count = len(TEMPLATE)\n    return count\n", {"TEMPLATE"}),
     ],
     ids=[
         "module_text", "module_path", "alias", "returned", "fixture", "class_attribute", "global",
-        "module_with", "enumeration", "rendered_and_unrelated", "local_inspection", "a_scanner",
+        "module_with", "enumeration",
+        "subscript_store", "attribute_store", "update", "append", "a_key", "local_alias", "yielded_local",
+        "default", "a_def_storing_into_a_module_dict", "a_store_through_a_parameter", "a_store_on_self",
+        "a_dynamic_scope", "a_global_in_a_nested_def",
+        "rendered_and_unrelated", "local_inspection", "a_scanner", "a_filtered_list", "a_rendered_local",
+        "a_count",
     ],
 )
 def test_an_inspectors_exports_are_every_name_that_hands_out_the_raw_seed(source: str, exports: set[str]) -> None:
@@ -316,10 +388,17 @@ _OPERATOR_MODULE = "tests.unit.test_lakebase_seed_operator"
         f"module = importlib.import_module('{_OPERATOR_MODULE}')\n",
         "namespace = runpy.run_path(str(ROOT / 'tests/unit/test_lakebase_seed_operator.py'))\n",
         f"pytest_plugins = ['{_OPERATOR_MODULE}']\n",
+        # Round 4: a registry a loader runs, a loader that resolves an attribute, and the other loaders.
+        "MODULES = ['tests/unit/test_lakebase_seed_operator.py']\nfor rel in MODULES:\n    runpy.run_path(rel)\n",
+        f"text = pkgutil.resolve_name('{_OPERATOR_MODULE}:TEMPLATE')\n",
+        f"module = pytest.importorskip('{_OPERATOR_MODULE}')\n",
+        "exec(Path('tests/unit/test_lakebase_seed_operator.py').read_text(), namespace)\n",
+        f"from importlib import import_module as load\nmodule = load('{_OPERATOR_MODULE}')\n",
     ],
     ids=[
         "ma1_campaign_seed", "ma2_operator_template", "contract_path", "star", "relative", "module_alias",
         "dotted_module", "bare_module", "getattr", "namespace", "import_module", "run_path", "pytest_plugins",
+        "a_registry_a_loader_runs", "resolve_name", "importorskip", "exec", "an_aliased_loader",
     ],
 )
 def test_importing_an_inspectors_raw_seed_is_found(source: str) -> None:
@@ -335,11 +414,25 @@ def test_importing_an_inspectors_raw_seed_is_found(source: str) -> None:
         "# The strip rule is pinned in tests/unit/test_lakebase_seed_operator.py.\nx = 1\n",
         '"""Pinned in test_lakebase_seed_operator.py."""\n',
         'PRELUDE = """set -euo pipefail\n# its strip rule is pinned in test_lakebase_seed_operator.py\n"""\n',
+        # Round 4: a meta-test's registry names a file and loads nothing (R1, R2), even beside re.compile.
+        'WRITER_MODULES = (\n    # SEED operator env, written by lakebase_migrate.main.\n'
+        '    "tests/unit/test_lakebase_seed_operator.py",\n)\n',
+        'ALLOWED = (\n    Allowed("kind", ("a", "b"), ("tests/unit/test_lakebase_seed_operator.py",), "why"),\n)\n',
+        'PATTERN = re.compile(r"x")\nEXEMPT = {"tests/unit/test_lakebase_seed_operator.py"}\n',
+        f"text = pkgutil.resolve_name('{_OPERATOR_MODULE}:OPERATOR')\n",
     ],
-    ids=["a_constant", "a_module_attribute", "another_name", "comment", "docstring", "an_embedded_script"],
+    ids=[
+        "a_constant", "a_module_attribute", "another_name", "comment", "docstring", "an_embedded_script",
+        "an_env_leak_registry", "a_ratchet_allowance", "a_registry_beside_re_compile", "a_loader_of_another_name",
+    ],
 )
 def test_importing_anything_else_from_an_inspector_is_not(source: str) -> None:
     assert inspector_reaches(source, _EXPORTS) == []
+
+
+def test_an_inspector_that_stores_into_an_unnamed_scope_exports_every_name() -> None:
+    source = f"from {_OPERATOR_MODULE} import OPERATOR\n"
+    assert inspector_reaches(source, {"test_lakebase_seed_operator": frozenset({"*"})}) == [1]
 
 
 def test_no_module_imports_an_inspectors_raw_seed() -> None:
@@ -347,7 +440,9 @@ def test_no_module_imports_an_inspectors_raw_seed() -> None:
 
     Each inspector's exports are computed from its source, so a new one is
     covered as soon as it is written; a module that imports one, or reaches
-    the inspector's module some way the scan cannot read, is red.
+    the inspector's module some way the scan cannot read, is red. A string
+    naming an inspector counts only in a module that can load code by name,
+    so a meta-test's registry of test files is not a reach.
     """
 
     exports = {
