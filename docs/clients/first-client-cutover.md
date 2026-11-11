@@ -44,10 +44,10 @@ journals the tools write name resources: keep them in `<private-dir>`.
   newest deployment is SUCCEEDED and the App's default source is that
   deployment's source folder. Leave it stopped until step 10A.
 - **Step 3 is done** (the owner, 2026-11-06).
-- **Code on `main`:** waves 1-6 of the plan are merged except PR #334 (spike
-  S7: start proofs and the stopped-App blue) and PR #337 (spike S2: binding
-  updates), which merge before this runbook is used. Steps 10 and 12 need
-  both.
+- **Code on `main`:** waves 1-6 of the plan are merged, PR #334 (spike S7:
+  start proofs and the stopped-App blue) included, except PR #337 (spike S2:
+  binding updates and the `MIP_SALESFORCE_BINDINGS` switch), which merges
+  before this runbook is used. Steps 10 to 12 need it.
 
 ## Blockers on main (code follow-ups, not runbook steps)
 
@@ -544,7 +544,7 @@ emergency deploy of a current commit is the remedy for `closure_differs`).
 
 ### 10B. Adopt (CI): **blocked by B1 and B2**
 
-**Preconditions:** 10A; steps 7 and 8 done; #334 and #337 on `main`.
+**Preconditions:** 10A; steps 7 and 8 done; #337 on `main`.
 
 ```bash
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
