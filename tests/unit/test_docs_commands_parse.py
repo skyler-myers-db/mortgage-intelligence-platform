@@ -8,7 +8,10 @@ is checked against the real thing it names, offline:
 * ``python -m <module> ...``: the module's own argparse, through its own
   ``main``. A tool whose ``main`` takes its dependencies as arguments is
   handed factories that stop the run at the first one, so its post-parse
-  ``parser.error`` rules run too; any other tool stops right after
+  rules run too: the ``parser.error`` rules, and for the two human-run
+  bootstrap tools (``bootstrap_account``, ``github_environment``) the
+  action-flag refusals they apply before reading any input, run with a
+  terminal on stdin and no CI marker. Any other tool stops right after
   ``parse_args`` returns. Either way no Databricks, GitHub or file call is made.
 * ``./scripts/deploy.sh ...``: the script's own argument loop (the arguments,
   then ``--help``, which exits inside the loop before any call), plus the
@@ -22,8 +25,14 @@ is checked against the real thing it names, offline:
   release-only expected deployment).
 * ``gh variable set`` and ``gh secret set``: an environment-scoped write of a
   profile field of the right class, a secret never on the command line.
-* ``databricks ...``: one of the reviewed owner commands (start the App, or a
-  read), always naming the owner's CLI profile; never a deploy or a stop.
+* ``databricks ...``: one of the reviewed owner commands (start the App, a
+  read, or the owner's own short-lived Lakebase token), always naming the
+  owner's CLI profile; never a deploy or a stop.
+* ``PGPASSWORD="$(databricks ...)" ... psql ...``: the legacy owner's Lakebase
+  connection, with its values local to ``psql`` and the token from the owner's
+  CLI (a reviewed ``databricks`` command whose body fields the SDK's call
+  names), never one of the ``LAKEBASE_*`` overrides ``lakebase_handover``
+  refuses and never a token on the command line.
 * ``make <target>``: a Makefile target.
 
 Anything else in a ``bash`` block fails: a command the docs show must be one
@@ -36,6 +45,9 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
+import io
+import json
 import random
 import re
 import shlex
@@ -78,6 +90,11 @@ PLACEHOLDERS: dict[str, str] = {
     "genie-space-title": "Lender Mortgage Lead Intelligence",
     "lifecycle-job-id": "4242",
     "deployment-id": "deployment-placeholder",
+    "child-a": "artifacts",
+    "child-b": "files",
+    "lakebase-instance": "acme-app-state",
+    "lakebase-database": "acme_app",
+    "read-write-dns": "instance.database.example",
 }
 PRIVATE_DIR = "private-dir"
 
@@ -86,10 +103,22 @@ _ENV_PREFIX = re.compile(r"[A-Z_][A-Z0-9_]*=\S*")
 # The only environment a documented command may set: the owner's CLI profile.
 ALLOWED_ENV = frozenset({"DATABRICKS_CONFIG_PROFILE"})
 DEPLOY_PHASES = frozenset({"plan", "release", "data", "adopt", "unadopt"})
-# The reviewed owner CLI commands: the raw start (break-glass, cutover step 10A) and reads.
+# The reviewed owner CLI commands: the raw start (break-glass, cutover step 10A), reads,
+# and the owner's own short-lived Lakebase token (cutover step 8's psql connection).
 DATABRICKS_COMMANDS = frozenset(
-    {("apps", "start"), ("apps", "get"), ("apps", "list-deployments"), ("apps", "get-deployment")}
+    {
+        ("apps", "start"),
+        ("apps", "get"),
+        ("apps", "list-deployments"),
+        ("apps", "get-deployment"),
+        ("database", "get-database-instance"),
+        ("database", "generate-database-credential"),
+    }
 )
+# The legacy owner's psql connection: values local to psql, never a LAKEBASE_* override.
+PSQL_ENV = frozenset({"PGSSLMODE"})
+PSQL_FLAGS = frozenset({"-h", "-U", "-d"})
+_PSQL = re.compile(r'PGPASSWORD="\$\((?P<token>databricks .+?)\)" (?P<rest>.+)')
 
 
 # --------------------------------------------------------------- reading the docs
@@ -193,6 +222,43 @@ def _injected(module: str, **factories: Callable[..., Any]) -> Callable[[list[st
     return run
 
 
+class _Terminal(io.StringIO):
+    """A stdin that is a terminal, so the human-presence check passes."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _human_run(module: str, first_input: str) -> Callable[[list[str], pytest.MonkeyPatch], None]:
+    """Run a human-run tool's ``main`` with a terminal and no CI marker, stopped at its first input read.
+
+    Its action-flag refusals (``--sink`` or ``--for`` outside their actions, an
+    ``--ack-plan`` the action never takes) all run before ``first_input``, the
+    call that would read the shell and ``.env.local``; every later dependency
+    (a login, the account, GitHub) is a stop as well.
+    """
+
+    def run(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+        tool = importlib.import_module(module)
+        monkeypatch.setattr(tool, first_input, _stop)
+        stderr = io.StringIO()
+        factories: dict[str, Any] = {"open_session": _stop}
+        if hasattr(tool.Dependencies, "open_github_sink"):
+            factories["open_github_sink"] = _stop
+        deps = tool.Dependencies(
+            environ={},
+            stdin=_Terminal(),
+            stdout=io.StringIO(),
+            stderr=stderr,
+            infer_repository=lambda: "owner/repo",
+            **factories,
+        )
+        code = tool.main(argv, deps=deps)
+        raise AssertionError(f"{module} {' '.join(argv)}: refused after parsing (exit {code}): {stderr.getvalue()}")
+
+    return run
+
+
 def _estate(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     import databricks.sdk
 
@@ -205,8 +271,8 @@ def _estate(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
 # Each tool a runbook names, and how its run is stopped before any side effect.
 RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
     "tools.clients": _parse_only("tools.clients.__main__"),
-    "tools.clients.bootstrap_account": _parse_only("tools.clients.bootstrap_account"),
-    "tools.clients.github_environment": _parse_only("tools.clients.github_environment"),
+    "tools.clients.bootstrap_account": _human_run("tools.clients.bootstrap_account", "_request"),
+    "tools.clients.github_environment": _human_run("tools.clients.github_environment", "load_inputs"),
     "tools.clients.handover_uc_ownership": _injected(
         "tools.clients.handover_uc_ownership", install=_stop, workspace_factory=_stop
     ),
@@ -335,12 +401,37 @@ def _check_databricks(argv: list[str], tail: str) -> None:
     assert not tail or tail.startswith("jq "), tail
 
 
+def _check_psql(command: str, private_dir: Path) -> None:
+    """The legacy owner's connection: the token from the owner's CLI, every other value local to psql."""
+
+    assert "LAKEBASE_" not in command, f"a LAKEBASE_* override makes lakebase_handover refuse: {command}"
+    match = _PSQL.fullmatch(command)
+    assert match is not None, f"psql takes its token from the owner's CLI, never the command line: {command}"
+    env, argv, tail = _split(match["token"], private_dir)
+    assert not env, env
+    _check_databricks(argv, tail)
+    assert tuple(argv[1:3]) == ("database", "generate-database-credential") and tail == "jq -r .token", argv
+    from databricks.sdk.service.database import DatabaseAPI
+
+    body = json.loads(argv[argv.index("--json") + 1])
+    accepted = set(inspect.signature(DatabaseAPI.generate_database_credential).parameters) - {"self"}
+    assert set(body) <= accepted and len(body.get("instance_names", [])) == 1, body
+    env, argv, tail = _split(match["rest"], private_dir)
+    assert set(env) <= PSQL_ENV and not tail, (env, tail)
+    assert argv[0] == "psql", argv
+    flags = argv[1:]
+    assert len(flags) % 2 == 0 and set(flags[::2]) <= PSQL_FLAGS, flags
+
+
 def _check_make(argv: list[str]) -> None:
     assert argv[0] == "make" and len(argv) == 2, argv
     assert re.search(rf"(?m)^{re.escape(argv[1])}:", _read("Makefile")), f"no Makefile target {argv[1]}"
 
 
 def _check(command: str, private_dir: Path, monkeypatch: pytest.MonkeyPatch, *, runnable: bool) -> None:
+    if command.startswith("PG") or re.search(r"\bpsql\b", command):
+        _check_psql(command, private_dir)
+        return
     env, argv, tail = _split(command, private_dir)
     assert set(env) <= ALLOWED_ENV, env
     assert argv, command
@@ -387,7 +478,7 @@ def test_the_runbooks_show_each_kind_of_command() -> None:
     """Non-vacuity: the parsers above all run against something."""
 
     commands = [command for _, command in documented_commands()]
-    for prefix in ("python -m tools.clients", "python -m tools.databricks", "./scripts/deploy.sh", "gh workflow run deploy-dev.yml", "gh workflow run nightly.yml", "gh secret set", "databricks apps start", "make "):
+    for prefix in ("python -m tools.clients", "python -m tools.databricks", "./scripts/deploy.sh", "gh workflow run deploy-dev.yml", "gh workflow run nightly.yml", "gh secret set", "databricks apps start", " psql ", "make "):
         assert any(prefix in command for command in commands), prefix
 
 
@@ -413,6 +504,13 @@ def test_the_parse_check_refuses_a_flag_the_tool_lacks(private_dir: Path, monkey
         "python -m tools.clients.handover_uc_ownership --plan --dry-run",
         "python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256>",
         "python -m tools.clients.bootstrap_account --plan --sink nowhere",
+        "python -m tools.clients.bootstrap_account --plan --sink github-environment --interim-member <legacy-owner-email>",
+        "python -m tools.clients.bootstrap_account --apply --for rotate-adopted --ack-plan <sha256>",
+        "python -m tools.clients.github_environment --plan --ack-plan <sha256>",
+        "python -m tools.clients.archive_legacy_root --only <child-a> --apply",
+        "PGHOST=<read-write-dns> PGPASSWORD=token psql -U <legacy-owner-email>",
+        "LAKEBASE_HOST=<read-write-dns> psql -U <legacy-owner-email>",
+        'PGPASSWORD="$(databricks database generate-database-credential --json \'{"instance_names":["<lakebase-instance>"],"no_such_field":"x"}\' -p <owner-profile> -o json | jq -r .token)" psql -h <read-write-dns>',
         "./scripts/deploy.sh -t client --phase release",
         "./scripts/deploy.sh -t client --phase plan --dry-run --no-such-flag",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=adopt_live=<sha256> -f acknowledge_single_maintainer_break_glass=true",

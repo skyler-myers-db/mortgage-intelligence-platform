@@ -17,9 +17,9 @@ is not onboarded from nothing: it is **adopted**. Client #1 is that case, and
 | Stage | State on `main` |
 |---|---|
 | Profile, bootstrap, GitHub Environments | Built, and tested against fakes only (their guides record no live run yet). |
-| `phase=plan` dispatch | Built. CI only. |
-| **First install through `deploy-dev.yml`** | **Blocked.** A first install needs a bootstrap SQL warehouse (`DATABRICKS_WAREHOUSE_ID`) until its bundle apply creates its own. That name is no client profile field, so `deploy-dev.yml` carries none and the preflight refuses: `this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID ...` (exit 2, nothing changed). A profile field for it is a code follow-up. The first-install phase order is also open: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). |
-| Adopting an existing install through `deploy-dev.yml` | **Blocked** by the same warehouse refusal, by adopt-live's ack, which no dispatch input carries, and by the unverified-frontend ack its first release needs ([first-client-cutover.md](first-client-cutover.md), "Blockers"). |
+| `phase=plan` dispatch | Built, CI only, but **blocked for any client whose deployer has never applied a bundle** (a new client, or one not yet adopted): the warehouse preflight runs in every live phase, not only on a first release. Until the deployer's bundle state binds a SQL warehouse, every live plan, adopt and release refuses `this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID ...` (exit 2, nothing changed). That name is no client profile field and `deploy-dev.yml` carries none: a profile field for it is a code follow-up (B1 in [first-client-cutover.md](first-client-cutover.md), "Blockers"). An existing install that is not adopted yet refuses earlier, at the live checks (section 5). |
+| **First install through `deploy-dev.yml`** | **Blocked** by the same warehouse refusal. The first-install phase order is also open: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). The release's treatment-access converger reads the metastore's owner with a metastore-admin-only call, so a deployer that is not a metastore admin depends on spike S0(b), still owed. |
+| Adopting an existing install through `deploy-dev.yml` | **Blocked** by the same warehouse refusal (B1), by adopt-live's acks, which no dispatch input carries (B2), by the Genie pin and accepted-exposure acks the adopt phases read but cannot carry (B4), by the deploy job's shallow checkout (B5), and by the unverified-frontend ack its first release needs (B3); spike S0(b) is owed ([first-client-cutover.md](first-client-cutover.md), "Blockers"). |
 | Data phase, per-client nightly | Built. The nightly validates only a client whose catalog is `mip`. |
 | Owner hardware-key attestation (plan M1-PR5) | **Deferred.** Not built. See "Deferred" below. |
 
@@ -110,6 +110,18 @@ python -m tools.clients.github_environment --plan
 python -m tools.clients.github_environment --apply --ack-plan <sha256>
 python -m tools.clients.bootstrap_account --plan
 python -m tools.clients.bootstrap_account --apply --sink github-environment --ack-plan <sha256>
+```
+
+Before the next bootstrap run, pin by hand: copy the application id of each
+identity the apply created or adopted, from the account console, into
+`MIP_IDENTITY_IDS_JSON` in `.env.local`. The sink writes the map to an
+environment secret, which GitHub never returns, and the tool prints no id; the
+next run reads its pins from the shell or `.env.local` only and refuses an
+identity under an expected name that nothing pins ([bootstrap.md](bootstrap.md)).
+The data-owners group needs no pin: the bootstrap proves it by its deployer
+and jobs members.
+
+```bash
 python -m tools.clients.bootstrap_account --plan --for rotate-adopted
 python -m tools.clients.bootstrap_account --rotate-adopted --sink github-environment --ack-plan <sha256>
 python -m tools.clients.bootstrap_account --verify
@@ -166,6 +178,13 @@ name: `check-dispatch` in both workflows refuses every dispatch while one
 exists, and names each one (docs/deployment.md, CI deploy owner step 3).
 
 ## 4. Plan (CI only)
+
+**Blocked today for a new client** (Status, above): until its deployer's
+bundle state binds a SQL warehouse, a live plan refuses at the warehouse
+preflight (exit 2, nothing changed), and nothing in the profile or the
+dispatch can supply the bootstrap warehouse yet. The dispatch below is the one
+`main` accepts; it plans once that follow-up lands. The local dry run works
+today.
 
 The command of record is the governed dispatch, one client and one phase per
 run:

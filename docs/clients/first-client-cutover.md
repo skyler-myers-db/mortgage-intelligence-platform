@@ -51,14 +51,27 @@ journals the tools write name resources: keep them in `<private-dir>`.
 
 ## Blockers on main (code follow-ups, not runbook steps)
 
-Read against `main` plus #334 and #337, three gaps stop the governed path.
-Each is a code change; nothing in this runbook works around one.
+Read against `main` plus #334 and #337, five gaps stop the governed path, and
+one owed spike may stop it too. Each gap is a code change; nothing in this
+runbook works around one. **Do not start step 7 until B1, B2, B4 and B5 have
+landed, B3 has landed or is about to land, and S0(b) is answered:** steps 7 to 12
+run as one sequence inside a 14-day window (step 7), and a sequence started
+while 10B cannot run leaves the install half handed over.
 
 | # | Blocks | What happens | The follow-up |
 |---|---|---|---|
-| B1 | step 10 | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
-| B2 | step 10, and its rollback | adopt-live's acks have no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live`, `unadopt` and `supersede` are not among them (nor is `MIP_ADOPT_LIVE_SUPERSEDE`, which selects a supersede). A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`; an acked `phase=unadopt` refuses the same way for `MIP_ACK_UNADOPT`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `unadopt` (`MIP_ACK_UNADOPT`, phase `unadopt`) and the supersede pair to the dispatch. |
+| B1 | step 10B | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a new client's plan and first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
+| B2 | step 10B, and its rollback | adopt-live's acks have no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live`, `unadopt` and `supersede` are not among them (nor is `MIP_ADOPT_LIVE_SUPERSEDE`, which selects a supersede). A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`; an acked `phase=unadopt` refuses the same way for `MIP_ACK_UNADOPT`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `unadopt` (`MIP_ACK_UNADOPT`, phase `unadopt`) and the supersede pair to the dispatch. |
 | B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
+| B4 | step 10B, and its rollback | Two acks the adopt phases read are admitted only in other phases: `genie_pin` (`MIP_GENIE_PIN_ACK`) in `release` only, `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) in `plan` and `release` only. (a) The step-0 preflight runs `provision_genie_space --plan-pin` in every live phase (`scripts/lib/deploy_step_preflight_gates.sh`). Before adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well), and the live space carries the profile's title, so the check refuses: `one Genie space carries the governed title but no pin names it, and no ack names it`, then `the governed Genie space pin was refused before the lease` (exit 2). (b) The pre-stop probes run in `adopt` and `unadopt` and load the accepted-exposure policy with its ack required; client #1's policy is not empty (step 2), so they refuse `accepted_exposure`. A dispatch carrying either ack in an adopt phase refuses at the dispatch preflight: `genie_pin is never read by --phase adopt`. So even the first, read-only 10B dispatch stops before it prints either plan digest, and so does `phase=unadopt`. | Admit `genie_pin` and `accepted_exposure_plan` in phases `adopt` and `unadopt` (or exempt those two reads in the adopt phases). |
+| B5 | step 10B | The deploy job's checkout is shallow: `actions/checkout@v6` with no `fetch-depth` (depth 1, `.github/workflows/deploy-dev.yml`), and nothing in `scripts/` or `tools/` fetches more. adopt-live resolves the live App's health `git_sha` in that checkout (`rev-parse`, then an ancestor check against `origin/main`) and reads `app.yaml` and the closure at it. The App 10A starts reports the commit the emergency recipe last shipped, an older `main` commit that a depth-1 clone does not hold, so adopt-live refuses `health_sha_not_on_main` (`the health sha resolves to no single commit in this checkout (fetch full history)`), then `adopt-live (adopt) refused before the lease` (exit 2). docs/deployment.md ("Signing the live deployment as an adopted blue") already says a CI checkout needs the full history; the workflow does not fetch it. | Give the deploy job's checkout `fetch-depth: 0`, or fetch the health sha in the adopt phase. |
+| S0(b) | steps 10B, 11 and 12 | An owed spike, not yet a known gap. The pre-stop owner probe (in `adopt`, `plan` and `release`) and the release's treatment-access converger read the metastore with `metastores.get` as the deployer (`tools/databricks/prestop_owner_policy.py`, `tools/databricks/converge_campaign_treatment_access.py`). The SDK documents that read as metastore-admin only; the deployer is a workspace admin holding `CREATE_CATALOG`, and by decision the legacy owner stays the metastore owner. Whether a non-admin read returns the owner is spike S0(b), still owed (docs/deployment.md, "Metastore owner"). Worst case: `[mip-prestop] REFUSED: owner_policy: cannot evaluate the approved-owner policy before step 0a: ...` in 10B, plan #3 and the release, before the lease. | Measure it read-only before step 7, as an identity of the deployer's shape (a workspace admin that neither owns nor administers the metastore, for example a throwaway `mip-spike-*` service principal the owner deletes afterwards). If the read is denied, a code follow-up must read the owner another way before step 7. |
+
+The order a live `phase=adopt` run meets them: the client live checks, then
+B1 (the warehouse), then B4(a) (the Genie pin), then the pre-stop probes with
+B4(b) and S0(b), then the bind plan, then adopt-live's plan with B5, and
+last, on the acked dispatch, B2. A fix that clears one gap only moves the run
+to the next.
 
 Two smaller gaps are noted at their steps: the freeze marker needs a signing
 key no shell holds (step 1), and an open quiesce window that the owner
@@ -109,12 +122,12 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 4 | Bootstrap: identities, environments, profile | owner | ready |
 | 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
 | 6 | Plan #1 | CI | ready |
-| 7 | Unity Catalog ownership handover | owner | ready |
-| 8 | Lakebase ownership handover | owner | ready |
-| 9 | Plan #2 | CI | ready |
-| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2)** |
-| 11 | Plan #3 | CI | after 10 |
-| 12 | Release (run 1) | CI | **blocked (B3)** |
+| 7 | Unity Catalog ownership handover | owner | **wait** for the blockers (it starts the 14-day sequence) |
+| 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
+| 9 | Plan #2 | CI | **wait** (part of that sequence) |
+| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2, B4, B5; S0(b) owed)** |
+| 11 | Plan #3 | CI | after 10 (S0(b) owed) |
+| 12 | Release (run 1) | CI | **blocked (B3; S0(b) owed)** |
 | 13 | Post-release verification | agent, owner | after 12 |
 | 14 | Data phase | CI | after 13 |
 | 15 | Refresh on, after 7 green days | owner | later |
@@ -197,10 +210,17 @@ python -m tools.databricks.estate.cli --plan
 
   The first lists candidate entries read-only, as the workspace admin it names
   (`<owner-user-name>`, the caller's own user name), with placeholder `reason`
-  and `expires_at` for the owner to fill. The second reads only the profile and
-  prints the `accepted_exposure_plan` sha256 that plans and releases carry
-  (`operation_acks`, phases `plan` and `release`). See docs/deployment.md,
-  "Accepted shared-estate exposure".
+  and `expires_at` for the owner to fill. The second prints the
+  `accepted_exposure_plan` sha256 that plans and releases carry
+  (`operation_acks`, phases `plan` and `release`). It reads
+  `MIP_ACCEPTED_EXPOSURE_JSON` and `MIP_GENIE_SPACE_NAME` from the shell only,
+  never from `.env.local`: export the profile's two values in that shell for
+  that one command, or it prints the empty policy's digest, which plan #3 then
+  refuses (`accepted_exposure`). The deploy reads both from the profile. If you
+  skip the local run, take the digest from plan #3's own `accepted_exposure`
+  refusal line, which names the exact `MIP_ACK_ACCEPTED_EXPOSURE_PLAN` value
+  (one extra plan dispatch). See docs/deployment.md, "Accepted shared-estate
+  exposure".
 - **Dashboards:** pinned (default) or the one-time recreate.
 - Confirm: no metastore or catalog ownership transfer, no revoke of another
   team's grant.
@@ -258,6 +278,19 @@ python -m tools.clients.github_environment --plan
 python -m tools.clients.github_environment --apply --ack-plan <sha256>
 python -m tools.clients.bootstrap_account --plan --interim-member <legacy-owner-email>
 python -m tools.clients.bootstrap_account --apply --sink github-environment --interim-member <legacy-owner-email> --ack-plan <sha256>
+```
+
+**Then pin by hand, before the next bootstrap run.** The sink writes
+`MIP_IDENTITY_IDS_JSON` to an environment secret, which GitHub never returns,
+and the tool prints no id. The next bootstrap run reads its pins from the shell
+or `.env.local` only, and refuses an identity under an expected name that
+nothing pins ([bootstrap.md](bootstrap.md)). Copy the application id of each
+identity the apply created or adopted, from the account console, into
+`MIP_IDENTITY_IDS_JSON` in `.env.local`. The data-owners group needs no pin:
+the bootstrap proves it by its deployer and jobs members. Steps 7 and 8 read
+the same local pins (`deployer`, `jobs`).
+
+```bash
 python -m tools.clients.bootstrap_account --plan --for rotate-adopted --interim-member <legacy-owner-email>
 python -m tools.clients.bootstrap_account --rotate-adopted --sink github-environment --interim-member <legacy-owner-email> --ack-plan <sha256>
 python -m tools.clients.bootstrap_account --verify --interim-member <legacy-owner-email>
@@ -336,12 +369,30 @@ gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f ac
 **Proof (step summary):** the OIDC proof passes (the profile's deployer, in
 `admins`, on the profile's workspace and metastore: this also answers spike
 S5, the federation audience); the dispatch preflight prints the profile ack
-and the environment-protection result; then the client live checks refuse
-with two lines that both mean "not adopted yet", and the run stops there
-(exit 2, nothing changed): `adoption: existing install not adopted` and
-`install marker: MIP_DEFAULT_CATALOG exists without mip.install_key` (an
-install from before the marker: "adopt it first"). That is the expected
-outcome, and on `main` the only refusals plan #1 can show: the live checks run
+and the environment-protection result; then the client live checks refuse,
+and the run stops there (exit 2, nothing changed). The expected set:
+
+- `adoption: existing install not adopted` (the App exists, the deployer's
+  state binds none);
+- the install marker as the deployer can read it. Before step 7 the deployer
+  holds no privilege on `<catalog>` (the legacy owner owns it, with no
+  deployer grant), and the marker check reads the catalog as the deployer, so
+  expect `install marker: could not be read (PermissionDenied); refusing
+  rather than reading it as absent` (the error class may differ). If the API
+  hides the catalog instead (`NotFound`), there is no marker line, and the
+  storage-root check runs as for a first install: unless
+  `MIP_UC_CATALOG_STORAGE_ROOT` is set, a metastore without a default storage
+  root then adds `storage root: the metastore has no default storage root
+  ...`. Here that line judges a create that never happens, and it goes away
+  at plan #2. If the deployer can read the catalog after all, the marker line
+  is the one plan #2 shows (below); find out which grant allows it before
+  step 7.
+
+The two-line set of an unadopted install from before the marker (`adoption:
+...` plus `install marker: MIP_DEFAULT_CATALOG exists without
+mip.install_key`, "adopt it first") first appears at plan #2, once step 7 has
+made `<prefix>-data-owners`, which holds the deployer, the catalog's owner.
+On `main` these are the only refusals plan #1 can show: the live checks run
 before the pre-stop probes, so the plan's other expected refusals (UC owner
 policy, Lakebase executor) are not reached until the adopt phase. The public
 summary leaks no identifier.
@@ -351,9 +402,9 @@ name (delete it, step 4); `environment_protections_drift` (re-run
 `github_environment`); `environment_protections_unreadable` (spike S8(a) owed:
 a mutating phase then needs `protections_unverified_ack=<sha256>`, the exact
 ack the refusal prints); an OIDC proof mismatch, `tree_scan`, or any live-check
-line other than those two (the Cotality share, the storage root, the account
-principal, a marker naming another install): **stop the cutover** and fix the
-cause.
+line outside the expected set above (the Cotality share, the account
+principal, a marker naming another install, a storage root that differs from
+an existing catalog's): **stop the cutover** and fix the cause.
 
 **Rollback:** read-only.
 
@@ -363,9 +414,31 @@ cause.
 go-ahead, with the owner's profile). **Announce** steps 7 to 12 to the owner
 and peers as one contiguous sequence; the App stays stopped until step 10A.
 
-**Preconditions:** step 6 showed only the two not-adopted lines; the interim
-membership (step 4) is in place. Pairs expire within 14 days, so steps 7 to 12
-must finish inside that window.
+**Preconditions:**
+
+- **Every blocker of steps 10B and 12 has landed on `main`** (B1, B2, B4 and
+  B5, and B3, or B3 is about to land before step 12), and spike S0(b) is
+  answered with a read that returns the owner, or its follow-up has landed
+  (Blockers, above). This step starts a sequence that must finish inside the
+  pairs' 14 days; started while 10B cannot run, it leaves UC (and, after
+  step 8, Lakebase) handed over with no adoption to follow.
+- Step 6 showed only the expected set; the interim membership (step 4) is in
+  place.
+
+**The 14-day window.** Pairs expire at most 14 days ahead (`--interim-days`,
+1 to 14). An expired pair refuses `handover_uc_ownership --plan` and `--verify`
+(`interim_pair_expired`) and the pre-stop owner policy. If the sequence will
+overrun, renew before the expiry:
+
+1. re-run `handover_uc_ownership --plan --report-out <private-dir>/uc-plan.json`
+   (the commands below; the report is written even when the plan refuses), and
+   take its fresh `interim_owner_pairs_json`;
+2. replace `MIP_UC_INTERIM_OWNER_PAIRS_JSON` in `.env.local` with it, and
+   re-run `github_environment --plan` and `--apply --ack-plan <sha256>` (with
+   `--rotate` on both if the plan asks for it) so the environment secret and
+   the recorded profile digest follow;
+3. dispatch a plan and use the profile ack it prints: the profile changed, so
+   the old ack no longer matches.
 
 ```bash
 DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --plan --report-out <private-dir>/uc-plan.json
@@ -421,9 +494,22 @@ preconditions, read-only:
 DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_handover --preconditions --report-out <private-dir>/lakebase-preconditions-report
 ```
 
-Run in `psql` (docs/runbook.md, section 1.2, shows the connection), as the
-legacy owner, **exactly** the SQL it prints, then re-run `--preconditions`
-until it prints `-- Every precondition holds.` It prints, in order, only the
+Run in `psql`, as the legacy owner, **exactly** the SQL it prints, then re-run
+`--preconditions` until it prints `-- Every precondition holds.` Connect with
+values local to the `psql` command, never with the four `LAKEBASE_*` names
+(exported in this shell, they make the next `--preconditions` refuse): read the
+instance's host, then connect with a fresh OAuth token from your own CLI
+profile, which never reaches the shell history or the screen:
+
+```bash
+databricks database get-database-instance <lakebase-instance> -p <owner-profile> -o json | jq -r .read_write_dns
+PGPASSWORD="$(databricks database generate-database-credential --json '{"instance_names":["<lakebase-instance>"],"request_id":"mip-cutover-step-8"}' -p <owner-profile> -o json | jq -r .token)" PGSSLMODE=require psql -h <read-write-dns> -U <legacy-owner-email> -d <lakebase-database>
+```
+
+`<lakebase-instance>` and `<lakebase-database>` are the profile's
+`MIP_LAKEBASE_INSTANCE` and `LAKEBASE_DATABASE`; `<read-write-dns>` is what the
+first command printed. The token is short-lived: reconnect the same way when it
+expires. `--preconditions` prints, in order, only the
 steps that do not hold yet; their shapes, with `<deployer>` the deployer's
 Postgres role (its application id), which the tool fills from the profile:
 
@@ -493,9 +579,13 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_hando
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true
 ```
 
-**Proof:** exactly the two not-adopted lines, as in step 6; nothing new, and
-nothing else refuses: the handovers changed no profile field the live checks
-read. A `plan` cannot show more of an unadopted install. The adoption's own
+**Proof:** exactly the two not-adopted lines, `adoption: existing install not
+adopted` and `install marker: MIP_DEFAULT_CATALOG exists without
+mip.install_key`. The marker line is new since step 6 (the deployer can now
+read the catalog through `<prefix>-data-owners`), and any step-6 marker read
+refusal or storage-root line is gone. Nothing else refuses: the handovers
+changed no profile field the live checks read. A `plan` cannot show more of an
+unadopted install. The adoption's own
 read-only readout (the bind plan, the pre-stop probes in their adopt mode and
 adopt-live's preconditions) is step 10B's first dispatch, which needs the
 running App of step 10A.
@@ -509,7 +599,10 @@ the cause.
 
 adopt-live signs only a **running** App: a stopped App has no active
 deployment and refuses `deployment_unstable`. Immediately before 10B the owner
-starts it, raw, with their own profile. The start creates a new SNAPSHOT
+starts it, raw, with their own profile. **Do not start it while any 10B
+blocker stands** (B1, B2, B4, B5, or an unanswered S0(b)): 10B would refuse
+before the lease, and the App, which the owner keeps stopped until 10B can
+follow, would be up with nothing to adopt it. The start creates a new SNAPSHOT
 deployment of the App's default-source folder (spike S7), which adopt-live then
 checks (`tree_drift`: the folder and its snapshot must digest equal).
 
@@ -542,22 +635,32 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_verif
 again if the owner wants it stopped, and fix the folder first (a fresh
 emergency deploy of a current commit is the remedy for `closure_differs`).
 
-### 10B. Adopt (CI): **blocked by B1 and B2**
+### 10B. Adopt (CI): **blocked by B1, B2, B4 and B5; S0(b) owed**
 
-**Preconditions:** 10A; steps 7 and 8 done; #337 on `main`.
+**Preconditions:** 10A; steps 7 and 8 done; #337 on `main`; B1, B2, B4 and
+B5 fixed on `main`, and S0(b) answered (Blockers, above).
 
 ```bash
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="adopt_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
 ```
 
-The first run is read-only (the readout plan #2 cannot give): it prints the
-adopt plan's sha256 and adopt-live's plan sha256 and stops before the lease.
-Expect 16 legacy keys to bind, 2 planned creates, no delete, recreate or
-instance change, the dashboards `pinned_permanent`, and `s7_default_source:
-not_settable`. The second binds the 16 legacy keys into the deployer's state, judges the post-bind plan in adopt mode,
-then (B2) needs adopt-live's ack too, which no dispatch input carries today.
-Once B2 is fixed it copies the live folder create-only into the deployer's
+These are the dispatches as `main` accepts them today, and on `main` both
+refuse before the lease. In order: B1 (the warehouse), B4(a) (the Genie pin:
+`one Genie space carries the governed title but no pin names it, and no ack
+names it`), B4(b) (`[mip-prestop] REFUSED: accepted_exposure`), S0(b) at worst
+(`owner_policy`), and B5 (`health_sha_not_on_main`). Each follow-up that
+fixes a gap may add an input to these dispatches (B4's acks in
+`operation_acks`, B2's adopt-live ack); use the dispatch its PR documents.
+
+Once those land, the first run is read-only (the readout plan #2 cannot give):
+it prints the adopt plan's sha256 and adopt-live's plan sha256 and stops
+before the lease. Expect 16 legacy keys to bind, 2 planned creates, no delete,
+recreate or instance change, the dashboards `pinned_permanent`, and
+`s7_default_source: not_settable`. The second binds the 16 legacy keys into
+the deployer's state, judges the post-bind plan in adopt mode, then needs
+adopt-live's ack too, which no dispatch input carries until B2 lands. It then
+copies the live folder create-only into the deployer's
 `app-src/adopted-<id12>-<digest12>`, re-hashes it and signs one v7 core record.
 It never stops, starts or deploys the App. Do not pass
 `expected_active_deployment_sha256`: it is release-only, and an adopt dispatch
@@ -568,7 +671,10 @@ the 2 jobs the legacy install never had; the active deployment is unchanged (the
 10A start); the record verifies; `frontend_provenance` is reported
 (`unverified` in CI, see B3).
 
-**Refusals:** bind plan: `missing`, `renamed`, `foreign_bound`,
+**Refusals:** before the bind plan: the warehouse (B1), the Genie pin (B4(a),
+exit 2: `the governed Genie space pin was refused before the lease`), and the
+pre-stop probes (`[mip-prestop] REFUSED: <code>`; `accepted_exposure` is
+B4(b), `owner_policy` may be S0(b)); bind plan: `missing`, `renamed`, `foreign_bound`,
 `bound_elsewhere`, `duplicate_id`, `deployer_state_orphan`,
 `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
 `state_mismatch`, `malformed_state`, `read_failed`; post-bind gate:
@@ -576,7 +682,7 @@ the 2 jobs the legacy install never had; the active deployment is unchanged (the
 `dashboard_move`, `rename_collision`; adopt-live: `deployment_unstable`,
 `env_names_not_proxyless`, `bindings_invalid`, `bindings_differ`,
 `acl_unreadable`, `treatment_unverified`, `health_unreadable`,
-`main_unresolved`, `source_not_on_main`, `health_sha_not_on_main`,
+`main_unresolved`, `source_not_on_main`, `health_sha_not_on_main` (B5 in CI),
 `tree_drift`, `app_yaml_differs`, `closure_differs`, `record_present`,
 `tier_agentic`. Each is in docs/deployment.md ("Adopting an existing install",
 "Signing the live deployment as an adopted blue"). Exit 3 from the bind: its
@@ -584,8 +690,12 @@ undo is unproven; dispatch `phase=unadopt`.
 
 **Rollback:** dispatch `phase=unadopt` (with its own acks: `adopt_plan` for
 its unbind plan and, once B2 is fixed, adopt-live's `unadopt` ack): the exact
-unbind plus a tombstone record version. Nothing is deleted. While B2 stands, an
-acked adopt refuses before the lease, so there is nothing to roll back.
+unbind plus a tombstone record version. Nothing is deleted. `phase=unadopt`
+meets B4 as well (the same Genie pin check and pre-stop probes, and no
+record names the space until adopt-live signs one), so it needs B4's fix too.
+While B1, B4 or B5 stands, every adopt dispatch refuses before the bind, and
+while B2 stands an acked adopt refuses before the lease, so there is nothing to
+roll back.
 
 ## Step 11. Plan #3
 
@@ -613,15 +723,19 @@ refuses.
 
 **Refusals:** `window_budget_refused`, `window_migration_refused`,
 `window_start_source_drift`, `window_journal_open`, `window_facts_incomplete`
-(docs/deployment.md, "Keep blue serving"); `accepted_exposure`; a Genie pin
-refusal (exit 10) prints the `genie_pin` digest the release then carries.
+(docs/deployment.md, "Keep blue serving"); `accepted_exposure` (the ack is
+missing or names another plan: the refusal line names the exact digest);
+`owner_policy` (`cannot evaluate`: spike S0(b)'s worst case, stop). No Genie
+pin refusal is expected: after 10B the adopted v7 record names the space the
+App binds (`genie_space_id`), and the pin check uses it. A pin refusal here
+(the record and a pin disagree, or the space is gone) means stop and read it.
 
 **Rollback:** read-only.
 
-## Step 12. Release (run 1): **blocked by B3**
+## Step 12. Release (run 1): **blocked by B3; S0(b) owed**
 
-**Who:** CI. **Preconditions:** step 11 clean; the App running; the Genie
-budget restored; the announcement made.
+**Who:** CI. **Preconditions:** step 11 clean; B3 fixed on `main`; the App
+running; the Genie budget restored; the announcement made.
 
 ```bash
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="quiesce_window=<sha256> accepted_exposure_plan=<sha256>" -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true
@@ -652,7 +766,9 @@ PAUSED; the runtime secrets and the pii-salt were not rewritten; observed
 downtime equals the predicted window plus one rollover.
 
 **Refusals:** the pre-stop probe codes (`[mip-prestop] REFUSED: <code>`, before
-the lease, App untouched); `window_unacked` (the digest moved: plan and ack
+the lease, App untouched; `owner_policy` with `cannot evaluate` is S0(b)'s
+worst case, and the release's treatment-access converger reads the metastore
+the same way); `window_unacked` (the digest moved: plan and ack
 again); the release postflight's live run_as check (exit 4, before any grant,
 when a jobs-identity job or the pipeline does not run as the jobs identity);
 `no_rollback_proof`, `unverified_frontend_unacked` (B3).
@@ -739,21 +855,40 @@ recipients only. **Rollback:** set it back to `off` and release.
 
 **Who:** the owner (or an agent with the owner's approval and profile).
 
+It copies top-level children of the legacy root into
+`<deployer root>/legacy-archive/<leaf>/` create-only and byte-verified, and
+never deletes. Its protected paths are the legacy root's `state` folder (always:
+`phase=unadopt` reads it) and every workspace path a resource the deployer's
+state binds still uses (each dashboard's file, so the pinned dashboards'
+folder; the App's default and deployed source folders; the paths a bound job,
+pipeline or experiment names). A child that holds or lies inside a protected
+path refuses (`bound_path`), and **one such child refuses the whole plan**, so
+a run without `--only` (every child) always refuses. First take the inventory:
+
 ```bash
-DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --report-out <private-dir>/archive-plan.json
-DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --apply --ack-plan <sha256>
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --report-out <private-dir>/archive-inventory.json
 ```
 
-It copies the legacy root's top-level children into
-`<deployer root>/legacy-archive/<leaf>/` create-only and byte-verified, and
-never deletes. It refuses any path a bound resource still uses (`bound_path`):
-the pinned dashboards' folder stays where it is. Keep the legacy deployment's
-source folder until a governed capture supersedes the adopted record (narrow
-with `--only <name>`). Removing the originals is the owner's, from the plan's
-list.
+It exits 2 with `bound_path` lines, as expected; its private report lists
+every child (`moves`, in order) and names each refused one by its position
+(`move.<n>`). Then plan and apply with one `--only <name>` for each child that
+is not protected: never `state`, the child holding `MIP_DASHBOARD_PARENT_PATH`,
+or a child holding an App source folder, and, until a governed capture
+supersedes the adopted record, not the legacy deployment's source folder
+either. The apply must repeat the plan's exact `--only` set: the digest covers
+the moves.
 
-**Proof:** the copied set intersects no bound path; plan still clean; the
-active deployment and the record unaffected. **Rollback:** nothing was moved.
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --only <child-a> --only <child-b> --report-out <private-dir>/archive-plan.json
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --only <child-a> --only <child-b> --apply --ack-plan <sha256>
+```
+
+Removing the originals is the owner's, from the plan's list.
+
+**Proof:** the narrowed plan exits 0 with no refusal; the apply reports
+`archived: <n> copied, <m> already archived; nothing was deleted`; a re-run
+of the same plan is still clean; the active deployment and the record are
+unaffected. **Rollback:** nothing was moved.
 
 ## Step 17. Owner legacy deletions
 
