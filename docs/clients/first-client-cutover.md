@@ -53,8 +53,8 @@ journals the tools write name resources: keep them in `<private-dir>`.
 
 Read against `main` (which holds #334 and #337), these gaps stop the governed path, and
 one owed spike may stop it too. Each gap is a code change; nothing in this
-runbook works around one. B2, B4(a), B4(b) and B6 are fixed on `main` (their
-rows stay for the record). **Do not start step 7 until B1, B4(c) and B5 have
+runbook works around one. B2, B4 (all three parts) and B6 are fixed on `main` (their
+rows stay for the record). **Do not start step 7 until B1 and B5 have
 landed, B3 has landed or is about to land, and S0(b) is answered:** steps 7 to 12
 run as one sequence inside a 14-day window (step 7), and a sequence started
 while 10B cannot run leaves the install half handed over.
@@ -64,7 +64,7 @@ while 10B cannot run leaves the install half handed over.
 | B1 | step 10B | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a new client's plan and first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
 | B2 | fixed | `operation_acks` carries adopt-live's acks: `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `supersede` (`MIP_ACK_SUPERSEDE`, `adopt`) with its selector `supersedes_deployment` (`MIP_ADOPT_LIVE_SUPERSEDE`, `adopt`: the sha256 of the adopted record's deployment id, a digest and never a switch), and `unadopt` (`MIP_ACK_UNADOPT`, `unadopt`). The carrier checks each entry alone: the bind's `adopt_plan` without adopt-live's ack still refuses before the lease (`the adopt needs the adopt-live ack as well`), and a selector that names no adopted record refuses in adopt-live (`supersede_mismatch`). | Fixed on `main`. Step 10B's dispatches, its supersede remedy and its rollback carry them. |
 | B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
-| B4 | step 10B, and its rollback | (a) and (b) are fixed: `genie_pin` (`MIP_GENIE_PIN_ACK`) and `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) are admitted in `plan`, `release`, `adopt` and `unadopt` (never `data`), for the two readers the adopt phases reach: the step-0 Genie pin check (`provision_genie_space --plan-pin`, no phase guard, `scripts/lib/deploy_step_preflight_gates.sh`) and the pre-stop probes in their adopt mode. So 10B-0 refuses at the pin check and prints the pin plan's sha256, and 10B-1 carries it. **(c) remains:** before an adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well), and the adopt phases' bundle plan (`install_state_adopt`'s `bundle_env plan`), its binds and adopt-live's bundle summary refuse an unpinned space whatever `genie_pin` says: `no pin names the governed Genie space yet` (exit 2, before the lease). `phase=unadopt` meets it too while no record names the space. | (c) is the next follow-up PR (not in the carrier fix): `bundle_env` honours the exact `MIP_GENIE_PIN_ACK` for the one title match, in the adopt phases' own calls only. |
+| B4 | fixed | (a) and (b): `genie_pin` (`MIP_GENIE_PIN_ACK`) and `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) are admitted in `plan`, `release`, `adopt` and `unadopt` (never `data`), for the two readers the adopt phases reach: the step-0 Genie pin check (`provision_genie_space --plan-pin`, no phase guard, `scripts/lib/deploy_step_preflight_gates.sh`) and the pre-stop probes in their adopt mode. So 10B-0 refuses at the pin check and prints the pin plan's sha256, and 10B-1 carries it. (c): before an adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well), so the adopt phases' bundle plan (`install_state_adopt`'s `bundle_env plan`), its binds and unbinds and adopt-live's bundle summary refused `no pin names the governed Genie space yet` (exit 2) whatever `genie_pin` said. Those calls, and no others, now pass `bundle_env --adopt-acked-genie-pin`: while nothing pins a space, bundle_env binds the one title match whose pin plan sha256 is that exact `genie_pin`, through the step-0 check's own resolution (a pin always wins; no ack, another plan's ack, no title match or two of them refuse). bundle_env builds the deployer's client the provisioner's way, so it recomputes the very digest 10B-0 printed. Nothing writes a pin: adopt-live's signed v7 record then names the space (`genie_space_id`), and no later dispatch needs `genie_pin`. Each of those calls re-resolves the match, so a direct `CAN_MANAGE` change mid-run refuses (10B, Refusals). | Fixed on `main`: (a) and (b) by the carrier fix, (c) by the acked title pin. `phase=unadopt` reads the same `genie_pin` while no record names the space (10B, Rollback). |
 | B5 | step 10B | The deploy job's checkout is shallow: `actions/checkout@v6` with no `fetch-depth` (depth 1, `.github/workflows/deploy-dev.yml`), and nothing in `scripts/` or `tools/` fetches more. adopt-live resolves the live App's health `git_sha` in that checkout (`rev-parse`, then an ancestor check against `origin/main`) and reads `app.yaml` and the closure at it. The App 10A starts reports the commit the emergency recipe last shipped, an older `main` commit that a depth-1 clone does not hold, so adopt-live refuses `health_sha_not_on_main` (`the health sha resolves to no single commit in this checkout (fetch full history)`), then `adopt-live (adopt) refused before the lease` (exit 2). docs/deployment.md ("Signing the live deployment as an adopted blue") already says a CI checkout needs the full history; the workflow does not fetch it. | Give the deploy job's checkout `fetch-depth: 0`, or fetch the health sha in the adopt phase. |
 | B6 | step 11 | Fixed. Plan #3 plans run 1's WR2 window, and it always exited 2: `quiesce_window` was release-only, so a plan could not carry the window's ack and the pre-lease window plan refused `window_unacked`; and the window's admission was judged against the plan job's own 30 minutes, which admit no window (each needs about an hour), so an acked plan would still refuse `window_budget_refused`. Plan #3 never printed the active deployment's sha256 or published the PlanReport step 12 needs. | Fixed on `main`: a plan carries `quiesce_window` (read-only) and forecasts the window's admission for a release dispatched now; step 11 is two dispatches. A release refuses an unacked or unadmitted window exactly as before. |
 | S0(b) | steps 10B, 11 and 12 | An owed spike, not yet a known gap. The pre-stop owner probe (in `adopt`, `plan` and `release`) and the release's treatment-access converger read the metastore with `metastores.get` as the deployer (`tools/databricks/prestop_owner_policy.py`, `tools/databricks/converge_campaign_treatment_access.py`). The SDK documents that read as metastore-admin only; the deployer is a workspace admin holding `CREATE_CATALOG`, and by decision the legacy owner stays the metastore owner. Whether a non-admin read returns the owner is spike S0(b), still owed (docs/deployment.md, "Metastore owner"). Worst case: `[mip-prestop] REFUSED: owner_policy: cannot evaluate the approved-owner policy before step 0a: ...` in 10B, plan #3 and the release, before the lease. | Measure it read-only before step 7, as an identity of the deployer's shape (a workspace admin that neither owns nor administers the metastore, for example a throwaway `mip-spike-*` service principal the owner deletes afterwards). If the read is denied, a code follow-up must read the owner another way before step 7. |
@@ -72,10 +72,31 @@ while 10B cannot run leaves the install half handed over.
 The order a live `phase=adopt` run meets them: the client live checks, then
 B1 (the warehouse), then the Genie pin check (10B-0's expected stop; 10B-1's
 `genie_pin` clears it), then the pre-stop probes (`accepted_exposure_plan`
-clears the exposure check; S0(b) may still refuse), then the bind plan with
-B4(c), then adopt-live's plan with B5. Nothing of B2 is left on the acked
-dispatch. A fix that clears one gap only moves the run
-to the next.
+clears the exposure check; S0(b) may still refuse), then the bind plan (which
+binds the title match `genie_pin` names: B4(c) is fixed), then adopt-live's
+plan with B5. Nothing of B2 is left on the acked dispatch. A fix that clears
+one gap only moves the run to the next.
+
+**10B walked with #344, #345, #346 and B4(c) all on `main`** (read offline,
+against the code of all four; B5 is on `main` already, #343). B1 no longer
+stops it: the adopt phases read no SQL warehouse (#344). The pin check stops
+10B-0 by design and prints the pin plan; `genie_pin` clears it. The pre-stop
+probes read the metastore's owner from its summary (#346, S0(b)), and
+`metastore_authority` (S0(b′)) passes with the owner's `metastore_app_grants`
+attestation, which #346's dispatch lines add to every 10B dispatch. The bind
+plan binds the acked title match (B4(c)); adopt-live's plan resolves the live
+health sha in main's full history (B5). Under the lease, the binds, the
+post-bind plan and adopt-live's bundle summary bind the same match, and
+adopt-live signs the v7 record that pins the space. **No known code gap is
+left on 10B's path:** 10B-1 ends with the adopt plan's and adopt-live's
+digests, and 10B-2 runs to the signed record. What can still refuse is the
+install's own state, each named at 10B: a Genie holder the owner-equivalent
+probe does not approve (`owner_equivalent`, which 10B-0's review counts), a
+holder that changes after 10B-0 (`the ack names another plan`), a Genie turn
+over budget (the adopt phases' probes ask one real turn), and adopt-live's
+checks of the live App (`bindings_differ`, `tree_drift`, `closure_differs`,
+...). B3 does not stop 10B (the record's frontend reads `unverified`); it
+stops step 12.
 
 Two smaller gaps are noted at their steps: the freeze marker needs a signing
 key no shell holds (step 1), and an open quiesce window that the owner
@@ -129,7 +150,7 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 7 | Unity Catalog ownership handover | owner | **wait** for the blockers (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
-| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B4(c), B5; S0(b) owed)** |
+| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B5; S0(b) owed)** |
 | 11 | Plan #3 | CI | after 10 (S0(b) owed) |
 | 12 | Release (run 1) | CI | **blocked (B3; S0(b) owed)** |
 | 13 | Post-release verification | agent, owner | after 12 |
@@ -425,7 +446,7 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 
 **Preconditions:**
 
-- **Every blocker of steps 10B and 12 has landed on `main`** (B1, B4(c) and
+- **Every blocker of steps 10B and 12 has landed on `main`** (B1 and
   B5, and B3, or B3 is about to land before step 12), and spike S0(b) is
   answered with a read that returns the owner, or its follow-up has landed
   (Blockers, above). This step starts a sequence that must finish inside the
@@ -609,7 +630,7 @@ the cause.
 adopt-live signs only a **running** App: a stopped App has no active
 deployment and refuses `deployment_unstable`. Immediately before 10B the owner
 starts it, raw, with their own profile. **Do not start it while any 10B
-blocker stands** (B1, B4(c), B5, or an unanswered S0(b)): 10B would refuse
+blocker stands** (B1, B5, or an unanswered S0(b)): 10B would refuse
 before the lease, and the App, which the owner keeps stopped until 10B can
 follow, would be up with nothing to adopt it. The start creates a new SNAPSHOT
 deployment of the App's default-source folder (spike S7), which adopt-live then
@@ -644,9 +665,9 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_verif
 again if the owner wants it stopped, and fix the folder first (a fresh
 emergency deploy of a current commit is the remedy for `closure_differs`).
 
-### 10B. Adopt (CI): **blocked by B1, B4(c) and B5; S0(b) owed**
+### 10B. Adopt (CI): **blocked by B1 and B5; S0(b) owed**
 
-**Preconditions:** 10A; steps 7 and 8 done; B1, B4(c) and B5 fixed on
+**Preconditions:** 10A; steps 7 and 8 done; B1 and B5 fixed on
 `main`, and S0(b) answered (Blockers, above). Every dispatch below carries the
 `accepted_exposure_plan` digest of step 2.
 
@@ -703,6 +724,10 @@ on only if:
 
 The digest binds that candidate, those holders and the deployer: if a holder
 changes before 10B-1, 10B-1 refuses `the ack names another plan`; review again.
+The adopt phases' bundle calls recompute it too, each one afresh (the bind
+plan, every bind, the post-bind plan, adopt-live's bundle summary and an
+undo's unbinds), until adopt-live's signed record pins the space: keep the
+space's grants as they are from this review until 10B-2 has ended.
 
 **10B-1, read-only: the adopt plans.**
 
@@ -710,8 +735,8 @@ changes before 10B-1, 10B-1 refuses `the ack names another plan`; review again.
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="genie_pin=<sha256> accepted_exposure_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
 ```
 
-Until B4(c) lands this refuses at the bind plan (`no pin names the governed
-Genie space yet`). Once it has, the run gives the readout plan #2 cannot: it
+Its bind plan binds the title match that `genie_pin` names (B4(c), fixed),
+so the run gives the readout plan #2 cannot: it
 prints the adopt plan's sha256 and adopt-live's `adopt_live` plan sha256 and
 stops before the lease. Expect 16 legacy keys to bind, 2 planned creates, no
 delete, recreate or instance change, the dashboards `pinned_permanent`, and
@@ -743,8 +768,11 @@ the 2 jobs the legacy install never had; the active deployment is unchanged (the
 stop, and at 10B-1 `the ack names another plan` when the plan moved), and the
 pre-stop probes (`[mip-prestop] REFUSED: <code>`; `accepted_exposure` names the
 exact digest when the ack is missing or another plan's, `owner_policy` may be
-S0(b)); bind plan: `no pin names the governed Genie space yet` (B4(c), until it
-lands), `missing`, `renamed`, `foreign_bound`,
+S0(b)); bind plan: `governed Genie binding verification failed` with `the ack
+names another plan` (a direct holder of the space changed after 10B-0: review
+again), `no Genie space carries the governed title` or `2 Genie spaces carry
+the governed title` (the title match is gone, or doubled),
+`missing`, `renamed`, `foreign_bound`,
 `bound_elsewhere`, `duplicate_id`, `deployer_state_orphan`,
 `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
 `state_mismatch`, `malformed_state`, `read_failed`; post-bind gate:
@@ -760,6 +788,23 @@ without its `adopt_live` pair: `the adopt needs the adopt-live ack as well`.
 Each is in docs/deployment.md ("Adopting an existing install",
 "Signing the live deployment as an adopted blue"). Exit 3 from the bind: its
 undo is unproven; dispatch `phase=unadopt`.
+
+**A Genie holder that changes mid-run.** Until adopt-live signs, every bundle
+call of 10B-2 re-resolves the Genie title match (the space list, the space's
+permissions and the deploying identity): each bind, the post-bind plan,
+adopt-live's bundle summary, and the undo's unbinds. A direct `CAN_MANAGE`
+holder added or removed while 10B-2 runs makes the pin plan another one, so
+the next of those calls refuses `the ack names another plan`. Among the binds,
+that refusal starts the undo, whose unbinds refuse the same way: the run ends
+exit 3, **half-bound** (the private report names the keys the state may still
+bind), with the App untouched and no record written. Recover with
+`phase=unadopt` and a **fresh** `genie_pin`: review the space again as in
+10B-0 (the unadopt's read-only dispatch without `genie_pin` refuses at the pin
+check and prints the new digest), then run the unadopt dispatches of the
+rollback below with that digest. A change that lands at adopt-live's bundle
+summary, after the binds, refuses `bindings_differ` (`the bundle summary
+failed`): no record is written and the binds stay as acknowledged, so re-run
+10B-2, or unadopt, each with a fresh `genie_pin`.
 
 **Supersede** (the adopted record names an older deployment than the one the
 App now serves, for example after the owner break-glass; `record_present` and
@@ -782,15 +827,18 @@ gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=unadopt -f
 ```
 
 While no signed record names the space (an adopt that stopped before
-adopt-live signed, the bind's exit-3 undo included), the unadopt meets the
-Genie pin check and B4(c) as 10B does: review a fresh pin plan as in 10B-0 and
-add its `genie_pin=<sha256>` to both dispatches, the acked one then being:
+adopt-live signed, the bind's exit-3 undo included), the unadopt needs
+`genie_pin` as 10B does: the step-0 pin check refuses without it, and its
+unbind plan and unbinds bind the acked title match (B4(c)). Review a fresh pin
+plan as in 10B-0 (a new one whenever a holder changed, as in the exit-3 case
+above) and add its `genie_pin=<sha256>` to both dispatches, the acked one then
+being:
 
 ```bash
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=unadopt -f owner_attestation=<profile-ack> -f operation_acks="genie_pin=<sha256> accepted_exposure_plan=<sha256> adopt_plan=<sha256> unadopt=<sha256>" -f acknowledge_single_maintainer_break_glass=true
 ```
 
-While B1, B4(c) or B5 stands, every adopt dispatch refuses before the bind, so
+While B1 or B5 stands, every adopt dispatch refuses before the bind, so
 there is nothing to roll back.
 
 ## Step 11. Plan #3

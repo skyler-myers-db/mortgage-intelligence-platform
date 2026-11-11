@@ -263,6 +263,33 @@ def test_a_pin_refusal_still_refuses_with_the_flag_and_the_exact_ack(
     assert "name different spaces" in capsys.readouterr().err
 
 
+def test_a_pin_that_appears_after_the_pin_check_refuses_the_acked_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the provisioner's ``adopt`` binds: a ``use`` (a pin written between bundle_env's two reads) refuses."""
+
+    import json
+
+    from tests.fixtures.client_profiles import paychex_shaped_profile as shaped
+    from tests.fixtures.genie_pin_workspace import signing_env
+    from tools.clients.environment import RawProfile, resolve
+
+    for name, value in signing_env().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY", raising=False)
+    patch_rollback_scope(monkeypatch)
+    workspace = world(TITLE)
+    record = {
+        "version": 1, "app_name": APP, "title": TITLE, "space_id": CANDIDATE, "provenance": "acked",
+        "plan_sha256": digest(), "pinned_at": "2026-11-11T00:00:00+00:00", "retired_space_ids": [],
+    }
+    workspace.secrets_by_key[pin.pin_key(APP)] = json.dumps(pin.sign_pin(record), sort_keys=True, separators=(",", ":"))
+    profile = resolve(RawProfile(values=shaped()))
+
+    with pytest.raises(pin.GeniePinRefusal, match="a pin names the governed Genie space now"):
+        bundle_env_adopt.acked_title_space_id(workspace, profile, environ={ACK_ENV: digest()})
+    del workspace.secrets_by_key[pin.pin_key(APP)]
+    assert bundle_env_adopt.acked_title_space_id(workspace, profile, environ={ACK_ENV: digest()}) == CANDIDATE
+
+
 @pytest.mark.parametrize("subcmd", ("plan", "summary"))
 def test_without_the_flag_the_exact_ack_binds_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], subcmd: str
@@ -342,3 +369,28 @@ def test_the_callers_argv_carry_the_flag(monkeypatch: pytest.MonkeyPatch, tmp_pa
          *authority_flags, FLAG],
         ["-m", "tools.databricks.bundle_env", "summary", "-t", "client", "-o", "json", FLAG],
     ]
+
+
+def test_the_docs_say_how_a_mid_run_holder_change_ends_and_recovers() -> None:
+    """The judge's required note: the undo's unbinds re-resolve the match; exit 3, half-bound; unadopt with a fresh ack."""
+
+    def flat(path: str) -> str:
+        return " ".join((REPO / path).read_text(encoding="utf-8").split())
+
+    runbook = flat("docs/clients/first-client-cutover.md")
+    for anchor in (
+        "**A Genie holder that changes mid-run.**",
+        "and the undo's unbinds",
+        "exit 3, **half-bound**",
+        "`phase=unadopt` and a **fresh** `genie_pin`",
+        "| B4 | fixed |",
+        "**10B walked with #344, #345, #346 and B4(c) all on `main`**",
+        "**No known code gap is left on 10B's path:**",
+    ):
+        assert anchor in runbook, anchor
+    assert "B4(c), until it lands" not in runbook and "Until B4(c) lands" not in runbook
+    deployment = flat("docs/deployment.md")
+    assert "**The adopt phases (B4(c)).**" in deployment
+    assert "the undo's unbinds included" in deployment and "with a fresh ack" in deployment
+    assert "the cutover runbook's B4(c), a follow-up" not in deployment
+    assert "B4(c), the next follow-up" not in flat("docs/clients/onboarding.md")

@@ -157,11 +157,15 @@ def test_the_pin_plan_digest_bundle_env_recomputes_is_the_one_step_0_printed(
 ) -> None:
     """Same run, same auth: one deploying identity, so 10B-1's genie_pin clears the bind plan.
 
+    In ``ci-shape`` (deploy.sh un-exports the App's id) even a bare
+    ``WorkspaceClient(profile=...)`` would resolve the deployer; the strategy
+    assertion pins that bundle_env now builds the provisioner's client.
     ``app-facing-id-exported`` adds the App's own DATABRICKS_CLIENT_ID (the
-    .env.local value) to the process environment. A bare
+    .env.local value) to the process environment: a bare
     ``WorkspaceClient(profile=...)`` lets the SDK take it over the profile's
-    client id; both tools build the bound profile with
-    ``workspace_auth.deployer_profile_client``, which passes the profile's own.
+    client id (another digest, so bundle_env refused), while both tools now
+    build the bound profile with ``workspace_auth.deployer_profile_client``,
+    which passes the profile's own.
     """
 
     if exported_app_client_id:

@@ -2332,6 +2332,31 @@ emergency recipe gates on.
    (the cutover runbook's 10B-0).
 4. **More than one.** Refused as ambiguous.
 
+**The adopt phases (B4(c)).** Adopting an existing install (below) binds the
+legacy state before anything pins its space: no pin record exists, and the
+signed v7 record that names the space (`genie_space_id`) is what adopt-live
+writes last. So the adopt phases' own bundle calls, `install_state_adopt`'s
+plan, binds and unbinds and adopt-live's bundle summary, pass the wrapper-only
+`bundle_env --adopt-acked-genie-pin`. With it, and only while no pin names a
+space, bundle_env binds case 3's one title match when the shell's exact
+`MIP_GENIE_PIN_ACK` (never `.env.local`) is that plan's sha256, through the
+provisioner's own resolution (`bundle_env_adopt.acked_title_space_id`): a pin
+still wins, a pin refusal still refuses, and no ack, another plan's ack, no
+title match or two of them refuse (exit 2). bundle_env accepts the flag once,
+on `plan`, `summary` and an adopt plan's `deployment bind|unbind` only, never
+beside `--allow-unprovisioned-genie`, and never passes it to the CLI. It
+writes no pin: adopt-live's signed v7 record pins the space, and its
+`bindings_differ` check makes that the space the live App binds. bundle_env
+builds a bound deployer profile's client with the provisioner's own builder
+(`workspace_auth.deployer_profile_client`), so the deploying identity in the
+digest bundle_env recomputes is the one the step-0 plan printed. Each call
+re-resolves the match (the space list, its permissions, the deploying
+identity), the undo's unbinds included: a direct CAN_MANAGE holder that
+changes mid-run refuses every later call (`the ack names another plan`), and
+when that lands among the binds the undo is unproven (exit 3, half-bound).
+The recovery is `--phase unadopt` with a fresh ack: the step-0 pin check
+prints the new plan's sha256.
+
 The preflight runs the same resolution read-only
 (`provision_genie_space --plan-pin`) before the signed lease and any App stop,
 so a squatter or a stale pin refuses while the App still serves. Run it by hand
@@ -3542,9 +3567,10 @@ the step-0 Genie pin check (no phase guard) and the pre-stop probes in their
 adopt mode, so an adopt or unadopt dispatch carries the `genie_pin` and
 `accepted_exposure_plan` acks those read (`operation_acks`; see "CI deploy
 (deploy-dev.yml)" below). Until a signed record names the governed Genie space, the
-adopt phases' bundle plan, binds and summary still refuse an unpinned space
-(`no pin names the governed Genie space yet`, bundle_env), whatever
-`genie_pin` says: the cutover runbook's B4(c), a follow-up. They run with
+adopt phases' bundle plan, binds and summary bind the one title match that
+same `genie_pin` names (`bundle_env --adopt-acked-genie-pin`; "The governed
+Genie space, pinned by id", "The adopt phases (B4(c))"), and refuse
+`no pin names the governed Genie space yet` only without the flag. They run with
 the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
 or `--phase unadopt` accepts an App the deployer's state does not bind, and its
 unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound

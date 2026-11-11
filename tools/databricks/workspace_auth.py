@@ -67,7 +67,9 @@ def deployer_profile_client(
     host and client id; any other is ``WorkspaceClient(profile=...)``. Every
     deployer client of a profile binding is built here, so two tools in one
     run (the Genie pin plan's provisioner and bundle_env) resolve the same
-    identity whatever app-facing variable a shell exported.
+    identity; a github-oidc profile's explicit client id also outranks an
+    app-facing ``DATABRICKS_CLIENT_ID`` a shell exported, which a bare
+    ``WorkspaceClient(profile=...)`` lets the SDK take instead.
     """
 
     build = factory or WorkspaceClient
