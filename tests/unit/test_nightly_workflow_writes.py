@@ -170,6 +170,9 @@ def test_every_grep_of_a_playwright_step_selects_a_test() -> None:
 # ---------------------------------------------------------------- the scanners fail closed
 
 
+PLANTED_PLUGIN = 'import pytest\n\n\n@pytest.fixture(autouse=True)\ndef _write():\n    post("/api/leads/B/outcome")\n'
+
+
 def _suite_tree(tmp_path: Path, suite: str, **modules: str) -> Path:
     for relative, text in {"tests/integration/test_planted_live.py": suite, **modules}.items():
         (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -189,8 +192,43 @@ def _suite_tree(tmp_path: Path, suite: str, **modules: str) -> Path:
         ('def _helper():\n    post("/api/sales/distribute")\n\n\ndef test_reads():\n    run(_helper)\n', {}),
         ('def _helper():\n    post("/api/loan-officers/assignments")\n\n\nALIAS = _helper\n', {}),
         ("def test_reads():\n    pass\n", {"tests/conftest.py": 'def pytest_sessionstart(session):\n    post("/api/leads/B/outcome")\n'}),
+        # pytest runs these by name, and nothing in the module references them.
+        ('def setup_module(module):\n    post("/api/leads/B/outcome")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def teardown_module(module):\n    post("/api/leads/B/outcome")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def setup_function(function):\n    post("/api/leads/B/snooze")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def teardown_function(function):\n    post("/api/leads/B/assign")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def pytest_generate_tests(metafunc):\n    post("/api/leads/B/disposition")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def __getattr__(name):\n    post("/api/leads/B/outcome")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def _helper():\n    post("/api/leads/B/outcome")\n\n\ndef _caller():\n    _helper()\n\n\ndef test_reads():\n    pass\n', {}),
+        ('pytest_plugins = ["tests.fixtures.planted_plugin"]\n\n\ndef test_reads():\n    pass\n', {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ('pytest_plugins = ("tests.fixtures.planted_plugin",)\n\n\ndef test_reads():\n    pass\n', {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ('pytest_plugins = "tests.fixtures.other,tests.fixtures.planted_plugin"\n\n\ndef test_reads():\n    pass\n', {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ("pytest_plugins = PLUGINS\n\n\ndef test_reads():\n    pass\n", {}),
+        ("def test_reads():\n    pass\n", {"tests/conftest.py": 'pytest_plugins = ["tests.fixtures.planted_plugin"]\n', "tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
     ],
-    ids=["module-constant", "imported-helper", "relative-import", "autouse-fixture", "class-method", "reached-helper", "helper-as-value", "aliased-helper", "conftest"],
+    ids=[
+        "module-constant",
+        "imported-helper",
+        "relative-import",
+        "autouse-fixture",
+        "class-method",
+        "reached-helper",
+        "helper-as-value",
+        "aliased-helper",
+        "conftest",
+        "xunit-setup-module",
+        "xunit-teardown-module",
+        "xunit-setup-function",
+        "xunit-teardown-function",
+        "generate-tests-hook",
+        "module-getattr",
+        "helper-no-test-reaches",
+        "pytest-plugins-list",
+        "pytest-plugins-tuple",
+        "pytest-plugins-comma-string",
+        "pytest-plugins-unreadable",
+        "conftest-pytest-plugins",
+    ],
 )
 def test_the_suite_scan_finds_a_write_in_every_shape_a_call_graph_misses(tmp_path: Path, suite: str, modules: dict[str, str]) -> None:
     root = _suite_tree(tmp_path, suite, **modules)
@@ -200,9 +238,21 @@ def test_the_suite_scan_finds_a_write_in_every_shape_a_call_graph_misses(tmp_pat
     assert findings
 
 
+def test_a_write_pytest_runs_by_name_is_a_finding_even_when_a_deselected_test_calls_it(tmp_path: Path) -> None:
+    """pytest runs ``setup_function`` around every test, the deselected one's call notwithstanding."""
+
+    suite = 'def setup_function(function):\n    post("/api/leads/B/outcome")\n\n\ndef test_deselected():\n    setup_function(None)\n\n\ndef test_reads():\n    pass\n'
+    root = _suite_tree(tmp_path, suite)
+
+    findings, writers = scan.python_findings(root, "tests/integration/test_planted_live.py", {"test_deselected"})
+
+    assert writers == ["test_deselected"] and len(findings) == 1 and "setup_function" in findings[0], findings
+
+
 def test_the_suite_scan_allows_a_write_only_a_deselected_test_reaches_and_ignores_reads(tmp_path: Path) -> None:
     suite = (
-        'def _helper():\n    post("/api/leads/B/outcome")\n\n\n'
+        'def _inner():\n    post("/api/leads/B/outcome")\n\n\n'
+        "def _helper():\n    _inner()\n\n\n"
         "def test_deselected():\n    _helper()\n\n\n"
         'def test_reads():\n    get("/api/sales/outcomes/summary")\n    get("/api/leads/B/assignment")\n    get("/api/geo/assignment-overlay")\n'
     )

@@ -10,7 +10,11 @@ imported module, a conftest) is a finding, whether or not a test reaches it.
 
 * ``python_findings`` covers a pytest suite: a path may sit only in a
   deselected test, or in a top-level helper referenced (by name, anywhere)
-  only from deselected tests and such helpers.
+  only from deselected tests and such helpers. A helper that writes and no
+  test reaches is a finding (pytest or a string may call it), and so is one
+  pytest runs by name (xunit setup/teardown, a module hook, a dunder). A
+  ``pytest_plugins`` entry is an import; one this scan cannot read is a
+  finding.
 * ``spec_findings`` covers a Playwright spec: a path may sit only inside a
   ``test(...)`` call the step's ``--grep``/``--grep-invert`` leaves out,
   matched the way Playwright matches, against ``" <project> <file>
@@ -36,6 +40,10 @@ LEAD_STATE_WRITE = re.compile(
 )
 # What Playwright's grep title starts with: the root suite's empty title, a project, the file.
 GREP_TITLE_PREFIX = " project {file}"
+# The top-level functions pytest runs by name in a test module (_pytest/python.py: the xunit
+# setup/teardown, the module's own hooks), and a dunder such as a module __getattr__ that
+# collection's attribute lookups call.
+_RUN_BY_NAME = re.compile(r"setUpModule|setup_module|tearDownModule|teardown_module|setup_function|teardown_function|pytest_\w+|__\w+__")
 
 
 def _line_of(source: str, offset: int) -> int:
@@ -53,11 +61,36 @@ def _module_path(root: Path, module: str) -> Path | None:
     return None
 
 
+def _plugin_specs(tree: ast.Module) -> tuple[list[str], list[int]]:
+    """(the modules a ``pytest_plugins`` assignment names, the lines of one this scan cannot read).
+
+    pytest imports each name in a list, a tuple or a comma-separated string.
+    """
+
+    names: list[str] = []
+    unreadable: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign | ast.AugAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
+            continue
+        items = value.elts if isinstance(value, ast.List | ast.Tuple) else [value]
+        strings = [item.value for item in items if isinstance(item, ast.Constant) and isinstance(item.value, str)]
+        if len(strings) != len(items):
+            unreadable.append(node.lineno)
+        names += [name.strip() for text in strings for name in text.split(",") if name.strip()]
+    return names, unreadable
+
+
 def _imported(root: Path, path: Path, tree: ast.Module, prefixes: tuple[str, ...]) -> set[Path]:
-    """The repo modules ``tree`` imports (any depth, relative imports included) under ``prefixes``."""
+    """The repo modules ``tree`` imports (any depth, relative imports and ``pytest_plugins`` included) under ``prefixes``."""
 
     package = ".".join(path.relative_to(root).with_suffix("").parts[:-1])
-    found: set[Path] = set()
+    found: set[Path] = {module for name in _plugin_specs(tree)[0] if name.startswith(prefixes) and (module := _module_path(root, name))}
     for node in ast.walk(tree):
         names: list[str] = []
         if isinstance(node, ast.Import):
@@ -89,8 +122,14 @@ def whole_module_findings(root: Path, paths: Iterable[Path], prefixes: tuple[str
         source = path.read_text(encoding="utf-8")
         for match in LEAD_STATE_WRITE.finditer(source):
             findings.append(f"{path.relative_to(root)}:{_line_of(source, match.start())}: {match.group()} in a module nightly loads")
-        todo.extend(_imported(root, path, ast.parse(source), prefixes))
+        tree = ast.parse(source)
+        findings += _unreadable_plugin_findings(root, path, tree)
+        todo.extend(_imported(root, path, tree, prefixes))
     return sorted(findings)
+
+
+def _unreadable_plugin_findings(root: Path, path: Path, tree: ast.Module) -> list[str]:
+    return [f"{path.relative_to(root)}:{line}: a pytest_plugins this scan cannot read" for line in _plugin_specs(tree)[1]]
 
 
 def _conftests(root: Path, suite: Path) -> list[Path]:
@@ -137,6 +176,17 @@ def python_findings(root: Path, suite: str, deselected: set[str]) -> tuple[list[
     for name, line in references:
         if name in writers and owner(line) is None:
             findings.append(f"{suite}:{line}: {name} writes and is referenced outside a top-level function")
+    # What the tests reach by reference; anything else that writes runs only if pytest (or a string) names it.
+    edges: dict[str, set[str]] = {}
+    for name, line in references:
+        if (holder := owner(line)) is not None:
+            edges.setdefault(holder, set()).add(name)
+    reached = {name for name in functions if name.startswith("test")}
+    todo = sorted(reached)
+    while todo:
+        for name in edges.get(todo.pop(), set()) - reached:
+            reached.add(name)
+            todo.append(name)
     for name in sorted(writers):
         node = functions[name]
         if name.startswith("test"):
@@ -144,6 +194,11 @@ def python_findings(root: Path, suite: str, deselected: set[str]) -> tuple[list[
                 findings.append(f"{suite}::{name} writes and is not deselected")
         elif node.decorator_list:
             findings.append(f"{suite}:{node.lineno}: {name} writes and is decorated (a fixture runs without a call)")
+        elif _RUN_BY_NAME.fullmatch(name):
+            findings.append(f"{suite}:{node.lineno}: {name} writes and pytest runs it by name")
+        elif name not in reached:
+            findings.append(f"{suite}:{node.lineno}: {name} writes and no test reaches it")
+    findings += _unreadable_plugin_findings(root, path, tree)
     imported = _imported(root, path, tree, ("tests.", "tools."))
     findings += whole_module_findings(root, [*imported, *_conftests(root, path)])
     return findings, sorted(name for name in writers if name.startswith("test"))
