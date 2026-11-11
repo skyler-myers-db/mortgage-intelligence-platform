@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.interim_pairs import pairs_from_json
-from tests.fixtures.uc_handover_fake import LEGACY, OTHER, TARGET, FakeUc, estate
+from tests.fixtures.uc_handover_fake import JOBS, LEGACY, OTHER, TARGET, FakeUc, estate
 from tools.clients import handover_journal as journals
 from tools.clients import handover_uc_ownership as handover
 from tools.clients.handover_uc_plan import SYSTEM_USER, HandoverRefused, change, compute
@@ -32,7 +32,9 @@ DESTRUCTIVE = re.compile(r"\b(DROP|DELETE|TRUNCATE|REVOKE|GRANT|CREATE|REPLACE)\
 
 
 def _install(pairs: InterimOwnerPairs | None = None, *, catalog: str = "mip", sync: str | None = "mip_app_state") -> handover.Install:
-    return handover.Install(catalog=catalog, sync_catalog=sync, target=TARGET, pairs=pairs or InterimOwnerPairs())
+    return handover.Install(
+        catalog=catalog, sync_catalog=sync, target=TARGET, pairs=pairs or InterimOwnerPairs(), jobs_principal=JOBS
+    )
 
 
 def _plan(fake: FakeUc, **kwargs: object) -> object:

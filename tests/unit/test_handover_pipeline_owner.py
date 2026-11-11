@@ -1,4 +1,4 @@
-"""Every pipeline dataset is owned by its pipeline's live run_as, before and after the release (spike S4).
+"""Every pipeline dataset is owned by an approved principal its pipeline runs as live (spike S4).
 
 Spike S4 measured that a pipeline-published streaming table or materialized
 view cannot be re-owned by any ALTER or REST owner PATCH, by any actor, and
@@ -6,6 +6,14 @@ that its owner flips to the pipeline's run_as the moment that setting changes.
 So after the release's bundle apply the governed pipeline's datasets belong to
 the jobs identity for good, never to the data-owner group. Before this check
 the handover counted such a dataset as ``other_owner`` and asserted nothing.
+
+Because the platform keeps a dataset's owner equal to its pipeline's run_as,
+"owned by its run_as" alone passes any identity a pipeline runs as. So the
+owner must also be approved: the jobs principal, or the legacy owner before
+the release; ``--verify --released`` admits only the jobs principal. The
+refusals below that matter are the ones the platform can reach: another
+identity running a pipeline into the governed catalog, and a run_as moved off
+the jobs principal after the release.
 
 ``tests/fixtures/uc_handover_fake.FakeUc`` models those measurements (a refused
 owner update, ``set_run_as`` re-owning every dataset at once, a pipeline GET
@@ -23,6 +31,7 @@ from typing import Any
 import pytest
 from databricks.sdk.errors import NotFound
 
+from tests.fixtures.client_profiles import IDENTITY_IDS, demo_profile
 from tests.fixtures.interim_pairs import pairs_from_json
 from tests.fixtures.uc_handover_fake import (
     JOBS,
@@ -38,10 +47,28 @@ from tools.clients import handover_uc_ownership as handover
 from tools.databricks.uc_interim_owner_pairs import InterimOwnerPairs
 
 DATASETS = ("mip.silver.parcel_rollup", "mip.silver.parcel_stream")
+STRAY = "stray-pipeline-PLACEHOLDER"
 
 
 def _install(pairs: InterimOwnerPairs | None = None) -> handover.Install:
-    return handover.Install(catalog="mip", sync_catalog="mip_app_state", target=TARGET, pairs=pairs or InterimOwnerPairs())
+    return handover.Install(
+        catalog="mip", sync_catalog="mip_app_state", target=TARGET, pairs=pairs or InterimOwnerPairs(), jobs_principal=JOBS
+    )
+
+
+def _released(tmp_path: Path) -> FakeUc:
+    """The release's bundle apply done: the governed pipeline runs as the jobs identity."""
+
+    fake, _pairs = _handed_over(tmp_path)
+    fake.set_run_as(PIPELINE, JOBS)
+    return fake
+
+
+def _add_stray(fake: FakeUc, identity: str) -> None:
+    """Another pipeline, run as ``identity``, publishing one dataset into the governed catalog."""
+
+    fake.doc["pipelines"][STRAY] = identity
+    fake.doc["tables"]["mip.silver.stray_rollup"] = {"owner": identity, "type": "MATERIALIZED_VIEW", "pipeline_id": STRAY}
 
 
 def _handed_over(tmp_path: Path) -> tuple[FakeUc, InterimOwnerPairs]:
@@ -79,16 +106,67 @@ def test_before_the_release_the_datasets_are_the_legacy_run_as_and_paired(tmp_pa
     assert handover.verify(fake, _install(pairs)) == []
     datasets = handover.plan(fake, _install(pairs)).pipeline_datasets
     assert [row["full_name"] for row in datasets] == list(DATASETS)
-    assert checker.owner_codes(fake, datasets) == []
+    assert checker.owner_codes(fake, datasets, jobs_principal=JOBS, interim_owner=LEGACY) == []
+    assert checker.owner_codes(fake, datasets, jobs_principal=JOBS) == [checker.UNAPPROVED] * 2, "no interim owner"
 
 
 def test_after_the_release_the_jobs_identity_owns_them_and_no_pair_is_needed(tmp_path: Path) -> None:
-    fake, _pairs = _handed_over(tmp_path)
-    fake.set_run_as(PIPELINE, JOBS)  # the release's bundle apply
+    fake = _released(tmp_path)
     current = handover.plan(fake, _install())
     assert current.document["pipeline_managed"] == [], "nothing pipeline-managed is the legacy owner's"
     assert {row["owner"] for row in current.pipeline_datasets} == {JOBS}
     assert handover.verify(fake, _install()) == []
+    assert handover.verify(fake, _install(), released=True) == [], "the end state"
+
+
+def test_the_released_verify_refuses_the_legacy_owner_even_with_its_pairs(tmp_path: Path) -> None:
+    fake, pairs = _handed_over(tmp_path)  # the release has not run
+    assert handover.verify(fake, _install(pairs)) == [], "positive control: the pre-release state passes"
+    assert handover.verify(fake, _install(pairs), released=True) == [checker.UNAPPROVED] * 2
+
+
+@pytest.mark.parametrize("released", (False, True), ids=("verify", "verify-released"))
+def test_another_identity_running_a_pipeline_into_the_governed_catalog_refuses(tmp_path: Path, released: bool) -> None:
+    fake = _released(tmp_path)
+    _add_stray(fake, OTHER)
+    names = [row["full_name"] for row in handover.plan(fake, _install()).pipeline_datasets]
+    assert "mip.silver.stray_rollup" in names, "positive control: the stray dataset is enumerated"
+    assert handover.verify(fake, _install(), released=released) == [checker.UNAPPROVED]
+
+
+def test_a_stray_pipeline_run_as_the_legacy_owner_refuses_once_released(tmp_path: Path) -> None:
+    fake = _released(tmp_path)
+    _add_stray(fake, LEGACY)
+    pairs = pairs_from_json(
+        json.dumps(handover.plan(fake, _install(), interim_expires=date.today() + timedelta(days=7)).suggested_pairs)
+    )
+    assert handover.verify(fake, _install(pairs)) == [], "before the release a paired legacy dataset is admitted"
+    assert handover.verify(fake, _install(pairs), released=True) == [checker.UNAPPROVED]
+
+
+@pytest.mark.parametrize("identity", (OTHER, LEGACY), ids=("another-identity", "back-to-legacy"))
+def test_a_run_as_moved_off_the_jobs_identity_after_the_release_refuses(tmp_path: Path, identity: str) -> None:
+    fake, pairs = _handed_over(tmp_path)  # the step-7 pairs are still configured
+    fake.set_run_as(PIPELINE, JOBS)
+    fake.set_run_as(PIPELINE, identity)  # drift after the release: the datasets follow it at once
+    assert {fake.tables.get(name).owner for name in DATASETS} == {identity}
+    assert handover.verify(fake, _install(pairs), released=True) == [checker.UNAPPROVED] * 2
+    if identity == OTHER:
+        assert handover.verify(fake, _install(pairs)) == [checker.UNAPPROVED] * 2
+
+
+def test_the_profile_install_takes_the_jobs_principal_from_the_identity_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(handover, "REPO", tmp_path)  # no .env.local: the profile is the shell's alone
+    monkeypatch.setattr(handover.os, "environ", demo_profile())
+    install = handover._profile_install()
+    assert install.jobs_principal == IDENTITY_IDS["jobs"] and install.jobs_principal != IDENTITY_IDS["deployer"]
+
+
+def test_a_blank_jobs_principal_refuses_the_check_rather_than_approving_nothing() -> None:
+    with pytest.raises(ValueError, match="jobs principal is required"):
+        checker.owner_codes(FakeUc(), [], jobs_principal=" ")
 
 
 def test_a_dataset_owned_by_another_identity_than_its_pipelines_run_as_refuses(tmp_path: Path) -> None:
@@ -136,7 +214,7 @@ def test_a_dataset_whose_listing_lacks_its_pipeline_falls_back_to_its_get_then_r
         {"full_name": "c.s.unlinked", "owner": JOBS, "pipeline_id": ""},
         {"full_name": "c.s.gone", "owner": JOBS, "pipeline_id": ""},
     ]
-    assert checker.owner_codes(workspace, datasets) == [checker.UNRESOLVED, checker.UNRESOLVED]
+    assert checker.owner_codes(workspace, datasets, jobs_principal=JOBS) == [checker.UNRESOLVED, checker.UNRESOLVED]
     assert gets == ["c.s.listed_late", "c.s.unlinked", "c.s.gone"], "a listed pipeline id is never re-read"
 
 
@@ -150,3 +228,17 @@ def test_verify_prints_codes_never_names(tmp_path: Path, capsys: pytest.CaptureF
     assert f"REFUSED {checker.NOT_RUN_AS} x1" in out.err and "verify: FAIL" in out.out
     for value in (JOBS, OTHER, LEGACY, PIPELINE, "parcel_rollup"):
         assert value not in out.out + out.err, value
+
+
+def test_released_is_a_verify_mode_and_prints_codes_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        handover.main(["--plan", "--released"], install=_install, workspace_factory=FakeUc)
+    assert "--released is a --verify mode" in capsys.readouterr().err
+    fake, _pairs = _handed_over(tmp_path)
+    assert handover.main(["--verify", "--released"], install=_install, workspace_factory=lambda: fake) == 2
+    out = capsys.readouterr()
+    assert f"REFUSED {checker.UNAPPROVED} x2" in out.err and "verify: FAIL" in out.out
+    for value in (JOBS, LEGACY, PIPELINE, "parcel_rollup"):
+        assert value not in out.out + out.err, value
+    fake.set_run_as(PIPELINE, JOBS)
+    assert handover.main(["--verify", "--released"], install=_install, workspace_factory=lambda: fake) == 0

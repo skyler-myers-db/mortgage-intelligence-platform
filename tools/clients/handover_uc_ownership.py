@@ -6,7 +6,7 @@ handover"):
   python -m tools.clients.handover_uc_ownership --plan [--report-out F]
   python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal J
   python -m tools.clients.handover_uc_ownership --revert --journal J [--ack-plan <sha256>]
-  python -m tools.clients.handover_uc_ownership --verify
+  python -m tools.clients.handover_uc_ownership --verify [--released]
 
 ``--plan`` is read-only (tools/clients/handover_uc_plan.py) and prints the
 plan's sha256. The owner hardware-key operation attestation is deferred, so
@@ -27,12 +27,14 @@ and changes nothing.
 ``--verify`` is read-only: nothing the plan would move is still the legacy
 owner's, every pipeline-managed dataset the legacy owner still owns has an
 exact, unexpired interim owner pair in the client's profile, and every
-pipeline-managed dataset, whoever owns it, is owned by its pipeline's live
-run_as (tools/clients/handover_pipeline_owner.py). Spike S4: no ALTER can
-re-own a pipeline dataset; its owner follows the pipeline's run_as, so after
-the release it is the jobs identity's for good. Run it again after the
-release: with the release postflight's live run_as check, that proves the
-end state.
+pipeline-managed dataset is owned by its pipeline's live run_as and that
+identity is approved: the jobs principal (``MIP_IDENTITY_IDS_JSON.jobs``), or
+the legacy owner until the release (tools/clients/handover_pipeline_owner.py).
+Spike S4: no ALTER can re-own a pipeline dataset; its owner follows the
+pipeline's run_as, so after the release it is the jobs identity's for good.
+``--verify --released``, after the release, no longer admits the legacy owner
+even with a pair: its PASS proves the end state, every pipeline dataset in
+the governed catalog owned by the jobs principal, which its pipeline runs as.
 
 The metastore, Delta Sharing, foreign and system catalogs and System-user
 objects are never touched. Printed lines carry codes, counts and digests;
@@ -91,12 +93,14 @@ UPDATERS: dict[str, Callable[[Any, str, str], object]] = {
 
 @dataclass(frozen=True)
 class Install:
-    """What the client's profile decides: the catalogs, the target group and the pairs."""
+    """What the client's profile decides: the catalogs, the target group, the pairs, the jobs principal."""
 
     catalog: str
     sync_catalog: str | None
     target: str
     pairs: InterimOwnerPairs
+    # MIP_IDENTITY_IDS_JSON.jobs: the one permanent owner of a pipeline dataset (spike S4).
+    jobs_principal: str
 
 
 def live_owner(workspace: Any, kind: str, full_name: str) -> str:
@@ -198,8 +202,12 @@ def revert(workspace: Any, journal: journals.Journal, *, ack: str) -> dict[str, 
     return {"moved": len(document["moves"]), "noop": len(document["noops"])}
 
 
-def verify(workspace: Any, install: Install) -> list[str]:
-    """Value-free refusal codes: nothing left to move, every pipeline dataset paired and run_as-owned."""
+def verify(workspace: Any, install: Install, *, released: bool = False) -> list[str]:
+    """Value-free refusal codes: nothing left to move, every pipeline dataset paired and owned as approved.
+
+    ``released``: the release moved the pipeline's run_as, so the legacy owner
+    is no longer an approved owner of a pipeline dataset, pair or not.
+    """
 
     current = plan(workspace, install)
     codes = [refusal.code for refusal in current.refusals]
@@ -207,7 +215,10 @@ def verify(workspace: Any, install: Install) -> list[str]:
     for row in current.document["pipeline_managed"]:
         if install.pairs.verdict(full_name=row["full_name"], owner=row["owner"]) != MATCH:
             codes.append("interim_pair_missing")
-    return codes + owner_codes(workspace, current.pipeline_datasets)
+    interim = "" if released else str(current.document["legacy_owner"])
+    return codes + owner_codes(
+        workspace, current.pipeline_datasets, jobs_principal=install.jobs_principal, interim_owner=interim
+    )
 
 
 def _profile_install() -> Install:
@@ -223,6 +234,7 @@ def _profile_install() -> Install:
         sync_catalog=profile.lakebase_sync_catalog,
         target=data_owners_group(profile.identity_prefix),
         pairs=build_pairs(profile.interim_owner_pairs, now=datetime.now(UTC)),
+        jobs_principal=profile.identity_ids.jobs,
     )
 
 
@@ -241,6 +253,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--journal", type=Path)
     parser.add_argument("--report-out", type=Path)
     parser.add_argument("--interim-days", type=int, default=14)
+    parser.add_argument("--released", action="store_true", help="with --verify: the end state after the release")
     return parser
 
 
@@ -256,6 +269,8 @@ def main(
         parser.error("--apply needs --ack-plan <sha256> and --journal <path>")
     if args.revert and not args.journal:
         parser.error("--revert needs --journal <path>")
+    if args.released and not args.verify:
+        parser.error("--released is a --verify mode")
     # Only a journal this run creates can describe a partial apply.
     fresh_journal = bool(args.apply) and not os.path.lexists(args.journal)
     try:
@@ -276,7 +291,7 @@ def main(
             return 0
         settings = install()
         if args.verify:
-            codes = verify(workspace, settings)
+            codes = verify(workspace, settings, released=args.released)
             for code in sorted(set(codes)):
                 print(f"{_PREFIX} REFUSED {code} x{codes.count(code)}", file=sys.stderr)
             print(f"{_PREFIX} verify: {'PASS' if not codes else 'FAIL'}")

@@ -28,9 +28,10 @@ A pair is an exception for exactly one object and one owner:
   the UC handover (cutover step 7) until the release's bundle apply moves the
   pipeline's run_as to the jobs identity, which re-owns every dataset at once;
   no journaled re-own exists. From then on the pairs match nothing and the
-  field is unset. The jobs identity's ownership is not an exception to pair:
-  ``handover_uc_ownership --verify`` asserts that every pipeline dataset is
-  owned by its pipeline's live run_as (tools/clients/handover_pipeline_owner.py).
+  field is unset. The jobs identity's ownership is not an exception to pair
+  but the permanent rule: ``handover_uc_ownership --verify --released``
+  asserts that every pipeline dataset is owned by the jobs identity, which
+  its pipeline runs as live (tools/clients/handover_pipeline_owner.py).
 
 Refusal lines name pair indexes and rules, never a value.
 """

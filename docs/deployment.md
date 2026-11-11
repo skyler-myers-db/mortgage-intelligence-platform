@@ -3589,6 +3589,8 @@ and the journal. Neither tool has run live.
 python -m tools.clients.handover_uc_ownership --plan --report-out <private report>
 python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal <new path>
 python -m tools.clients.handover_uc_ownership --verify
+# after the release (step 10):
+python -m tools.clients.handover_uc_ownership --verify --released
 ```
 
 The target is `<MIP_IDENTITY_PREFIX>-data-owners`. The plan enumerates the
@@ -3606,12 +3608,17 @@ refuses explicitly: the metastore (`metastore`), a Delta Sharing catalog
 System user owns (never a change), and the users, account users or admins
 vocabulary as the target. The first failure stops the apply (exit 3).
 `--verify` is read-only: nothing left to move, every pipeline dataset the
-legacy owner still owns paired exactly, and every pipeline dataset, whoever
-owns it, owned by its own pipeline's live `run_as_user_name`
-(`tools/clients/handover_pipeline_owner.py`: `pipeline_owner_not_run_as`,
-`pipeline_run_as_unreadable`, `pipeline_unresolved`). Run it again after the
-release. `--interim-days N` (1 to 14, default 14) sets the suggested pairs'
-expiry.
+legacy owner still owns paired exactly, and every pipeline dataset owned by
+its own pipeline's live `run_as_user_name` and by an approved principal: the
+jobs identity (`MIP_IDENTITY_IDS_JSON.jobs`), or the legacy owner until the
+release (`tools/clients/handover_pipeline_owner.py`: `pipeline_unresolved`,
+`pipeline_run_as_unreadable`, `pipeline_owner_not_run_as`,
+`pipeline_owner_unapproved`). The platform keeps a dataset's owner equal to
+its pipeline's run_as, so the approved-owner rule is what refuses: another
+identity running a pipeline into the governed catalog, or a run_as moved off
+the jobs identity. `--verify --released`, after the release, no longer admits
+the legacy owner, pair or not. `--interim-days N` (1 to 14, default 14) sets
+the suggested pairs' expiry.
 
 **Pipeline-managed datasets.** Spike S4 measured that a pipeline-published
 streaming table or materialized view can never change owner by itself: the
@@ -3625,9 +3632,11 @@ identity's, which the pipeline runs as; the release's bundle apply moves the
 pipeline's run_as to the jobs identity and with it every dataset, at once,
 while blue serves. From then on the jobs identity (`MIP_IDENTITY_IDS_JSON.jobs`)
 owns them permanently, never `<MIP_IDENTITY_PREFIX>-data-owners`: a group
-cannot be a run_as. `--verify` after the release, with the release
-postflight's live run_as check (below, "Workspace ACLs"), proves that end
-state. The private
+cannot be a run_as. `--verify --released` after the release proves that end
+state: every pipeline dataset in the governed catalog is owned by the jobs
+identity, and its pipeline runs live as it. The release postflight's live
+run_as check (below, "Workspace ACLs") already refuses the release when the
+governed pipeline does not. The private
 report (`--report-out`; the printed lines carry counts only) suggests one
 interim owner pair per dataset, `(full_name, owner, expires_at)`, at most 14
 days ahead, as rows (`suggested_interim_pairs`) and as the single-line value
@@ -3643,8 +3652,8 @@ it passes none: no deploy probe judges a pipeline dataset today, so no
 production caller hands pairs to the policy yet, and `--verify` matches each
 dataset with the same `build_pairs` output from the same profile field.
 A pair covers the window from this handover to the release's bundle apply;
-no journaled re-own exists. Unset the field after the release, when the
-pairs match nothing.
+no journaled re-own exists. Unset the field once `--verify --released`
+passes after the release; the pairs then match nothing.
 
 **Lakebase (step 8).** After the deployer's Postgres role exists (by the
 mechanism the S3 rehearsal picks), run as the legacy owner:

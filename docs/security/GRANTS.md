@@ -673,10 +673,11 @@ pipeline runs as the non-admin jobs identity (`var.jobs_principal`), so the
 jobs identity owns these datasets permanently. A group cannot be a run_as,
 so `<MIP_IDENTITY_PREFIX>-data-owners` never owns them, and
 `converge_governed_owner` never touches them. Grants on them survive an
-owner flip. `python -m tools.clients.handover_uc_ownership --verify` refuses
-any pipeline dataset not owned by its pipeline's live run_as, and the
-deploy's `jobs_identity_acl` step refuses unless the pipeline's live run_as
-is the jobs identity (`docs/deployment.md`, "Ownership handover").
+owner flip. `python -m tools.clients.handover_uc_ownership --verify --released`
+refuses, after the release, any pipeline dataset in the governed catalog not
+owned by the jobs identity or not owned by its pipeline's live run_as, and
+the deploy's `jobs_identity_acl` step refuses unless the pipeline's live
+run_as is the jobs identity (`docs/deployment.md`, "Ownership handover").
 
 ---
 
