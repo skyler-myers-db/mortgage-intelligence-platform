@@ -4567,8 +4567,12 @@ The proof fails in any of these cases:
   unclassified call counts as an account-admin need. A tool reviewed as
   workspace-only may not reach an account API through its imports, and inline
   Python the interpreter runs (`-c` or a heredoc) is held to that same rule
-  directly: it may not name an account API, import a module that reaches
-  one, load code by name or start a process;
+  directly: it may not name an account API or import a module that reaches
+  one, and everything else it names must be on a reviewed allowlist
+  (`tests/fixtures/inline_code_review.py`, read from the inline code the dry
+  runs execute). The allowlist lists the modules it may import and their
+  attributes, and the builtins it may use, so no import form or alias starts
+  a process or loads code by name;
 - a bundle call addresses another target than `client`, whether it is
   planned, run through the CLI or run through the `bundle_env` wrapper, or a
   bundle variable databricks.yml declares resolves to a client-#1 default;

@@ -22,7 +22,10 @@ job ``client-portability-proof`` runs both):
   slices name exactly the committed tools, every tool a core deploy file
   names is classed (the ones no dry run reaches listed as outside the proof,
   with those that reach an account API pinned), and the ledger fails closed
-  for every call shape, planned or executed (review of #330).
+  for every call shape, planned or executed (review of #330), inline code
+  included: it is held to a reviewed allowlist of what it may name, and
+  every way round 3 found to start a process or load code by name is
+  refused while the deploy's own inline code, written other ways, is not.
 
 The owner hardware-key attestation layer is deferred (M1-PR5): the integrity
 here is main's exact-digest pin and acks. Nothing signs or verifies a
@@ -31,6 +34,7 @@ signature.
 
 from __future__ import annotations
 
+import importlib
 import json
 import shutil
 import subprocess
@@ -44,6 +48,7 @@ from tests.fixtures import portability_checks as checks
 from tests.fixtures import role_ledger as roles
 from tests.fixtures.bootstrap_harness import FakeSink, plan_and_apply, run_tool
 from tests.fixtures.fake_databricks_account import FakeEstate
+from tests.fixtures.inline_code_review import INLINE_MODULES
 from tests.fixtures.role_ledger import READ, Execution, account_admin_needs, sdk_role
 from tools.clients import dispatch_acks
 from tools.clients import profile as views
@@ -390,6 +395,63 @@ def test_every_executed_shape_is_classed_and_fails_closed() -> None:
     ):
         assert _executed("-c", code) == _executed("-", stdin=code) == roles.UNCLASSIFIED, code
     assert roles.inline_imports("from tools.databricks import agent_proxy_access") >= {"tools.databricks.agent_proxy_access"}
+
+
+# Review of #330, round 3: inline code that starts a process or loads code by
+# name, which round 2's literal-name denylist classed workspace (the first
+# six), and its relatives: each refused by tests/fixtures/inline_code_review.py.
+INLINE_BYPASSES = (
+    "import os as _os, sys\n_os.system(sys.executable + ' -m tools.clients.bootstrap_account --help')",
+    "import builtins; builtins.__import__('tools.clients.bootstrap_account')",
+    "import pkgutil; pkgutil.resolve_name('tools.clients.bootstrap_account:main')",
+    "import sys; sys.path.insert(0, 'tools/clients'); import bootstrap_account",
+    "import asyncio\nasyncio.run(asyncio.create_subprocess_exec('python', '-m', 'tools.x'))",
+    "import os\ngetattr(os, 'system')('python -m tools.x')",
+    # Every other import form and alias of os, and a module reached through another.
+    "from os import system as run; run('python -m tools.x')",
+    "from os import *\nsystem('python -m tools.x')",
+    "import os\nalias = os\nalias.system('python -m tools.x')",
+    "import os.path as p\np.os.system('python -m tools.x')",
+    "import pathlib\npathlib.os.system('python -m tools.x')",
+    "from backend.schemas.lender_identity_record import hashlib",  # a name its imports bind: a module re-exported
+    "import sys\nsys.modules['os'].system('python -m tools.x')",
+    # The routes from an object back to a namespace or the builtins.
+    "import json\njson.loads.__globals__['os'].system('x')",
+    "frames = (x for x in [1])\nframes.gi_frame.f_globals['__builtins__']['__import__']('os')",
+    "import os\nvars(os)['system']('x')",
+    "eval('1')",
+    "asyncio.create_subprocess_exec('x')",  # a name the code never binds
+    # Reviewed modules' unreviewed surfaces: yaml's object constructor, a submodule.
+    "import yaml\nyaml.unsafe_load('x: 1')",
+    "import json\njson.decoder.scanstring('x', 0)",
+    "import concurrent.futures\nconcurrent.futures.ProcessPoolExecutor()",
+)
+# Not rigid: what the deploy's own inline code does, written the other ways a
+# heredoc would write it (round 3 asked that legitimate code stay workspace).
+INLINE_ACCEPTED = (
+    "import os.path\nprint(os.path.join('a', 'b'), os.environ.get('X'), os.getenv('Y'))",
+    "from os import environ, path\nprint(environ.get('X'), path.exists('.'))",
+    "import json, re\nprint(json.dumps({'a': 1}, indent=2), re.IGNORECASE, re.compile('x').pattern)",
+    "class Row:\n    width = 1\n\n\ndef f(*args, **kwargs):\n    return [a for a in args if a]\n\n\nprint(f(Row.width), {k: v for k, v in {}.items()})",
+    "try:\n    import yaml\nexcept ModuleNotFoundError as error:\n    raise SystemExit(str(error)) from error\nprint(yaml.safe_load('a: 1'))",
+    "import sys\nsys.stdout.write(sys.argv[0])\nsys.exit(0)",
+    "def main():\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main())",
+    "from pathlib import Path\nprint(Path('.env.local').exists() and Path('.env.local').read_text(encoding='utf-8'))",
+    "from backend.schemas.lender_identity_record import as_configured\nprint(as_configured({}))",
+)
+
+
+def test_inline_code_is_held_to_the_reviewed_allowlist() -> None:
+    """Review of #330, round 3: an allowlist of what inline code may name, not a list of literal names it may not."""
+
+    for code in INLINE_BYPASSES:
+        assert _executed("-c", code) == _executed("-", stdin=code) == roles.UNCLASSIFIED, code
+    for code in INLINE_ACCEPTED:
+        assert _executed("-c", code) == _executed("-", stdin=code) == roles.WORKSPACE, code
+    # No stale entry: each reviewed module exists, and each reviewed attribute is one it has.
+    for module, attributes in INLINE_MODULES.items():
+        imported = importlib.import_module(module)
+        assert all(hasattr(imported, name) for name in attributes or ()), module
 
 
 def test_the_agentic_slices_name_exactly_the_committed_tools(tmp_path: Path) -> None:

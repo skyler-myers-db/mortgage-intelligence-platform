@@ -33,10 +33,13 @@ account API through its imports (``account_api_reach``).
 Inline code has no table entry, so it is held to that same rule directly
 (review of #330): it is ``workspace`` only when its text names no account
 API, every repository module it imports exists and none of them reaches an
-account API, and it neither loads code dynamically nor starts a process;
-otherwise it is ``unclassified`` (``account_admin`` when it imports the human
-bootstrap). A ``databricks api`` call is ``workspace`` only on a reviewed
-workspace path, and any path with an ``accounts`` segment is an account call.
+account API, and everything else it names is on the reviewed allowlist of
+tests/fixtures/inline_code_review.py (round 3: the modules, attributes and
+builtins the dry runs' own inline code uses, so no import form or alias
+starts a process or loads code); otherwise it is ``unclassified``
+(``account_admin`` when it imports the human bootstrap). A ``databricks
+api`` call is ``workspace`` only on a reviewed workspace path, and any path
+with an ``accounts`` segment is an account call.
 
 A read is ``read``: the human bootstrap reads the account under the account
 admin's own fresh login (tools/clients/bootstrap_session.py), and no CI step
@@ -53,6 +56,8 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.fixtures.inline_code_review import Repository, inline_refusals
 
 REPO = Path(__file__).resolve().parents[2]
 NONE = "none"
@@ -395,12 +400,6 @@ def _reach(module: str, repo: Path) -> tuple[str, ...]:
 
 # --- what the deploy interpreter really ran -----------------------------------------------
 
-# Inline code that loads code by name or starts a process runs what no
-# reading of its imports can see: it is unclassified.
-DYNAMIC_MODULES = frozenset({"importlib", "runpy", "subprocess", "multiprocessing", "pty", "code", "ctypes"})
-DYNAMIC_BUILTINS = frozenset({"__import__", "exec", "eval", "compile", "breakpoint"})
-_SPAWN = re.compile(r"(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*)")
-
 
 @dataclass(frozen=True)
 class Execution:
@@ -424,36 +423,14 @@ class Execution:
         return " ".join(self.argv) + (" (script on stdin)" if _target(self.argv)[0] == "stdin" else "")
 
 
-def _repo_import_resolves(node: ast.Import | ast.ImportFrom, repo: Path) -> bool:
-    """Whether every repository module an import statement names exists (a ``from`` name may be an attribute)."""
+def repository(repo: Path = REPO) -> Repository:
+    """The repository's modules, as the inline-code review reads them."""
 
-    def exists(name: str) -> bool:
-        return bool(module_files(name, repo)) or repo.joinpath(*name.split(".")).is_dir()
-
-    if isinstance(node, ast.Import):
-        return all(exists(a.name) for a in node.names if a.name.split(".")[0] in REPO_PACKAGES)
-    module = node.module or ""
-    if node.level or module.split(".")[0] not in REPO_PACKAGES:
-        return node.level == 0
-    return exists(module) and all(
-        exists(f"{module}.{a.name}") or bool(module_files(module, repo)) for a in node.names
+    return Repository(
+        packages=REPO_PACKAGES,
+        sources=lambda name: module_files(name, repo),
+        is_package_dir=lambda name: repo.joinpath(*name.split(".")).is_dir(),
     )
-
-
-def _loads_or_spawns(tree: ast.AST) -> bool:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
-            if any(name.split(".")[0] in DYNAMIC_MODULES for name in names):
-                return True
-            if isinstance(node, ast.ImportFrom) and node.module == "os" and any(_SPAWN.fullmatch(a.name) for a in node.names):
-                return True
-        elif isinstance(node, ast.Name) and node.id in DYNAMIC_BUILTINS:
-            return True
-        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os":
-            if _SPAWN.fullmatch(node.attr):
-                return True
-    return False
 
 
 def inline_imports(code: str | None, repo: Path = REPO) -> frozenset[str]:
@@ -468,7 +445,7 @@ def inline_imports(code: str | None, repo: Path = REPO) -> frozenset[str]:
 
 
 def inline_role(code: str | None, repo: Path = REPO) -> str:
-    """The class of inline code: ``workspace`` only when neither it nor a repository module it imports reaches an account API."""
+    """The class of inline code: ``workspace`` only when it names nothing unreviewed and nothing it imports reaches an account API."""
 
     if code is None:
         return UNCLASSIFIED
@@ -476,8 +453,7 @@ def inline_role(code: str | None, repo: Path = REPO) -> str:
         tree = ast.parse(code)
     except SyntaxError:
         return UNCLASSIFIED
-    imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
-    if ACCOUNT_API.search(code) or _loads_or_spawns(tree) or not all(_repo_import_resolves(n, repo) for n in imports):
+    if ACCOUNT_API.search(code) or inline_refusals(tree, repository(repo)):
         return UNCLASSIFIED
     modules = inline_imports(code, repo)
     if modules & HUMAN_ONLY_MODULES:
