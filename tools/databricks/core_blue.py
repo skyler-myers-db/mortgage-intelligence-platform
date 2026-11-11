@@ -304,9 +304,17 @@ def blue_restore_payload(
     catalog: str,
     schema: str,
     lakebase_instance: str,
+    lakebase_database: str | None = None,
     build: Callable[..., dict[str, object]] | None = None,
 ) -> tuple[dict[str, object] | None, str]:
-    """(blue's restore payload or None, why); never a payload whose env-name set is not blue's."""
+    """(blue's restore payload or None, why); never a payload whose env-name set is not blue's.
+
+    ``lakebase_database`` is the database the deploy binds (the profile's
+    ``LAKEBASE_DATABASE``), handed to the builder as the deploy hands it, so
+    a client bound to another database than the App's default rebuilds the
+    ``LAKEBASE_DATABASE`` its blue carries (M3-PR4). ``None`` leaves the
+    builder's default, the App's own database, which adds no name.
+    """
 
     if record is None or record.get("version") != V7_RECORD_VERSION or record.get("tier") != "core":
         return None, "no v7 core blue needs a restore payload built"
@@ -320,6 +328,7 @@ def blue_restore_payload(
     # The builder reads the shell and .env.local: blue's own commit, and no
     # lease name unless blue's deployment carried one.
     lease = os.environ.get(LEASE_ENV) if LEASE_ENV in names else None
+    database = {} if lakebase_database is None else {"lakebase_database": lakebase_database}
     try:
         with _environ({"MIP_GIT_SHA": str(record["git_sha"]), LEASE_ENV: lease}):
             payload = build(
@@ -330,6 +339,7 @@ def blue_restore_payload(
                 schema=schema,
                 lakebase_instance=lakebase_instance,
                 campaign_treatment_runtime_enabled=False,
+                **database,
                 agentic_tier="off",
             )
     except ValueError as exc:  # a lender or tier refusal names no value

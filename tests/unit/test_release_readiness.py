@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -319,3 +320,113 @@ def test_an_operator_failed_stays_failed_in_both_modes(tmp_path: Path) -> None:
     for mode, verdict in (("none", None), ("github", _pass_verdict())):
         report = _live_report(tmp_path, verdict, "--live-evidence", mode, "--genie-live", "failed")
         assert report["checks"]["genie_live"]["status"] == "failed", mode
+
+
+def _gate_runs(monkeypatch: pytest.MonkeyPatch) -> str:
+    """The real tools/live_validation_gate.py, loaded the way release_readiness loads it, over a fake GitHub.
+
+    Two green titled runs on this checkout's own commit: client-one's, then a
+    newer one of client-two. Only the GitHub fetch is fake: the run selection,
+    the client filter and the verdict are the gate's.
+    """
+
+    loader = release_readiness._load_tool
+    sha = loader("live_validation_gate").resolve_sha("HEAD")
+    now = datetime.now(UTC)
+    runs = [
+        {
+            "id": run_id,
+            "head_sha": sha,
+            "conclusion": "success",
+            "updated_at": (now - timedelta(days=age)).isoformat().replace("+00:00", "Z"),
+            "html_url": f"https://example.invalid/runs/{run_id}",
+            "head_branch": "main",
+            "event": "workflow_dispatch",
+            "display_title": f"nightly client={client} sha={sha}",
+        }
+        for run_id, client, age in ((1, "client-one", 2.0), (2, "client-two", 1.0))
+    ]
+
+    def fetch(path: str) -> object:
+        if path.startswith("actions/runs/"):
+            return {"jobs": [{"name": name, "conclusion": "success"} for name in (PARITY, PLAYWRIGHT, DRILL)]}
+        return {"workflow_runs": runs}
+
+    def load(name: str) -> object:
+        module = loader(name)
+        if name == "live_validation_gate":
+            monkeypatch.setattr(module, "github_fetch", lambda env=None: fetch)
+        return module
+
+    monkeypatch.setattr(release_readiness, "_load_tool", load)
+    return sha
+
+
+def _github_report(tmp_path: Path, sha: str, *extra: str) -> tuple[dict, str]:
+    release_zip = tmp_path / "release.zip"
+    with zipfile.ZipFile(release_zip, "w") as archive:
+        archive.writestr("README.md", "# ok\n")
+    talk_track = tmp_path / "talk-track.md"
+    _write_talk_track(talk_track)
+    out = tmp_path / "out.json"
+    common = ["--release-sha", sha, "--release-zip", str(release_zip), "--talk-track", str(talk_track), "--timestamp", "2026-05-21T12:00:00+00:00"]
+    assert release_readiness.main([*common, "--out", str(out), *extra]) == 0
+    return json.loads(out.read_text(encoding="utf-8")), out.with_suffix(".md").read_text(encoding="utf-8")
+
+
+def test_with_client_the_gate_certifies_only_that_clients_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """--client reaches gate.evaluate: client-two's newer green run never certifies client-one's release."""
+
+    sha = _gate_runs(monkeypatch)
+    report, markdown = _github_report(tmp_path, sha, "--client", "client-one")
+
+    assert report["live_evidence"]["verdict"]["client"] == "client-one"
+    assert report["live_evidence"]["client"] == "client-one"
+    for name in LIVE_CHECKS:
+        evidence = report["checks"][name]["evidence"]
+        assert report["checks"][name]["status"] == "passed", name
+        assert "client: client-one" in evidence and "https://example.invalid/runs/1 " in evidence, evidence
+    assert "- Live evidence: `github`, client: client-one" in markdown
+
+
+def test_without_client_every_live_check_says_the_evidence_may_be_any_clients(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sha = _gate_runs(monkeypatch)
+    report, markdown = _github_report(tmp_path, sha)
+
+    assert report["live_evidence"]["verdict"]["client"] is None
+    for name in LIVE_CHECKS:
+        evidence = report["checks"][name]["evidence"]
+        assert f"client: {release_readiness.ANY_CLIENT}" in evidence and "https://example.invalid/runs/2 " in evidence, evidence
+        assert f"client: {release_readiness.ANY_CLIENT}" in markdown
+
+
+def test_the_notes_are_the_gates() -> None:
+    from tools import live_validation_gate as gate
+
+    assert release_readiness.ANY_CLIENT == gate.ANY_CLIENT
+    assert release_readiness.PLAYWRIGHT_JOB == gate.PLAYWRIGHT_JOB
+    for client in ("client-one", None):
+        assert release_readiness.client_note(client) == gate.client_note(client)
+    for conclusion in ("skipped", "success", "failure", "absent", None):
+        assert release_readiness.app_api_mutation_note(conclusion) == gate.app_api_mutation_note(conclusion)
+
+
+def test_a_prod_apps_skipped_app_api_suites_show_in_the_playwright_evidence(tmp_path: Path) -> None:
+    verdict = _pass_verdict()
+    verdict.client, verdict.app_api_mutation = "client-one", "skipped"
+    report = _live_report(tmp_path, verdict)
+
+    for name in LIVE_CHECKS:
+        evidence = report["checks"][name]["evidence"]
+        assert report["checks"][name]["status"] == "passed"
+        skipped = "App API mutation suites: skipped (a prod App" in evidence
+        assert skipped == (release_readiness.LIVE_CHECK_JOBS[name] == PLAYWRIGHT), (name, evidence)
+
+
+def test_the_customer_release_recipe_names_the_client() -> None:
+    """A customer's release-readiness.json is certified by that customer's run, so the recipe passes --client."""
+
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "deployment.md").read_text(encoding="utf-8")
+    recipe = " ".join(doc.split("A customer release is the", 1)[1].split("Its six live checks", 1)[0].split())
+
+    assert "`python tools/release_readiness.py --release-sha <sha> --client <client>`" in recipe, recipe

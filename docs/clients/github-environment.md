@@ -9,14 +9,15 @@ hand it the exact digest of a plan you have read.
 
 > **Status.** Built and tested against a fake `gh` only. No environment has
 > been created by it yet. `deploy-dev.yml` runs in one since M1-PR7 (one
-> client environment per dispatch); `nightly.yml` stays parked until M1-PR8.
+> client environment per dispatch); `nightly.yml` runs in both since M1-PR8
+> (its validator jobs in `<client>-validate`, its browser job in `<client>`).
 
 ## The two environments
 
 | Environment | Used by | Holds |
 |---|---|---|
 | `<client>` | the deploy job (the deployer's federation subject `…:environment:<client>`) | the profile: public fields as variables, identifying fields and credentials as secrets |
-| `<client>-validate` | the validator's federation subject `…:environment:<client>-validate` | protections only, for now; the validator job (M1-PR8) decides its values |
+| `<client>-validate` | `nightly.yml`'s validator jobs (the validator's federation subject `…:environment:<client>-validate`) | protections, and the validation profile filled by hand: `MIP_CLIENT`, `MIP_APP_NAME` and `MIP_DEFAULT_CATALOG` as variables, `DATABRICKS_HOST` and `MIP_IDENTITY_IDS_JSON` as secrets, the same values `<client>` holds (docs/deployment.md, "Live validation per client"); never an M2M secret |
 
 `<client>` is `MIP_CLIENT`. Both get exactly the protections of the review
 mode `MIP_REVIEW_MODE` names:
@@ -66,8 +67,8 @@ becomes an update or a delete of that policy.
   identities").
 - **Verify keys:** the public half of each generated key,
   `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` and `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY`,
-  as a variable. Read-only jobs (the nightly) verify with it and never
-  receive the private key. It is derived in the same step, exactly as the
+  as a variable. Read-only jobs verify with it and never receive the
+  private key (`nightly.yml` reads neither since M1-PR8). It is derived in the same step, exactly as the
   deploy derives it, and written **before** the key: GitHub never returns
   the private key, so no later run could derive it, and if the key's write
   fails the next plan generates both again. A key already set without its
