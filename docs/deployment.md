@@ -2832,12 +2832,14 @@ only for a **window reason** the read-only plan predicted
 
 - **WR1** binding diff: the App's live resource bindings differ from the
   bundle's, compared as a set keyed by binding name (an order-only difference
-  is equal), or a binding id is unresolved. Every update that carries
-  resources re-grants CREATE ON DATABASE to the App's Lakebase role (spike
-  S2, below), so a WR1 window always runs the migration job after its binding
+  is equal) on their access contract (kind, target, permission; a binding's
+  own `description` is display text, reported apart and never a reason), or a
+  binding id is unresolved. Every update that carries resources re-grants
+  CREATE ON DATABASE to the App's Lakebase role (spike S2, below), so only a
+  WR1 window sends them, it always runs the migration job after its binding
   update, and its acked body names that re-grant
-  (`app_role_regrant: ["binding_send"]`). A description-only difference is no
-  reason: the release applies it online (below);
+  (`app_role_regrant: ["binding_send"]`). An App description-only difference
+  is no reason: the release applies it online (below);
 - **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
   drifts for the App role, the AI Gateway verifier role or the jobs
   identity's `jobs_reader` role (M2-PR5), or a `noop` migration plan reads
@@ -2912,7 +2914,9 @@ are re-read under the lease and must still equal the bundle's as a set; a
 description-only difference is applied online with
 `tools/databricks/app_description_fixup.py`, a create-update masked to
 `description`, identity-pinned, which restarts nothing and re-grants
-nothing), the App role
+nothing). A window opened for another reason (WR4 opens before the binding
+step) skips the send the same way: resources go out only in a WR1 window or
+an ungoverned run. The App role
 converger refuses any rotation the plan did not predict, the verifier and
 jobs-reader roles are re-checked under the lease right before their converges
 (drift exits 2, blue serving), and the migration job is skipped because the
@@ -2972,20 +2976,29 @@ Only the migration job's revoke takes it back. A PATCH (`apps update`)
 without a description clears it to `""`. A create-update masked to
 `description` changes the description and `update_time` only. So:
 
-- every send of resources is followed by the migration job in the same run:
-  the step files record it (`APP_ROLE_REGRANT_OWED`), a WR1 window runs the
-  job after its binding update whatever the migration plan says (its budget
-  counts it: every window without WR3 adds `migrate`), and a migration skip
-  with a send recorded refuses;
+- the release's own sends (the binding step's `apps update`, only in a WR1
+  window or an ungoverned run, and the first install's `apps create`) are
+  followed by the migration job in the same run: the step files record them
+  (`APP_ROLE_REGRANT_OWED`), a WR1 window runs the job after its binding
+  update whatever the migration plan says (its budget counts it: every window
+  without WR3 adds `migrate`), and a migration skip with a send recorded
+  refuses;
 - the signed-blue restore (`restore_signed_app_resource_contract`, step 0a
-  and the rollbacks) sends a create-update masked to `resources`, so the
-  description survives, and says on stderr that the role now holds CREATE ON
-  DATABASE; the next migration plan reports it as `app_role_regrant: owed`
-  and the window plan makes it a restorable WR2;
+  and the rollbacks) sends a create-update masked to `resources`, so the App
+  description survives, and re-sends each kept binding's live description
+  (what the API does with a sent binding that omits one is unmeasured). No
+  restore runs the migration job: step 0a restores before any window opens,
+  and a rollback restores after a window's migration already ran. So the role
+  keeps CREATE ON DATABASE until the NEXT release: the restore says so on
+  stderr, that release's migration plan reports it as
+  `app_role_regrant: owed`, and its window plan makes it a restorable WR2;
 - the migration plan's verify sets that one privilege apart and reports it
   (`app_role_regrant`); `--mode verify` and apply's postflight still refuse it;
-- the bindings compare as a set by name, and the description is an online
-  fix-up, never a window.
+- the bindings compare as a set by name on their access contract, and the
+  App description is an online fix-up, never a window. A binding's own
+  description is display text: `app_resource_bindings diff` and the
+  post-update verifier name the bindings whose text differs and pass; only a
+  resources send carries the bundle's text (no online fix exists).
 
 S2b also proved an online `REVOKE CREATE, TEMPORARY ON DATABASE` by the
 database owner safe while the App serves. The release does not use it: the
@@ -2993,12 +3006,16 @@ grantor it needs after the ownership handover is inferred, not tested, so the
 revoke stays the migration job's, inside a window.
 
 Cutover run 1 on client #1, on the shape S2 read live (an empty description,
-the eleven bindings, the scheduler binding in another position), now plans no
-WR1 window and one online description fix-up
-(`tests/unit/test_cutover_run1_binding_plan.py`). Whether it needs another
-window depends on facts the plan reads and the spike did not: the live App
-role's CREATE ON DATABASE (a WR2 if a past restore left it re-granted) and
-WR2-WR4's other inputs.
+the eleven bindings, the scheduler binding in another position, and three
+secret bindings, `cotality_id_mask_secret`, `genie_action_current_secret`
+and `genie_action_previous_secret`, with no description of their own while
+the bundle declares one for each), now plans no WR1 window and one online
+description fix-up (`tests/unit/test_cutover_run1_binding_plan.py`). The
+three bindings keep reading undescribed: the plan names them and nothing
+repairs them until a later WR1 send carries the bundle's text. Whether run 1
+needs another window depends on facts the plan reads and the spike did not:
+the live App role's CREATE ON DATABASE (a WR2 if a past restore left it
+re-granted) and WR2-WR4's other inputs.
 
 ### The job budget and the dead-man (M0-PR9)
 
@@ -4126,7 +4143,11 @@ adopt phase's reviewed bindings and the App payload all read that one value.
 With the switch off the App payload names no Salesforce secret, even with the
 connector's inputs set: a `valueFrom` naming an unbound binding does not fail
 a deployment, it starts the App with the env var unset (S2b), so the payload
-prints a names-only `Salesforce notice:` instead. Switching it on adds three
+prints a names-only `Salesforce notice:` instead. The default never turns a
+configured connector off: with every connector input set (env or
+`.env.local`) and the switch unset, the preflight
+(`resolve_salesforce_bindings_switch`) refuses before any mutation, so the
+owner says `on` or `off`. Switching it on adds three
 bindings: a resources send, so a WR1 window with its migration job. Each key
 must exist in the runtime scope first (a missing key refuses the whole
 update, S2b); `provision_runtime_secrets.py` writes an absent one as a
@@ -4138,8 +4159,9 @@ the line the owner adds under the public profile fields:
 ```bash
 # Optional (client profile): bind the App's three Salesforce connector secrets
 # (salesforce_client_secret, salesforce_password, salesforce_security_token).
-# off when unset; on adds the three bindings in a WR1 window (docs/deployment.md,
-# "Optional Salesforce activation").
+# off when unset; on adds the three bindings in a WR1 window. Set it (on or off)
+# whenever every SALESFORCE_* connector input is set: unset then refuses
+# (docs/deployment.md, "Optional Salesforce activation").
 MIP_SALESFORCE_BINDINGS=
 ```
 
