@@ -20,6 +20,9 @@ What this file pins:
   except through the pre-lease gate, which the adopt phases skip. The EXIT trap
   reaches a warehouse only through compensations whose arming flags nothing on
   that path sets. The Genie pin plan returns before its tool reads a warehouse.
+* The wave-7 spec's structural guard: no Python tool the adopt path runs or
+  imports, and no adopt helper the spec names, names a warehouse input
+  (``git grep -nP``), apart from pinned lines the path never reaches.
 * A live adopt and unadopt run in the release sandbox, from the first line to
   the apply's exit, with no warehouse anywhere: CI's shape.
 * Fail closed if a step ever did need one: step 0a's empty-warehouse refusal,
@@ -317,6 +320,145 @@ def test_the_genie_pin_plan_returns_before_its_tool_reads_a_warehouse() -> None:
         '        print("  read-only pin plan: nothing was changed")\n        return 0\n'
     )
     assert plan_pin_return < source.index("args.warehouse_id")
+
+
+# The wave-7 spec's structural guard on the Python the adopt path runs. The live
+# sandbox run below cannot stand in for it: tests/fixtures/release_sandbox_python.py
+# answers these tools without running their code. -P, not -E: an -E word boundary
+# matches nothing in git grep on macOS, so -E would pass vacuously.
+WAREHOUSE_INPUT = r"(_GRANTS_WAREHOUSE_ID|DATABRICKS_WAREHOUSE_ID|--warehouse-id|\bwarehouse_id\b)"
+# A tool the path runs (-m) or imports into an inline interpreter, and a script it
+# runs by path.
+TOOL_MODULE = re.compile(r"-m[\s\\]+(tools(?:\.\w+)+)|(?m:^\s*(?:from|import)\s+(tools(?:\.\w+)+))")
+TOOL_SCRIPT = re.compile(r"\btools/[\w/]+\.py\b")
+# Named by the spec, because no line on the path names them as a tool: the adopt
+# lifecycle library, the adopt helpers the path's tools import, and the
+# preflight's live and install checks.
+NAMED_SOURCES = (
+    "scripts/lib/deploy_adopt_phase_lifecycle.sh",
+    "tools/databricks/adopt_live_facts.py",
+    "tools/databricks/adopted_source_copy.py",
+    "tools/databricks/genie_space_pin.py",
+    "tools/clients/live_checks.py",
+    "tools/clients/install_checks.py",
+)
+NAMED_GLOB = "tools/databricks/prestop_*.py"
+# The two sources on the path that do name one. Each such line is pinned up to
+# where the path stops reading the file, so a new one is a review question.
+# provision_genie_space runs with --plan-pin only, which returns before it uses a
+# warehouse (the test above). Up to that return it names one in its docstring,
+# the --warehouse-id argument's definition and the dry-run plan text. The path
+# imports two validators from app_deploy_payload; that file's one line is the
+# App payload's env binding, which nothing on the path builds.
+REVIEWED_LINES: dict[str, tuple[str | None, tuple[str, ...]]] = {
+    "tools/databricks/provision_genie_space.py": (
+        '        print("  read-only pin plan: nothing was changed")\n        return 0\n',
+        (
+            "* Warehouse ID comes from ``--warehouse-id`` (scripts/deploy.sh passes the",
+            "warehouse its bundle state binds) or ``DATABRICKS_WAREHOUSE_ID``.",
+            '"--warehouse-id",',
+            'default=os.environ.get("DATABRICKS_WAREHOUSE_ID"),',
+            'print("      warehouse_id = --warehouse-id (the bundle\'s warehouse)")',
+        ),
+    ),
+    "tools/databricks/app_deploy_payload.py": (
+        None,
+        ('{"name": "DATABRICKS_WAREHOUSE_ID", "value_from": "sql_warehouse"},',),
+    ),
+}
+PAYLOAD_IMPORTS = ["salesforce_switch_refusal", "validated_otel_endpoint"]
+
+
+def _module_source(module: str) -> str:
+    base = REPO.joinpath(*module.split("."))
+    for source in (base.with_suffix(".py"), base / "__main__.py"):
+        if source.is_file():
+            return source.relative_to(REPO).as_posix()
+    raise AssertionError(f"{module} names no source in the repo")
+
+
+def _adopt_path_tools() -> tuple[set[str], str]:
+    """Every Python source the adopt path runs or imports, and the text that names them."""
+
+    functions, path = _functions(), _adopt_path()
+    reached = _reached(functions, path, skip=frozenset({"run_bundle_plan_gate"}))
+    text = path + "".join(functions[name] for name in sorted(reached))
+    modules = {run or imported for run, imported in TOOL_MODULE.findall(text)}
+    scripts = set(TOOL_SCRIPT.findall(text))
+    # Each tools name on the path is one the patterns read: none is missed.
+    assert set(re.findall(r"\btools(?:\.\w+)+", text)) == modules
+    assert set(re.findall(r"\btools/[\w/.]+", text)) == scripts
+    for script in scripts:
+        assert (REPO / script).is_file(), script
+    return {_module_source(module) for module in modules} | scripts, text
+
+
+def _warehouse_inputs(sources: set[str]) -> list[tuple[str, int, str]]:
+    """``git grep -nP`` for a warehouse input over ``sources``: (path, line, stripped text)."""
+
+    result = subprocess.run(
+        [
+            "git",
+            "grep",
+            "--untracked",
+            "--no-color",
+            "-nP",
+            WAREHOUSE_INPUT,
+            "--",
+            *sorted(sources),
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode in (0, 1), result.stderr  # 1: no match; anything else fails closed
+    found = []
+    for line in result.stdout.splitlines():
+        path, number, text = line.split(":", 2)
+        found.append((path, int(number), text.strip()))
+    return found
+
+
+def test_no_python_tool_on_the_adopt_path_names_a_warehouse_input() -> None:
+    derived, text = _adopt_path_tools()
+    # Positive control: the walk finds the tools the sandbox answers without running them.
+    assert {
+        "tools/databricks/install_state_adopt.py",
+        "tools/databricks/adopt_live.py",
+        "tools/databricks/deploy_prestop_probes.py",
+        "tools/databricks/pii_salt_scope.py",
+        "tools/databricks/provision_runtime_secrets.py",
+        "tools/databricks/provision_genie_space.py",
+        "tools/databricks/app_deploy_payload.py",
+    } <= derived
+    imported = re.findall(r"from tools\.databricks\.app_deploy_payload import (\w+)", text)
+    assert sorted(set(imported)) == PAYLOAD_IMPORTS
+    runs = {run for run, _ in TOOL_MODULE.findall(text) if run}
+    assert "tools.databricks.app_deploy_payload" not in runs, "imported, never run"
+    named = {path.relative_to(REPO).as_posix() for path in REPO.glob(NAMED_GLOB)}
+    assert len(named) >= 9, NAMED_GLOB
+    for source in NAMED_SOURCES:
+        assert (REPO / source).is_file(), source
+    sources = derived | named | set(NAMED_SOURCES)
+
+    found = _warehouse_inputs(sources)
+
+    for reviewed, (cut, lines) in REVIEWED_LINES.items():
+        assert reviewed in sources, reviewed
+        source = (REPO / reviewed).read_text(encoding="utf-8")
+        end = (
+            len(source.splitlines())
+            if cut is None
+            else source[: source.index(cut) + len(cut)].count("\n")
+        )
+        # Also the positive control: -P finds every one of these lines.
+        assert [line for path, number, line in found if path == reviewed and number <= end] == list(
+            lines
+        )
+    assert [hit for hit in found if hit[0] not in REVIEWED_LINES] == []
+    # Positive control: the same grep finds the signed blue proof's warehouse.
+    assert _warehouse_inputs({"scripts/lib/deploy_step_signed_blue_proof.sh"})
 
 
 # --- a live adopt phase, end to end, offline -----------------------------------------
