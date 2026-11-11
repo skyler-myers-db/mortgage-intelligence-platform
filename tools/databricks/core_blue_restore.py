@@ -21,9 +21,10 @@ treatment is quiesced, the record is loaded through the tier gate
   S7: a STOPPED App's GET has no active deployment, and a FAILED deployment
   becomes active and moves the default source). The pre-stop probe
   predicts that refusal before the lease. Then the record's own bindings are
-  restored when a killed run left a candidate's (the restore-owned repair,
-  the one ``apps.update`` site), and identity and the core resource proof are
-  proven against the record. A stopped blue is then started and re-pinned
+  restored when a killed run left a candidate's (the restore-owned repair, a
+  create-update masked to ``resources``, which re-grants the App role CREATE ON
+  DATABASE until the next release's migration job: spike S2), and identity and
+  the core resource proof are proven against the record. A stopped blue is then started and re-pinned
   (tier a, as v5/v6's step 0a does): the start's new deployment is proven to
   be blue and the record re-signed onto it (tools/databricks/core_blue_repin.py).
   A start snapshots the folder's CURRENT bytes (S7), so before any start the

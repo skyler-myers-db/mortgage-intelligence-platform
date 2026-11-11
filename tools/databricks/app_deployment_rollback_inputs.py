@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tools.databricks.app_optional_bindings import salesforce_bindings_from_env, select_bindings
 from tools.databricks.app_rollback_resource_contract import (
     reviewed_app_resource_contract,
     validated_app_resource_contract,
@@ -29,4 +30,11 @@ def reviewed_resources_file(path: str) -> list[dict[str, object]]:
     resources = value.get("resources")
     if isinstance(resources, list):
         return validated_app_resource_contract(resources)
-    return reviewed_app_resource_contract(value)
+    # A bundle summary declares every binding; the profile's switch decides the
+    # optional Salesforce ones, as the release's binding payload does (S2b).
+    try:
+        return select_bindings(
+            reviewed_app_resource_contract(value), salesforce=salesforce_bindings_from_env()
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"bundle summary bindings are not the profile's: {exc}") from None

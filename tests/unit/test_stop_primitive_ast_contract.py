@@ -97,10 +97,24 @@ def test_every_reviewed_mode_is_one_the_entry_point_parses() -> None:
             assert any(entry.modes.values()) and not all(entry.modes.values())
 
 
+# Reviewed exceptions, each one module and one caller: the data phase's runner
+# (M1-PR6) and the release's online description fix-up (spike S2: a
+# create-update masked to description, which stops, starts and deploys nothing).
+NON_STOP_CALLERS = {
+    "tools.databricks.job_phase_runner": stops.JOB_RUN_LIBRARIES,
+    "tools.databricks.app_description_fixup": frozenset({stops.BUNDLE_APPLY_STEP}),
+}
+
+
 def test_the_stop_libraries_are_the_only_callers_of_a_mutating_mode() -> None:
     for module, entry in stops.ENTRY_POINTS.items():
-        allowed = stops.JOB_RUN_LIBRARIES if module == "tools.databricks.job_phase_runner" else stops.STOP_LIBRARIES
+        allowed = NON_STOP_CALLERS.get(module, stops.STOP_LIBRARIES)
         assert entry.callers <= allowed, module
+    fixup = stops.ENTRY_POINTS["tools.databricks.app_description_fixup"]
+    assert fixup.callers == frozenset({stops.BUNDLE_APPLY_STEP}) and not fixup.positional
+    assert ("tools/databricks/app_description_fixup.py", "apply_bundle_description", "create_update") in (
+        stops.PRIMITIVE_SITES
+    ), "its one SDK call is the description-masked create-update"
     assert stops.repo_shell_violations() == []
 
 

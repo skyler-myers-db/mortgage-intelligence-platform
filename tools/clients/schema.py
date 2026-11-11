@@ -81,6 +81,7 @@ FIELD_CLASS: dict[str, FieldClass] = {
     "MIP_APP_ENV": _P,
     "MIP_AGENTIC_TIER": _P,
     "MIP_SCHEDULED_REFRESH": _P,
+    "MIP_SALESFORCE_BINDINGS": _P,
     "MIP_REVIEW_MODE": _P,
     "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": _P,
     "MIP_PRESENTER_MODE": _P,
@@ -236,6 +237,7 @@ _SCALAR_SHAPES: dict[str, tuple[re.Pattern[str], str]] = {
     "install_class": (re.compile(r"demo|customer"), "demo or customer"),
     "agentic_tier": (re.compile(r"off|on"), "off or on"),
     "scheduled_refresh": (re.compile(r"off|on"), "off or on"),
+    "salesforce_bindings": (re.compile(r"off|on"), "off or on"),
     "lakebase_readable_secondaries": (re.compile(r"true|false"), "true or false"),
     "default_catalog": (UC_IDENTIFIER, "a lowercase unquoted identifier"),
     "lakebase_sync_catalog": (UC_IDENTIFIER, "a lowercase unquoted identifier"),
@@ -307,6 +309,10 @@ class ClientProfile(BaseModel):
     app_env: str = Field(alias="MIP_APP_ENV")
     agentic_tier: str = Field(alias="MIP_AGENTIC_TIER")
     scheduled_refresh: str = Field(alias="MIP_SCHEDULED_REFRESH")
+    # The App's optional Salesforce secret bindings (spike S2b): off when unset,
+    # so an install binds them only when it runs the connector
+    # (tools/databricks/app_optional_bindings.py).
+    salesforce_bindings: str | None = Field(default=None, alias="MIP_SALESFORCE_BINDINGS")
     review_mode: str = Field(alias="MIP_REVIEW_MODE")
     demo_first_party_feeds: str | None = Field(default=None, alias="MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS")
     presenter_mode: str | None = Field(default=None, alias="MIP_PRESENTER_MODE")

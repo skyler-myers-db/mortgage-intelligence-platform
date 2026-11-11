@@ -22,8 +22,15 @@ from jobs.lakebase_migration_roles import _raise_object_inventory_mismatch
 from jobs.lakebase_migration_schema_hooks import _postflight_trigger_inventory
 
 
-def _postflight_app_role_grants(cur: object, role: str) -> None:
-    """Verify the app role's effective privileges exactly match the matrix."""
+def _postflight_app_role_grants(cur: object, role: str, *, allow_database_create: bool = False) -> None:
+    """Verify the app role's effective privileges exactly match the matrix.
+
+    ``allow_database_create`` is the read-only migration plan's alone: spike S2
+    measured that every App resource-binding send grants CREATE ON DATABASE to
+    this role again, so the plan reports that one privilege apart
+    (``app_role_regrant``) and checks the rest of the matrix exactly. The apply
+    postflight and ``--mode verify`` keep the default and refuse it.
+    """
     cur.execute(  # type: ignore[attr-defined]
         "SELECT rolname FROM pg_roles WHERE rolname = %s",
         (role,),
@@ -52,7 +59,7 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
     ) = cur.fetchone()  # type: ignore[attr-defined]
     if (
         not database_connect
-        or database_create
+        or (database_create and not allow_database_create)
         or database_temporary
         or not schema_usage
         or schema_create

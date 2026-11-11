@@ -17,6 +17,7 @@ from backend.agents.gateway_contract import (
     gateway_runtime_binding_hash,
 )
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+from tests.fixtures.measured_app_updates import UpdateLedger, apply_create_update, apply_patch
 from tools.databricks import app_deployment_health as deployment_health
 from tools.databricks import app_deployment_rollback as rollback
 from tools.databricks import app_deployment_rollback_cli as rollback_cli
@@ -317,6 +318,9 @@ class _Apps:
         self.service_principal_id = "app-scim-id"
         self.resources = json.loads(json.dumps(APP_RESOURCES))
         self.resource_updates = 0
+        # The description and what each update did, as spike S2 measured them.
+        self.description = "Mortgage Intelligence Platform (synthetic)"
+        self.update_ledger = UpdateLedger()
 
     def list_deployments(self, _app_name: str) -> list[object]:
         return self.deployments
@@ -342,15 +346,24 @@ class _Apps:
             active_deployment=self.active_deployment,
             pending_deployment=self.pending_deployment,
             resources=self.resources,
+            description=self.description,
         )
 
     def start_and_wait(self, _app_name: str, *, timeout: object) -> None:
         self.started += 1
 
     def update(self, _app_name: str, app: object) -> object:
+        """A PATCH as measured (S2): it clears an omitted description."""
+
         self.resource_updates += 1
-        self.resources = app.as_dict()["resources"]
+        apply_patch(self, app, self.update_ledger)
         return self.get(_app_name)
+
+    def create_update(self, app_name: str, update_mask: str, *, app: object = None) -> object:
+        """Only the masked fields, as measured (S2, S2b); a resources mask re-grants CREATE."""
+
+        self.resource_updates += 1
+        return apply_create_update(self, app_name, update_mask, app, self.update_ledger)
 
     def deploy_and_wait(self, _app_name: str, deployment: object, *, timeout: object) -> object:
         self.deployed_payload = deployment.as_dict()

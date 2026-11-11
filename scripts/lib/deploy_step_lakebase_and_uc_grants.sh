@@ -25,8 +25,16 @@
 # job always runs, also to re-grant a rotated App, verifier or jobs-reader
 # role (WR2; outside a window each was proven exact before its converge), and
 # the window closes right after it with blue started and re-pinned.
+# A run that sent App resources (APP_ROLE_REGRANT_OWED, step 4) re-granted
+# CREATE ON DATABASE to the App's role (spike S2), which only this job revokes:
+# it never skips it. A send happens only in a window or an ungoverned run, so
+# a skip with one owed is a broken invariant and refuses, never a silent skip.
 ensure_quiesce_window_open_for WR3
 if [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" && "${QUIESCE_WINDOW_CODE:-}" == "none" ]]; then
+  if [[ "${APP_ROLE_REGRANT_OWED:-0}" -eq 1 ]]; then
+    echo "${RED}[deploy] App resources were sent outside a window, so the App's Lakebase role holds CREATE ON DATABASE until the migration job revokes it; refusing to skip that job. Re-run to plan its window.${RST}" >&2
+    exit 2
+  fi
   step "skip the Lakebase migration: the pre-apply plan is noop and its verify passed"
 else
   step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"

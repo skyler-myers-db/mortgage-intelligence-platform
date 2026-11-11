@@ -43,6 +43,7 @@ APPLY = {
     "blue_restorable": True,
     "migrations": {"pending": ["0042"], "pending_contract": []},
     "jobs_reader_grants": "exact",
+    "app_role_regrant": "exact",
 }
 BLUE = "deployment-blue"
 

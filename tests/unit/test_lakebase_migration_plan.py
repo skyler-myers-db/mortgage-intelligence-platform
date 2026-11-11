@@ -181,6 +181,8 @@ class _Catalog:
     authority: tuple[bool, ...] = (True, True, True, True, True)
     unowned: Rows = field(default_factory=list)
     roles: set[str] = field(default_factory=lambda: {_APP_ROLE})
+    # The App role's CREATE ON DATABASE (spike S2: a binding send re-grants it).
+    database_create: bool = False
 
     def route(self, text: str, params: Any) -> Rows | None:
         if text == "SHOW transaction_read_only":
@@ -208,6 +210,9 @@ class _Catalog:
             if self.live_fingerprint is None:
                 raise RuntimeError("relation mip_app.sales_team does not exist")
             return [(self.live_fingerprint,)]
+        if text == lakebase_migration_plan._APP_ROLE_DATABASE_CREATE_SQL:
+            assert params == (_APP_ROLE,)
+            return [(self.database_create,)]
         return None
 
 
@@ -282,8 +287,10 @@ def test_plan_is_noop_when_nothing_is_pending_the_digest_matches_and_verify_pass
         "passed": True,
     }
     assert "SELECT 'check:trigger_inventory'" in statements
-    # The fingerprint is the session's last read.
-    assert statements[-1] == CATALOG_FINGERPRINT_SQL
+    # The fingerprint is the session's last decision read; the App role's
+    # CREATE ON DATABASE (spike S2) is read after it, beside the decision.
+    assert statements[-2:] == [CATALOG_FINGERPRINT_SQL, lakebase_migration_plan._APP_ROLE_DATABASE_CREATE_SQL]
+    assert report["app_role_regrant"] == "exact"
 
 
 @pytest.mark.parametrize(

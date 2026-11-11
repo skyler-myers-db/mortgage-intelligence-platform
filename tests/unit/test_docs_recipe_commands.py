@@ -102,6 +102,7 @@ def staged(tmp_path: Path) -> dict[str, str]:
         "payload": str(tmp_path / "payload.json"),
         "app-name": "mip-app",
         "profile": "live-workspace",
+        "salesforce-bindings": "off",
     }
 
 
@@ -237,11 +238,38 @@ def test_payload_runs_and_names_the_legacy_release_folder(
 
     assert app_deploy_payload.main(_module_args(tokens, "tools.databricks.app_deploy_payload")) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert redirect == staged["payload"] and env == {"MIP_GIT_SHA": COMMIT}
+    assert redirect == staged["payload"]
+    assert env == {"MIP_GIT_SHA": COMMIT, "MIP_SALESFORCE_BINDINGS": "off"}
     assert payload["source_code_path"] == f"{LEGACY_ROOT}/app-src/{staged['release-id']}"
     env_vars = {item["name"]: item.get("value", item.get("value_from")) for item in payload["env_vars"]}
     assert env_vars["APP_ENV"] == "sandbox" and env_vars["MIP_DEFAULT_CATALOG"] == "mip"
     assert env_vars["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"] == "0"
+
+
+def test_payload_names_the_salesforce_switch_so_a_configured_connector_never_refuses(
+    monkeypatch: pytest.MonkeyPatch, staged: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round 2 of #337: an unset switch refuses a configured connector, and the recipe set none.
+
+    With every connector input set (placeholders here) the recipe's payload
+    line died with an uncaught refusal and left an empty payload file. The
+    recipe names the switch, so it builds; off binds none of the secrets.
+    """
+
+    monkeypatch.setattr(app_deploy_payload, "_dotenv_overlay", dict)
+    env, tokens, _ = _argv(recipe_commands()[4], staged)
+    for name in [name for name in os.environ if name.startswith(("MIP_", "APP_ENV", "SALESFORCE_"))]:
+        monkeypatch.delenv(name)
+    for name in app_deploy_payload.SALESFORCE_REQUIRED_VARS:
+        monkeypatch.setenv(name, f"synthetic{name.lower().replace('_', '')}value")
+    monkeypatch.setenv("SALESFORCE_INSTANCE_URL", "https://lender.example.my.salesforce.com")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert app_deploy_payload.salesforce_connector_configured({}), "every connector input reads set"
+
+    assert app_deploy_payload.main(_module_args(tokens, "tools.databricks.app_deploy_payload")) == 0
+    names = {item["name"] for item in json.loads(capsys.readouterr().out)["env_vars"]}
+    assert not names & app_deploy_payload.SALESFORCE_SECRET_ENVS
 
 
 def test_apps_deploy_names_the_payload_and_an_explicit_profile(staged: dict[str, str]) -> None:

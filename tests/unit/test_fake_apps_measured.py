@@ -199,8 +199,10 @@ def test_the_core_worlds_start_answers_with_nothing_and_shows_its_deployment_lat
 
 
 def test_the_core_worlds_update_moves_bindings_only(world: CoreWorld) -> None:
-    resource = SimpleNamespace(as_dict=lambda: {"name": "x"})
-    world.apps.update(rr.APP_NAME, SimpleNamespace(resources=[resource], default_source_code_path="/elsewhere"))
+    # An as_dict App, as the SDK sends: the update is the measured PATCH (S2).
+    payload = {"name": rr.APP_NAME, "resources": [{"name": "x"}], "default_source_code_path": "/elsewhere"}
+    world.apps.update(rr.APP_NAME, SimpleNamespace(as_dict=lambda: payload))
+    assert world.resources == [{"name": "x"}]
     assert world.apps.get(rr.APP_NAME).default_source_code_path == world.folder("deployment-blue")
 
 

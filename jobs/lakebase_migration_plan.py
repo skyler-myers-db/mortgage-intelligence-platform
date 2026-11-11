@@ -21,6 +21,17 @@ included), ``off`` without the option. It never changes the decision: blue
 never reads as that role, so the quiesce window plan reads a drift as a role
 re-grant (WR2) that keeps blue restorable, not as a schema change.
 
+The plan also reports ``app_role_regrant``: ``owed`` when the App role holds
+CREATE ON DATABASE, ``exact`` otherwise (``unchecked`` when the runtime roles
+did not resolve, a refusal). Spike S2 measured that every App
+update that carries resource bindings, an identical array included, grants
+that one privilege to the App role again with no restart, and only apply's
+revoke takes it back. So the plan's verify checks the App role's matrix with
+that one privilege set apart: a re-grant alone leaves the decision ``noop``
+(nothing in the schema to change, blue restorable) and the quiesce window plan
+reads ``owed`` as a role re-grant (WR2) whose window runs the migration job.
+``--mode verify`` and apply's postflight still refuse the privilege.
+
 The JSON report names checks, codes, versions and ``mip_app`` objects only.
 It never carries a role name, host or exception text, so it is safe to print
 in a public run log.
@@ -161,6 +172,12 @@ def _app_role_grants(cur: ReadOnlyCursor, ctx: CheckContext) -> None:
     _postflight_app_role_grants(cur, ctx.app_role)
 
 
+def _app_role_grants_but_regrant(cur: ReadOnlyCursor, ctx: CheckContext) -> None:
+    """The App role's matrix, with only CREATE ON DATABASE set apart (``app_role_regrant``)."""
+
+    _postflight_app_role_grants(cur, ctx.app_role, allow_database_create=True)
+
+
 def _verifier_grants(cur: ReadOnlyCursor, ctx: CheckContext) -> None:
     if ctx.verifier_role is not None:
         _postflight_ai_gateway_verifier_grants(cur, ctx.verifier_role)
@@ -188,6 +205,20 @@ VERIFY_CHECKS: tuple[_Check, ...] = (
     ("app_role_grants", _app_role_grants),
     ("ai_gateway_verifier_grants", _verifier_grants),
 )
+_APP_ROLE_DATABASE_CREATE_SQL = "SELECT has_database_privilege(%s, current_database(), 'CREATE')"
+
+
+def plan_verify_checks() -> tuple[_Check, ...]:
+    """The plan's verify: ``VERIFY_CHECKS`` with the App role's CREATE ON DATABASE set apart.
+
+    Spike S2: ``_app_role_regrant`` reports that one privilege on its own.
+    Read at call time, so the suite's stubbed checks stay stubs.
+    """
+
+    return tuple(
+        (name, _app_role_grants_but_regrant if check is _app_role_grants else check)
+        for name, check in VERIFY_CHECKS
+    )
 
 
 def run_checks(
@@ -301,6 +332,23 @@ def _jobs_reader_grants(cur: ReadOnlyCursor, ctx: CheckContext) -> str:
     return "exact"
 
 
+def _app_role_regrant(cur: ReadOnlyCursor, ctx: CheckContext) -> str:
+    """``owed`` when the App role holds CREATE ON DATABASE (a binding send re-granted it, S2).
+
+    An unreadable answer (an aborted session) reads as ``owed``: the window
+    plan then runs the migration job's revoke, never skips it.
+    """
+
+    try:
+        cur.execute(_APP_ROLE_DATABASE_CREATE_SQL, (ctx.app_role,))
+        row = cur.fetchone()
+    except ReadOnlyStatementRefused:
+        raise
+    except Exception:  # noqa: BLE001 -- the state is the public diagnostic
+        return "owed"
+    return "exact" if row is not None and row[0] is False else "owed"
+
+
 def run_verify(conn_kwargs: dict, ctx: CheckContext) -> dict[str, Any]:
     """Run apply's postflights read-only and report the first failing check."""
 
@@ -360,7 +408,7 @@ def run_plan(
             if preflight_failure is not None:
                 refusals.append(f"apply_preflight:{preflight_failure}")
             else:
-                verify["checks"], verify["failed_check"] = run_checks(cur, ctx, VERIFY_CHECKS)
+                verify["checks"], verify["failed_check"] = run_checks(cur, ctx, plan_verify_checks())
                 verify["passed"] = verify["failed_check"] is None
             # Last decision input: a failed read aborts the session, and a
             # failing check already decides apply, so nothing is left to compare.
@@ -368,6 +416,11 @@ def run_plan(
                 catalog_state = _catalog_state(cur, recorded) if verify["passed"] else "skipped"
         # After every decision input: a failed read here (an aborted session
         # reads as drift) can only add a re-grant, never change the decision.
+        # Read only once the runtime roles resolved: a plan refused there
+        # probes nothing more, and the window plan records it unchecked.
+        app_role_regrant = (
+            "unchecked" if "runtime_roles" in refusals else _app_role_regrant(cur, ctx)
+        )
         jobs_reader_grants = _jobs_reader_grants(cur, ctx)
     declared = {migration.version for migration in migrations}
     pending = [m for m in migrations if applied is not None and m.version not in applied]
@@ -412,6 +465,7 @@ def run_plan(
         "catalog": catalog_state,
         "verify": verify,
         "jobs_reader_grants": jobs_reader_grants,
+        "app_role_regrant": app_role_regrant,
     }
 
 

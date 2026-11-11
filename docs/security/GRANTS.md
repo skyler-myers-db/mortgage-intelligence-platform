@@ -225,7 +225,9 @@ usage error exits 2, so a failed probe never reads as drift:
   bootstrap-residue and public-schema reads in a read-only session, valid
   while the App serves; it never stops the App or takes the bootstrap lock.
 - `app_resource_bindings diff --expected <payload> --live <apps get json>`:
-  empty exactly when the post-update binding verifier would pass.
+  empty exactly when the post-update binding verifier would pass on the
+  bindings, compared as a set by name; a description-only difference is
+  printed and exits 0 (an online fix-up, spike S2).
 
 Nothing invokes them yet; the keep-serving release wires them into its
 pre-stop probes.

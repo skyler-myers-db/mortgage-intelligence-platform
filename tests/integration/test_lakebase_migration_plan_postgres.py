@@ -312,6 +312,39 @@ def test_drift_only_apply_repairs_turns_noop_into_apply(
     assert (repaired["decision"], repaired["catalog"]) == ("noop", "equal"), repaired
 
 
+def test_a_binding_sends_create_re_grant_is_reported_apart_and_apply_revokes_it(
+    monkeypatch: pytest.MonkeyPatch,
+    conn_kwargs: dict[str, str],
+    app_role: str,
+) -> None:
+    """Spike S2: an App update that carries resources grants CREATE ON DATABASE
+    to the App role again. The plan reports that alone as ``app_role_regrant``
+    and stays noop (the window plan makes it a WR2); verify still refuses it;
+    apply's revoke takes it back."""
+
+    _apply(conn_kwargs, app_role)
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        row = conn.execute("SELECT current_database()").fetchone()
+        assert row is not None
+        conn.execute(
+            psql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
+                psql.Identifier(str(row[0])), psql.Identifier(app_role)
+            )
+        )
+
+    regranted, _recorded = _read_only(monkeypatch, conn_kwargs, app_role, mode="plan")
+    verify, _recorded = _read_only(monkeypatch, conn_kwargs, app_role, mode="verify")
+
+    assert (regranted["decision"], regranted["blue_restorable"]) == ("noop", True), regranted
+    assert regranted["app_role_regrant"] == "owed"
+    assert (verify["passed"], verify["failed_check"]) == (False, "app_role_grants")
+
+    _apply(conn_kwargs, app_role)
+    repaired, _recorded = _read_only(monkeypatch, conn_kwargs, app_role, mode="plan")
+
+    assert (repaired["decision"], repaired["app_role_regrant"]) == ("noop", "exact"), repaired
+
+
 def test_plan_names_an_object_the_executor_does_not_own(
     monkeypatch: pytest.MonkeyPatch,
     conn_kwargs: dict[str, str],

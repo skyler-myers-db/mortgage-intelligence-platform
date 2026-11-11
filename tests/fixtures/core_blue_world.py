@@ -11,7 +11,9 @@ folder) with the newest deployment's env-name set into a new deployment
 that shows only ``HIDDEN_READS`` reads later, pending for one GET, then
 active IN_PROGRESS until its first poll settles it (``start_final``; a
 FAILED one stays active). A STOPPED App's GET has no active deployment, a
-stop leaves the App STOPPED, and an update replaces the bindings only. Every
+stop leaves the App STOPPED, and an update or a create-update moves neither
+the deployment nor the default source: it is the PATCH or the masked write
+spike S2 measured (tests/fixtures/measured_app_updates.py). Every
 mutation is recorded in ``apps.mutations``. ``serves`` and
 ``converge_treatment`` are the injected checks the core tools take, recording
 what they were asked. Every value is synthetic.
@@ -29,6 +31,7 @@ from databricks.sdk.service.workspace import ObjectType
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.adopt_live_world import DIST, World, make_repo
+from tests.fixtures.measured_app_updates import UpdateLedger, apply_create_update, apply_patch
 from tests.fixtures.measured_apps import HIDDEN_READS, StartVisibility
 from tools.databricks import blue_restore_proof as proof
 
@@ -115,10 +118,19 @@ class CoreApps:
         return SimpleNamespace(response=self.reads.get(name))
 
     def update(self, name: str, app: Any) -> None:
-        """Bindings only: a default_source_code_path in the App is ignored (S7-2)."""
+        """A PATCH as measured (S2): it clears an omitted description.
+
+        A default_source_code_path in the App is ignored (S7-2).
+        """
 
         self.mutations.append("update")
-        self.world.resources = [item.as_dict() for item in app.resources]
+        apply_patch(self.world, app, self.world.update_ledger)
+
+    def create_update(self, app_name: str, update_mask: str, *, app: Any = None) -> Any:
+        """Only the masked fields, as measured (S2, S2b); a resources mask re-grants CREATE."""
+
+        self.mutations.append("create_update")
+        return apply_create_update(self.world, app_name, update_mask, app, self.world.update_ledger)
 
 
 @dataclass
@@ -133,6 +145,9 @@ class CoreWorld(World):
     start_final: str = "SUCCEEDED"
     treatments: list[str] = field(default_factory=list)
     health_calls: list[str] = field(default_factory=list)
+    # The App's description and what each update did (measured_app_updates, spike S2).
+    description: str = "Mortgage Intelligence Platform (synthetic)"
+    update_ledger: UpdateLedger = field(default_factory=UpdateLedger)
 
     def __post_init__(self) -> None:
         super().__post_init__()
