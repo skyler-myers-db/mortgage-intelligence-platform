@@ -405,6 +405,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # adopt-live (--phase adopt: modes adopt and supersede) proves the
+          # live App's health sha is an ancestor of refs/remotes/origin/main,
+          # then reads app.yaml and the runtime closure at that sha, so that
+          # phase checks out main's full history (B5). 2147483647 is git's
+          # INFINITE_DEPTH, the deepen `git fetch --unshallow` sends: checkout
+          # keeps its one authenticated, pinned fetch of
+          # +<this run's commit>:refs/remotes/origin/main, now unshallow, and
+          # fetches no other branch or tag. Never 0: depth 0 fetches every
+          # branch and tag, prints each name in this log, and a tag named like
+          # a short sha shadows that commit. Every other phase reads HEAD only
+          # and stays at depth 1. The key set equals inputs.phase's options
+          # (tests/unit/test_deploy_dev_checkout_history.py).
+          fetch-depth: ${{ fromJSON('{"plan":1,"release":1,"data":1,"adopt":2147483647,"unadopt":1}')[inputs.phase] }}
       - uses: actions/setup-python@v6
         with: { python-version: '3.11' }
       - uses: databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c # v1.7.0
