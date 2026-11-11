@@ -190,9 +190,10 @@ example the workspace's serverless starter warehouse. Put it in `.env.local`
 and run `github_environment --plan`, then `--apply --ack-plan <sha256>`
 (section 3): the field is identifying, so it is stored as a `<client>`
 environment secret, and it changes the profile ack. The preflight checks it
-read-only (`python -m tools.databricks.bundle_state bootstrap-warehouse-id`:
-no bundle state binds a warehouse or the App, no App of the profile's name
-exists, and the warehouse is that id, not deleted and `PRO`) and the log
+read-only (the deploy's own `bundle_state bootstrap-warehouse-id` step, no
+owner command: no bundle state binds a warehouse or the App, no App of the
+profile's name exists, and the warehouse is that id, not deleted and `PRO`)
+and the log
 says `sql warehouse: first-install-bootstrap`. The check proves the deployer
 can read the warehouse, not that it holds `CAN_USE`: a warehouse it cannot
 use fails at step 0a, after the lease, with no App created. After the first

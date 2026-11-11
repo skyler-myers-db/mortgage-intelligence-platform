@@ -107,9 +107,8 @@
 # Environment:
 #   .env.local holds the client profile (deploy/clients/example.env). The SQL
 #   warehouse is the one this deployer's bundle state binds; a first install
-#   takes the profile's MIP_BOOTSTRAP_WAREHOUSE_ID (proven read-only; or a
-#   local DATABRICKS_WAREHOUSE_ID) as its bootstrap warehouse until the bundle
-#   apply creates its own. The adopt phases read none: they run no SQL (B1).
+#   borrows the profile's MIP_BOOTSTRAP_WAREHOUSE_ID (proven read-only) until
+#   the bundle apply creates its own. The adopt phases read none: no SQL (B1).
 #   GENIE_SPACE_ID is no input (M1-PR3): the governed Genie space is resolved
 #   by its pin (tools/databricks/genie_space_pin.py). A first install creates
 #   and pins it before bundle deploy, so databricks_app.mip_app never binds the
