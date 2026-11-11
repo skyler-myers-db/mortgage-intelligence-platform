@@ -3673,14 +3673,19 @@ unmerged commit refuses; the full-tree digest of the deployment's source folder 
 runtime closure git tracks at that sha (`closure_differs`). A folder staged by
 an older closure definition therefore refuses, and the remedy is a fresh
 emergency deploy of a current commit before the adoption. A deployment whose
-`MIP_GIT_SHA` names a commit main does not hold (an emergency ship from a
-branch, or from a branch head later squash- or rebase-merged) refuses
-`health_sha_not_on_main` by design: in CI with `the health sha resolves to no
-single commit in this checkout's history of main`, in a full clone that holds
-the branch with `the health sha is not an ancestor of main`. So does every live
-deployment after a rewrite of main's history, which gives every commit a new
-sha. The remedy is an emergency redeploy of a main commit, then a fresh start
-and adopt, never a relaxation. `frontend/dist` is
+`MIP_GIT_SHA` names a commit main does not hold at the adopt dispatch (a
+commit of a side or unmerged branch, or of a branch later squash- or
+rebase-merged) refuses `health_sha_not_on_main` by design: in CI with `the
+health sha resolves to no single commit in this checkout's history of main`,
+in a full clone that holds the branch with `the health sha is not an ancestor
+of main`. So does every live deployment after a rewrite of main's history,
+which gives every commit a new sha. The remedy is an emergency redeploy of a
+main commit, then a fresh start and adopt, never a relaxation. A branch commit
+main later merges with a merge commit becomes an ancestor of main and is
+admitted, even one that was never main's tip, so adopt-live is no backstop
+against an emergency ship from a branch: the cutover runbook's history rule
+keeps one out before the adoption (docs/clients/first-client-cutover.md,
+"Decisions taken"). `frontend/dist` is
 compared with a dist adopt-live builds itself from the health sha when
 `MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
 that sha into a private temporary tree, then `npm ci --ignore-scripts` and

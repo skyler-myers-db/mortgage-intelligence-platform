@@ -15,7 +15,9 @@ git-source-provider.ts, ref-helper.ts, git-command-manager.ts):
   every branch name, and lets a tag named like a short sha shadow that commit.
 
 A sha main does not hold (a side branch, a squash-merged branch head, an
-unknown sha) refuses ``health_sha_not_on_main`` in every checkout.
+unknown sha) refuses ``health_sha_not_on_main`` in every checkout. A branch
+main merges with a merge commit is admitted whole, so the runbooks' history
+rule, not adopt-live, is what keeps a branch ship out before the adoption.
 """
 
 from __future__ import annotations
@@ -33,6 +35,11 @@ MAIN_REF = "refs/remotes/origin/main"
 NOT_IN_MAIN = "the health sha resolves to no single commit in this checkout's history of main"
 NOT_AN_ANCESTOR = "the health sha is not an ancestor of main"
 SHALLOW = "this checkout is shallow"
+ROOT = Path(__file__).resolve().parents[2]
+HISTORY_RULE_DOCS = (
+    ROOT / "docs" / "clients" / "first-client-cutover.md",
+    ROOT / "docs" / "deployment.md",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -231,3 +238,37 @@ def test_a_full_clone_of_every_branch_and_tag_admits_nothing_more_and_a_tag_can_
     unknown = _refused(clone, "f" * 40, source_sha=origin.c5)
     assert (unknown.code, str(unknown)) == ("health_sha_not_on_main", NOT_IN_MAIN)
     assert _refused(clone, origin.c1, source_sha=origin.s1).code == "source_not_on_main"
+
+
+def test_a_branch_merged_with_a_merge_commit_is_admitted_whole_and_the_docs_say_so(
+    origin: Origin,
+) -> None:
+    """adopt-live is no backstop for a branch ship: a merge commit puts every branch commit on main."""
+
+    repo = origin.root / "origin"
+    _git(repo, "checkout", "-q", "-b", "hotfix", origin.c5)
+    never_tip = _commit(repo, "hotfix.txt", "h1")  # main never pointed at it
+    head = _commit(repo, "hotfix.txt", "h2")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge hotfix (#3)", "hotfix")
+    origin.c5 = _out(repo, "rev-parse", "HEAD")  # the run's commit, main's new tip
+    clone, _log = origin.checkout("after-a-merge-commit", INFINITE_DEPTH)
+
+    for health, commit in (
+        (never_tip, never_tip),
+        (never_tip[:12], never_tip),
+        (head, head),
+        (origin.m1, origin.m1),
+    ):
+        assert _resolve(clone, health, source_sha=origin.c5) == commit
+    for health in (origin.s1, origin.f1):  # an unmerged side branch, a squash-merged head
+        refused = _refused(clone, health, source_sha=origin.c5)
+        assert (refused.code, str(refused)) == ("health_sha_not_on_main", NOT_IN_MAIN)
+
+    for doc in HISTORY_RULE_DOCS:
+        flat = " ".join(doc.read_text(encoding="utf-8").split())
+        assert "later merges with a merge commit" in flat, doc.name
+        assert "is admitted, even one that was never" in flat, doc.name
+        assert "or from a branch head later squash- or rebase-merged" not in flat, doc.name
+    cutover = " ".join(HISTORY_RULE_DOCS[0].read_text(encoding="utf-8").split())
+    assert "This rule, not adopt-live, keeps a branch ship out." in cutover

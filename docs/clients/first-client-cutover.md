@@ -110,10 +110,14 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
   good. The alternative, a one-time recreate that loses the dashboards' ids,
   URLs and published history, is the owner's choice only.
 - **The App start before step 10** is the owner's raw `apps start` (step 10A).
-- **Until 10B, no emergency ship from a commit `main` does not hold.**
-  adopt-live adopts only a deployment whose health `git_sha` is on `main`: a
-  ship from a branch, or from a branch head later squash- or rebase-merged,
-  refuses `health_sha_not_on_main` by design. Its remedy is another emergency
+- **Until 10B, no emergency ship from a commit `main` does not hold.** This
+  rule, not adopt-live, keeps a branch ship out. adopt-live refuses
+  `health_sha_not_on_main`, by design, a health `git_sha` that `main` does not
+  hold at the adopt dispatch: a commit of a side or unmerged branch, or of a
+  branch later squash- or rebase-merged. A branch commit `main` later merges
+  with a merge commit, this repository's usual merge, becomes an ancestor of
+  `main` and is admitted, even one that was never `main`'s tip; step 10A's
+  source check passes it too. A refused ship's remedy is another emergency
   ship, of a `main` commit, then step 10A's source check again.
 - **No git-history rewrite before 10B, nor before any later supersede** of an
   adopted record. The public-history rewrite is an open owner decision; a
