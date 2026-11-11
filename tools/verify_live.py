@@ -62,10 +62,19 @@ from tools.verify_live_source_readiness import (  # noqa: E402
 # The deployed App's URL: --base-url, else MIP_APP_URL (scripts/e2e_live.sh's
 # name). No default: an App URL names one client's workspace (M1-PR4).
 BASE_URL_ENV = "MIP_APP_URL"
-# The report names the App URL, so it never lands in the tracked tree: the
-# default is the system temp directory, and an --out inside the checkout is
-# refused unless git ignores it (M1-PR4).
-DEFAULT_REPORT = Path(tempfile.gettempdir()) / "mip-verify-live" / "e2e-verification.md"
+# The report names the App URL, so it never lands in the tracked tree, nor at
+# a fixed path in a temp directory other users share (one can plant it as a
+# symlink): by default each run writes into a new private directory there,
+# and an --out inside the checkout is refused unless git ignores it (M1-PR4).
+REPORT_DIR_PREFIX = "mip-verify-live-"
+REPORT_NAME = "e2e-verification.md"
+DEFAULT_REPORT_HELP = f"a new private {REPORT_DIR_PREFIX}* directory in the system temp directory"
+
+
+def default_report() -> Path:
+    """This run's report path, in a directory ``mkdtemp`` just created (mode 0700, never pre-existing)."""
+
+    return Path(tempfile.mkdtemp(prefix=REPORT_DIR_PREFIX)) / REPORT_NAME
 
 
 def report_path_refusal(out: Path) -> str | None:
@@ -96,7 +105,7 @@ def report_path_refusal(out: Path) -> str | None:
         return None
     return (
         f"--out {out} is in the checkout and not git-ignored, and the report names the App URL; "
-        f"write it outside the tree (the default is {DEFAULT_REPORT})"
+        f"write it outside the tree (the default is {DEFAULT_REPORT_HELP})"
     )
 
 
@@ -764,8 +773,8 @@ def main() -> int:
     ap.add_argument(
         "--out",
         type=Path,
-        default=DEFAULT_REPORT,
-        help=f"the report, which names the App URL (default {DEFAULT_REPORT}); never a tracked path",
+        default=None,
+        help=f"the report, which names the App URL (default {DEFAULT_REPORT_HELP}); never a tracked path",
     )
     ap.add_argument(
         "--max-source-age-days",
@@ -785,7 +794,10 @@ def main() -> int:
             f"--base-url (or {BASE_URL_ENV}) is required: the deployed App's URL, which "
             "`databricks apps get <app-name>` prints as url"
         )
-    refusal = report_path_refusal(args.out)
+    # The default's private directory is made only when the report is written;
+    # the temp root it goes under is checked here, before any token mint.
+    checked = Path(tempfile.gettempdir()) / REPORT_NAME if args.out is None else args.out
+    refusal = report_path_refusal(checked)
     if refusal is not None:
         ap.error(refusal)
     if args.max_source_age_days is not None and args.max_source_age_days < 1:
@@ -812,10 +824,11 @@ def main() -> int:
         max_source_age_days=threshold.days,
         threshold_basis=threshold.basis,
     )
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as fh:
+    out = default_report() if args.out is None else args.out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
         fh.write(report)
-    print(f"[verify_live] report: {args.out}", file=sys.stderr)
+    print(f"[verify_live] report: {out}", file=sys.stderr)
     # also print JSON summary on stdout for the caller agent
     summary = [
         {

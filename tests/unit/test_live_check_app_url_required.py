@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -70,22 +72,88 @@ def test_verify_live_reads_the_url_from_the_environment(
     assert seen["base"] == "https://app.example"
 
 
-def test_the_default_report_is_outside_the_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    assert not verify_live.DEFAULT_REPORT.resolve().is_relative_to(ROOT)
-    assert verify_live.report_path_refusal(verify_live.DEFAULT_REPORT) is None
+def _run_with_the_default_report(monkeypatch: pytest.MonkeyPatch, temp_root: Path) -> None:
+    """main() with no --out, the system temp directory at ``temp_root`` and every probe stubbed."""
 
-    # With no --out the report lands at the default, and it holds the URL.
-    report = tmp_path / "nested" / "report.md"
-    monkeypatch.setattr(verify_live, "DEFAULT_REPORT", report)
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
     monkeypatch.setattr(verify_live, "get_oauth_token", lambda profile: "test-token")
     monkeypatch.setattr(verify_live, "run_probes", lambda base, token: [])
     monkeypatch.setattr(verify_live, "collect_red_flags", lambda results, **_kwargs: [])
     monkeypatch.setattr(
         "sys.argv", ["verify_live.py", "--base-url", "https://app.example", "--max-source-age-days", "8"]
     )
-
     assert verify_live.main() == 0
-    assert "https://app.example" in report.read_text(encoding="utf-8")
+
+
+def test_the_default_report_is_outside_the_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    system_temp = Path(tempfile.gettempdir())
+    assert not system_temp.resolve().is_relative_to(ROOT)
+    assert verify_live.report_path_refusal(system_temp / verify_live.REPORT_NAME) is None
+
+    # Each call makes a new private directory, so no one can have planted it.
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "calls"))
+    (tmp_path / "calls").mkdir()
+    first, second = verify_live.default_report(), verify_live.default_report()
+    assert first.parent != second.parent
+    for report in (first, second):
+        assert report.parent.parent == tmp_path / "calls" and not report.exists()
+        assert stat.S_IMODE(report.parent.stat().st_mode) == 0o700
+
+    # With no --out the report lands in a new private directory, and it holds the URL.
+    _run_with_the_default_report(monkeypatch, tmp_path)
+    [made] = tmp_path.glob(f"{verify_live.REPORT_DIR_PREFIX}*")
+    assert stat.S_IMODE(made.stat().st_mode) == 0o700
+    assert "https://app.example" in (made / verify_live.REPORT_NAME).read_text(encoding="utf-8")
+
+
+def test_a_planted_symlink_in_the_shared_temp_directory_is_never_followed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Another local user can pre-create any fixed path in /tmp; the default is never one."""
+
+    victim = tmp_path / "victim.txt"
+    victim.write_text("VICTIM ORIGINAL CONTENT", encoding="utf-8")
+    # The fixed path the default once was, pre-created by someone else.
+    temp_root = tmp_path / "tmp"
+    (temp_root / "mip-verify-live").mkdir(parents=True)
+    (temp_root / "mip-verify-live" / verify_live.REPORT_NAME).symlink_to(victim)
+
+    _run_with_the_default_report(monkeypatch, temp_root)
+
+    assert victim.read_text(encoding="utf-8") == "VICTIM ORIGINAL CONTENT"
+    [made] = temp_root.glob(f"{verify_live.REPORT_DIR_PREFIX}*")
+    report = made / verify_live.REPORT_NAME
+    assert not report.is_symlink() and "https://app.example" in report.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("git", ["oserror", "timeout", "fatal_128", "ignored_0"])
+def test_an_inside_path_is_refused_when_git_cannot_answer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], git: str
+) -> None:
+    """git exits 128 in a checkout it calls dubious, or in a source copy that is no repo."""
+
+    def fake_git(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        assert command[:3] == ["git", "check-ignore", "-q"]
+        if git == "oserror":
+            raise FileNotFoundError("git")
+        if git == "timeout":
+            raise subprocess.TimeoutExpired(command, 30)
+        return subprocess.CompletedProcess(command, 128 if git == "fatal_128" else 0)
+
+    monkeypatch.setattr(verify_live.subprocess, "run", fake_git)
+    inside = ROOT / "docs" / "verify-live.md"
+    if git == "ignored_0":  # the control: the fake alone decides
+        assert verify_live.report_path_refusal(inside) is None
+        return
+    assert verify_live.report_path_refusal(inside) is not None
+
+    _no_probe(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["verify_live.py", "--base-url", "https://app.example", "--out", str(inside)])
+    with pytest.raises(SystemExit) as refused:
+        verify_live.main()
+    assert refused.value.code == 2
+    assert "not git-ignored" in capsys.readouterr().err
+    assert not inside.exists()
 
 
 @pytest.mark.parametrize(
