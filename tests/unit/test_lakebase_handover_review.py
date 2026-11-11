@@ -8,7 +8,9 @@
   (a typo, or a case variant: the jobs half matches case-insensitively, a
   role name does not), so it passed. It refuses ``legacy_role_not_found``.
 * A rehearsal whose failure's take-back failed too left its CREATE grant on
-  the throwaway with no report. It warns on stderr with the REVOKE to run.
+  the throwaway with no report. It warns on stderr with the REVOKE to run,
+  and so does a rehearsal whose measurement finished and whose final
+  take-back raised (round 2).
 """
 
 from __future__ import annotations
@@ -120,6 +122,22 @@ def test_a_failed_rehearsal_whose_take_back_fails_says_what_remains(capsys: pyte
     with pytest.raises(Exception, match="injected") as failed:
         _rehearse(server)
     assert server.has_privilege(DEPLOYER, schema, "CREATE"), "the grant really remains"
+    revoke = f'REVOKE CREATE ON SCHEMA "{rehearsal.REHEARSAL_SCHEMA}" FROM'
+    err = capsys.readouterr().err
+    assert "WARNING" in err and revoke in err and DEPLOYER not in err
+    assert any(revoke in note for note in getattr(failed.value, "__notes__", []))
+
+
+def test_a_measured_rehearsal_whose_take_back_fails_says_what_remains(capsys: pytest.CaptureFixture[str]) -> None:
+    """Round 2: the measurement completes and only the final REVOKE raises; the leftover is reported the same way."""
+
+    server = throwaway()
+    schema = f"SCHEMA:{rehearsal.REHEARSAL_SCHEMA}"
+    server.fail_on.add(schema)  # only the take-back's REVOKE fails
+    with pytest.raises(Exception, match="injected") as failed:
+        _rehearse(server)
+    assert server.has_privilege(DEPLOYER, schema, "CREATE"), "the grant really remains"
+    assert server.owners[f"TABLE:{rehearsal.REHEARSAL_SCHEMA}.rehearsal_target"] == LEGACY, "the measurement ran and reverted"
     revoke = f'REVOKE CREATE ON SCHEMA "{rehearsal.REHEARSAL_SCHEMA}" FROM'
     err = capsys.readouterr().err
     assert "WARNING" in err and revoke in err and DEPLOYER not in err

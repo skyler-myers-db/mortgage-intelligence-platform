@@ -238,21 +238,32 @@ def rehearse(
         )
     except BaseException as failure:
         if not _take_back(connection, granted, target, quiet=True):
-            # The grant may remain, and a later rehearsal, finding CREATE held, neither grants nor revokes it.
-            note = (
-                f"{_PREFIX} WARNING: the rehearsal could not take back the CREATE it granted the deployer on its "
-                f"schema; on the throwaway, as the legacy owner, run: "
-                f"{revoke_statement(_SCHEMA_OBJECT, ('CREATE',), DEPLOYER_PLACEHOLDER)};"
-            )
-            print(note, file=sys.stderr)
-            failure.add_note(note)
+            _report_leftover(failure)
         connection.close()
         raise
-    revoked = _take_back(connection, granted, target, quiet=False)
+    try:
+        revoked = _take_back(connection, granted, target, quiet=False)
+    except BaseException as failure:
+        # The measurement finished but its take-back raised: the same leftover (PR #336, round 2).
+        _report_leftover(failure)
+        connection.close()
+        raise
     connection.close()
     if not granted:
         return report
     return replace(report, granted_schema_create=True, schema_create_revoked=revoked, passed=report.passed and revoked)
+
+
+def _report_leftover(failure: BaseException) -> None:
+    """The CREATE grant may remain, and a later rehearsal, finding it held, neither grants nor revokes it."""
+
+    note = (
+        f"{_PREFIX} WARNING: the rehearsal could not take back the CREATE it granted the deployer on its "
+        f"schema; on the throwaway, as the legacy owner, run: "
+        f"{revoke_statement(_SCHEMA_OBJECT, ('CREATE',), DEPLOYER_PLACEHOLDER)};"
+    )
+    print(note, file=sys.stderr)
+    failure.add_note(note)
 
 
 def _take_back(connection: Any, granted: list[str], target: str, *, quiet: bool) -> bool:
