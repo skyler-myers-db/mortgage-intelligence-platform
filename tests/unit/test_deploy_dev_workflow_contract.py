@@ -186,7 +186,8 @@ def test_deploy_script_rejects_duplicate_target_before_preflight(
 def test_live_workflows_pin_cli_with_safe_partial_app_deploy_support() -> None:
     setup_action = "databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c"
 
-    for workflow_path in (DEPLOY_DEV, NIGHTLY):
+    for workflow_path, expected in ((DEPLOY_DEV, 1), (NIGHTLY, 0)):
+        # M1-PR8: nightly runs no Databricks CLI; its validator session uses the SDK.
         workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
         setup_steps = [
             step
@@ -194,9 +195,10 @@ def test_live_workflows_pin_cli_with_safe_partial_app_deploy_support() -> None:
             for step in job.get("steps", [])
             if str(step.get("uses", "")).partition("@")[0].casefold() == "databricks/setup-cli"
         ]
-        assert len(setup_steps) == 1
-        assert setup_steps[0]["uses"] == setup_action
-        assert not setup_steps[0].get("with")
+        assert len(setup_steps) == expected, workflow_path.name
+        for step in setup_steps:
+            assert step["uses"] == setup_action
+            assert not step.get("with")
 
     bundle = yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))
     assert bundle["bundle"]["databricks_cli_version"] == ">= 1.7.0"
@@ -2889,9 +2891,10 @@ def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
     assert "${YEL}" not in script
 
 
-def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() -> None:
+def test_gateway_grant_pending_delivery_blocks_only_a_strict_release_and_its_retry_is_a_listed_gap() -> None:
     script = _deploy_entrypoint_text()
     workflow = NIGHTLY.read_text(encoding="utf-8")
+    doc = (REPO / "docs" / "deployment.md").read_text(encoding="utf-8")
 
     grant_start = script.index("AI_GATEWAY_GRANTS_READY=1")
     proof_start = script.index('step "verify AI Gateway exact inference-row proof', grant_start)
@@ -2900,8 +2903,12 @@ def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() ->
     assert "strict AI Gateway inference-table grant convergence failed" in grant_block
     assert "delivery/grants are pending" in grant_block
     assert "honestly configured/unavailable" in grant_block
-    assert "Reconcile delayed AI Gateway inference-table grants" in workflow
-    assert workflow.count("-m tools.databricks.grant_ai_gateway_inference_table") >= 1
+    # The deploy makes one attempt. M1-PR8: nightly holds no grant authority,
+    # so nothing retries a delayed delivery yet; the retry is a listed gap.
+    assert script.count("-m tools.databricks.grant_ai_gateway_inference_table") == 2, "one attempt per principal"
+    assert "grant_ai_gateway_inference_table" not in workflow
+    gaps = doc[doc.index("**Gaps: no home yet.**") : doc.index("**Supply chain.**")]
+    assert "the delayed AI Gateway inference-table grant retry" in gaps
 
 
 def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() -> None:
@@ -3305,12 +3312,11 @@ def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
         "secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_ID",
     ):
         assert legacy_secret not in workflow
-        assert legacy_secret not in nightly
-    assert nightly.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
+        # M1-PR8: nightly's check-dispatch reads these by presence only, never by value.
+        assert f"{legacy_secret} }}}}" not in nightly
+    assert "secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}" not in nightly
     assert "agent_proxy_credential_bundle public-fields" not in workflow
-    assert (
-        nightly.count("python -m tools.databricks.agent_proxy_credential_bundle public-fields") == 2
-    )
+    assert "agent_proxy_credential_bundle" not in nightly
     assert "tools.databricks.agent_proxy_credential_bundle all-fields" in script
     live_resolution = script[
         script.index(
@@ -5100,16 +5106,14 @@ def test_proof_signing_heartbeat_is_direct_child_and_renews(
     assert "scoped-proof-key" not in payload["argv"]
 
 
-def test_nightly_exporters_receive_only_model_attestation_public_keys() -> None:
+def test_nightly_exports_no_gateway_runtime_contract_and_binds_no_signing_key() -> None:
+    """M1-PR8: the Gateway contract needs the agent proxy bundle, which nightly never reads."""
+
     workflow = NIGHTLY.read_text(encoding="utf-8")
 
-    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in workflow
-    assert workflow.count("vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") == 2
-    for marker in (
-        "- name: Resolve source-bound Gateway runtime contract",
-        "python -m tools.databricks.export_gateway_runtime_contract",
-    ):
-        assert marker in workflow
+    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}" not in workflow
+    assert "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY" not in workflow
+    assert "export_gateway_runtime_contract" not in workflow
 
 
 def test_deploy_unexports_private_signing_keys_before_first_child_process() -> None:
@@ -5447,21 +5451,14 @@ def test_active_app_binding_hash_includes_complete_proxy_credential_binding() ->
         assert argument in block
 
 
-def test_playwright_job_wires_genie_id_into_runtime_contract_export() -> None:
-    workflow = NIGHTLY.read_text(encoding="utf-8")
-    job = workflow[
-        workflow.index("  playwright-e2e-live:") : workflow.index(
-            "  kill-drill-simulated:",
-            workflow.index("  playwright-e2e-live:"),
-        )
-    ]
-    export_step = job[
-        job.index("- name: Resolve source-bound Gateway runtime contract") : job.index(
-            "- name: Resolve deployed app URL"
-        )
-    ]
+def test_playwright_job_reads_the_app_url_with_an_operator_bearer_not_a_genie_id() -> None:
+    """M1-PR8: no runtime contract export; the normal operator's bearer reads the App's URL."""
 
-    assert "GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}" in export_step
+    job = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))["jobs"]["playwright-e2e-live"]
+    text = yaml.safe_dump(job)
+
+    assert "GENIE_SPACE_ID" not in text and "export_gateway_runtime_contract" not in text
+    assert "validation_session operators" in text
 
 
 @pytest.mark.parametrize(

@@ -222,6 +222,7 @@ rebuild_core_blue_restore_payload() {
     --app-name "$_GRANTS_APP_NAME" \
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
     --agentic-tier "$CLIENT_AGENTIC_TIER" \
     --install-class "$CLIENT_INSTALL_CLASS" \
     --app-env "$APP_RUNTIME_ENV" \

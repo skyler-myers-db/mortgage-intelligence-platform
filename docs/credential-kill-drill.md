@@ -33,10 +33,12 @@ canonical recovery procedure.
 | `lakebase-real`   | real-infra | Yes (SDK-driven)     | No       | `--i-really-mean-it` OR `MIP_KILL_DRILL_ALLOW_REAL=1` |
 
 The **simulated** tier runs in the nightly `kill-drill-simulated`
-GitHub Actions job and is a release gate. The **real-infra** tier is
-opt-in only: either the manual `workflow_dispatch` path with
-`run_real_drills=true`, or a deliberate local dry-run. It is **never**
-on the nightly cron.
+GitHub Actions job, under the client's read-only validator, and is a
+release gate. The **real-infra** tier is operator-run only: it stops
+and starts the warehouse and the Lakebase instance (CAN_MANAGE), which
+no `nightly.yml` identity holds, so since M1-PR8 no workflow runs it.
+An operator runs it by hand against a non-live install
+(docs/deployment.md, "Live validation per client", gaps).
 
 **Cadence.** Run the full four-target simulated sweep before every
 major release dry-run. Run the real-infra pair before major release
@@ -284,13 +286,13 @@ from taking production down.
   be stopped**. The operator must investigate immediately; the script
   logs the last known state.
 
-**Running from GitHub Actions**
+**Not from GitHub Actions**
 
-The `kill-drill-real-infra` job on the nightly workflow runs this drill
-when and only when an operator triggers `workflow_dispatch` with
-`run_real_drills=true`. The job env sets `MIP_KILL_DRILL_ALLOW_REAL=1`
-scoped to that job only; the scheduled cron path never satisfies the
-`if:` guard.
+No workflow runs this drill since M1-PR8: it needs CAN_MANAGE on the
+warehouse and the Lakebase instance, which no `nightly.yml` identity
+holds. An operator runs `tools/kill_drill/run_drill.sh --target
+warehouse-real` by hand, with `MIP_KILL_DRILL_ALLOW_REAL=1` in that
+shell only, against a non-live install.
 
 ---
 
@@ -344,9 +346,9 @@ Every real-infra invocation has to clear all of these gates:
    data-endpoint probe, operator interrupt), the recovery
    `start` call runs before the drill exits. If that restart fails the
    operator gets a loud alert and a non-zero exit.
-5. **Never on cron** — the `kill-drill-real-infra` job is
-   `if: github.event_name == 'workflow_dispatch' && inputs.run_real_drills == true`.
-   A scheduled nightly can never trigger it.
+5. **Never from a workflow** — no workflow runs a real-infra target
+   (tests/unit/test_nightly_workflow_contract.py pins that `nightly.yml`
+   names neither); an operator runs it by hand.
 
 ---
 
