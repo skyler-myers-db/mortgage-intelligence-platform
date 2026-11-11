@@ -20,6 +20,15 @@ on bind and unbind, after checking each edit with
 ``acknowledged`` stands for the ``MIP_ADOPT_PLAN_ACK`` bundle_env would see (by
 default the plan's own digest, an operator who acknowledged it) and the lease
 is held. Every authority it is handed is recorded in ``authorities``.
+
+A dashboard's folder is spelled the way each API answered spike S4 (CLI
+v1.10.0): the profile and the plan's ``new_state`` say
+``/Workspace/Users/...`` (``configured``), ``lakeview.get`` answers
+``parent_path`` and ``path`` as ``/Users/...`` (``live_folder``), and the
+direct engine reports the remote folder as ``/Workspace/Users/...`` and plans no
+``parent_path`` change between the two spellings of one folder
+(``plan_folder``). tests/unit/test_adopt_dashboard_parent_path.py pins all
+three, so the fake cannot drift back to answering the configured form.
 """
 
 from __future__ import annotations
@@ -50,6 +59,20 @@ DASHBOARD_PARENT = f"{LEGACY_ROOT}/resources"
 DEV = "[dev example] "
 NEW_KEYS = ("jobs.mip_growth_agent_monitor_scheduler", "jobs.mip_scheduled_refresh")
 EXACT_KINDS = frozenset({"apps", "database_instances", "database_catalogs"})
+# The two folders the Workspace API also spells without ``/Workspace``.
+_ALIASED = ("/Workspace/Users/", "/Workspace/Shared/")
+
+
+def live_folder(path: str) -> str:
+    """A folder as ``lakeview.get`` answers it (spike S4): ``/Users/...``, never ``/Workspace/Users/...``."""
+
+    return path.removeprefix("/Workspace") if path.startswith(_ALIASED) else path
+
+
+def plan_folder(path: str) -> str:
+    """A folder as the direct engine reports it in a plan's remote state (spike S4): under ``/Workspace``."""
+
+    return f"/Workspace{path}" if f"/Workspace{path}".startswith(_ALIASED) else path
 
 
 def inputs(**overrides: Any) -> AdoptInputs:
@@ -93,7 +116,7 @@ def _legacy_names(resource: str) -> dict[str, str]:
     if kind in EXACT_KINDS:
         return names
     if kind == "dashboards":
-        return {**names, "display_name": DEV + names["display_name"]}
+        return {"parent_path": live_folder(names["parent_path"]), "display_name": DEV + names["display_name"]}
     if kind == "experiments":
         head, _, base = names["name"].rpartition("/")
         return {"name": f"{head}/{DEV}{base}"}
@@ -269,7 +292,9 @@ class FakeBundleCli:
                 entries[f"resources.{resource}"] = fx.entry("create", value=config)
                 continue
             live = self.estate.objects.get((kind, bound[resource]))
-            remote = live.names if live is not None else {}
+            remote = dict(live.names) if live is not None else {}
+            if kind == "dashboards" and "parent_path" in remote:
+                remote["parent_path"] = plan_folder(remote["parent_path"])
             changes = {
                 name: {"action": "update", "old": remote.get(name), "new": value, "remote": remote.get(name)}
                 for name, value in config.items()

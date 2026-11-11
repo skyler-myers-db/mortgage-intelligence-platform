@@ -662,6 +662,23 @@ or `mip.gold.source_readiness`. The product flow then goes stale or
 fails at refresh time. The app itself still only needs `mip.gold` and
 `mip.ref` reads.
 
+**Who owns the pipeline's datasets.** The streaming tables and
+materialized views `mip_feature_pipeline` publishes into `mip.silver` are
+the one exception to the data-owner group owning the governed objects.
+Spike S4 measured that their owner can never be changed by `ALTER ... OWNER
+TO` or the REST owner PATCH, by any actor
+(`CHANGE_OWNER_NOT_ALLOWED_FOR_PIPELINE_TABLE`): it is always the
+pipeline's run_as identity, and it flips when that setting changes. The
+pipeline runs as the non-admin jobs identity (`var.jobs_principal`), so the
+jobs identity owns these datasets permanently. A group cannot be a run_as,
+so `<MIP_IDENTITY_PREFIX>-data-owners` never owns them, and
+`converge_governed_owner` never touches them. Grants on them survive an
+owner flip. `python -m tools.clients.handover_uc_ownership --verify --released`
+refuses, after the release, any pipeline dataset in the governed catalog not
+owned by the jobs identity or not owned by its pipeline's live run_as, and
+the deploy's `jobs_identity_acl` step refuses unless the pipeline's live
+run_as is the jobs identity (`docs/deployment.md`, "Ownership handover").
+
 ---
 
 ## 6. Schema `mip_app` (Lakebase Postgres — required)

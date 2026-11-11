@@ -29,7 +29,7 @@ predicted interval otherwise, ``unknown`` when the rule did not report.
 adoption bound the legacy map (``bundle_plan_adopt``). The report then carries
 the adoption's expectation: how many keys the state binds, the exact creates
 the plan may hold, and the dashboards' ``parent_path`` policy, which is
-``pinned_permanent`` until spike S4 proves an in-place move.
+``pinned_permanent``: spike S4 measured that a move recreates a dashboard.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ APP_ACL_CODES = frozenset({"unchanged", "changes", "app_absent", "refused"})
 APP_ACL_COUNTS = ("keep", "add", "remove", "change")
 EXECUTE_GAP_CODES = frozenset({"skip", "gap", "unknown"})
 EXECUTE_GAP_KINDS = ("catalogs", "schemas", "tables", "table_properties", "functions")
-# A dashboard parent_path stays where the adoption found it until spike S4.
+# A dashboard parent_path stays where the adoption found it (spike S4: a move recreates).
 DASHBOARD_PARENT_POLICIES = frozenset({"pinned_permanent"})
 COUNTED_ACTIONS = ("create", "update", "resize", "update_id", "recreate", "delete", "skip")
 _SYMBOLIC = re.compile(r"[a-z][a-z0-9_]*\.[A-Za-z0-9][A-Za-z0-9_-]*(?:\.(?:permissions|grants))?\Z")

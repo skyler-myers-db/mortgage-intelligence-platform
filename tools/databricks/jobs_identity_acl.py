@@ -22,11 +22,25 @@ object. It never removes or lowers a grant: the App's CAN_MANAGE_RUN bindings,
 the verifier's warehouse CAN_USE and any other team's grants stay as they are.
 Bundle ``permissions:`` blocks would express the same grants, but the bundle
 sets each object's whole ACL on every deploy and would drop those, so this is a
-deploy step (scripts/lib/deploy_step_bundle_apply.sh), not bundle config.
+deploy step (scripts/lib/deploy_step_bundle_apply.sh), not bundle config. The
+same reason rules out a permissions set (PUT) here: spike S4 measured that
+``jobs set-permissions`` replaces the whole ACL (setting IS_OWNER dropped
+another principal's CAN_MANAGE_RUN).
+
+Before any grant, both commands read the **live** run_as of every
+jobs-identity job and pipeline (:func:`live_run_as_drift`, one GET by id each,
+tools/databricks/live_run_as.py) and refuse unless each runs as
+``--jobs-principal``: ``live_run_as_drift`` names one that runs as anyone else,
+``live_run_as_unreadable`` one whose identity cannot be read. The summary check
+in :func:`resolve` reads configuration only, and the direct-engine plan cannot
+see a pipeline's run_as (spike S4: ``input_only``, so a drifted pipeline plans
+``skip`` and a deploy leaves it drifted). This postflight is what proves the
+release left the jobs and the pipeline running as the jobs identity.
 
 ``plan`` reads only; ``apply`` mutates. Output names bundle keys, never object
 ids or principals. Exit codes: 0 converged (or nothing to add); 2 the bundle or
-its summary refused, nothing granted; 3 a grant or its postflight failed.
+its summary refused, nothing granted; 3 a grant or its postflight failed; 4 a
+live run_as is not the jobs principal (or unreadable), nothing granted.
 """
 
 from __future__ import annotations
@@ -40,6 +54,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from tools.databricks import live_run_as
 
 PROG = "jobs-identity-acl"
 JOBS_IDENTITY = {"service_principal_name": "${var.jobs_principal}"}
@@ -64,6 +80,19 @@ SATISFIES = {
 TASK_KINDS = frozenset({"sql_task", "pipeline_task", "run_job_task", "spark_python_task", "condition_task"})
 _REFERENCE = re.compile(r"\$\{resources\.(?P<kind>[a-z_]+)\.(?P<key>[A-Za-z0-9_]+)\.(?P<field>[a-z_]+)\}")
 _PLACEHOLDER = re.compile(r"\A(0+(-0+)*|.*PLACEHOLDER.*|<.*>)\Z", re.IGNORECASE)
+LIVE_RUN_AS_DRIFT = "live_run_as_drift"
+LIVE_RUN_AS_UNREADABLE = "live_run_as_unreadable"
+LIVE_RUN_AS_REMEDIES = {
+    LIVE_RUN_AS_DRIFT: (
+        "it runs as another identity than --jobs-principal. The bundle plan repairs a job's run_as "
+        "drift but cannot see a pipeline's (input_only), so a re-deploy leaves a pipeline drifted: "
+        "the owner restores its run_as through a reviewed change, then re-runs the deploy"
+    ),
+    LIVE_RUN_AS_UNREADABLE: (
+        "its live run_as_user_name is blank or the object is gone, so the identity it runs as is "
+        "unproven; fix the read or the bundle state, then re-run the deploy"
+    ),
+}
 
 
 class Refused(RuntimeError):
@@ -188,6 +217,40 @@ def resolve(grants: frozenset[Grant], summary: dict[str, Any], *, jobs_principal
     return targets
 
 
+def run_as_targets(summary: dict[str, Any], *, bundle: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """``(kind, key, live id)`` of every jobs-identity job and pipeline; :class:`Refused` on a gap."""
+
+    resources = summary.get("resources")
+    if not isinstance(resources, dict):
+        raise Refused("the bundle summary exposes no resources")
+    found = []
+    for kind in live_run_as.KINDS:
+        for key, resource in sorted((bundle["resources"].get(kind) or {}).items()):
+            if resource.get("run_as") != JOBS_IDENTITY:
+                continue
+            live_id = str(((resources.get(kind) or {}).get(key) or {}).get("id") or "").strip()
+            if not live_id or "${" in live_id:
+                raise Refused(f"the bundle summary has no concrete object for {kind}.{key}")
+            found.append((kind, key, live_id))
+    return found
+
+
+def live_run_as_drift(client: Any, targets: list[tuple[str, str, str]], principal: str) -> list[tuple[str, str]]:
+    """``(code, kind.key)`` for each target whose LIVE run_as is not ``principal``; read-only.
+
+    A non-not-found read error propagates (the step fails, exit 3).
+    """
+
+    refusals = []
+    for kind, key, live_id in targets:
+        identity = live_run_as.run_as(client, kind, live_id)
+        if not identity:
+            refusals.append((LIVE_RUN_AS_UNREADABLE, f"{kind}.{key}"))
+        elif not live_run_as.same_identity(identity, principal):
+            refusals.append((LIVE_RUN_AS_DRIFT, f"{kind}.{key}"))
+    return refusals
+
+
 def _text(value: object) -> str:
     return str(getattr(value, "value", value) or "").strip()
 
@@ -262,6 +325,7 @@ def main(argv: list[str] | None = None, *, client: Any = None) -> int:
         bundle = yaml.safe_load(args.bundle.read_text(encoding="utf-8"))
         summary = json.loads(args.bundle_summary.read_text(encoding="utf-8"))
         targets = resolve(required_grants(bundle), summary, jobs_principal=args.jobs_principal, bundle=bundle)
+        identities = run_as_targets(summary, bundle=bundle)
     except (Refused, OSError, ValueError, KeyError) as exc:
         print(f"[{PROG}] REFUSED: {exc}; nothing was granted", file=sys.stderr)
         return 2
@@ -271,6 +335,13 @@ def main(argv: list[str] | None = None, *, client: Any = None) -> int:
         client = WorkspaceClient()
     principal = args.jobs_principal.strip()
     try:
+        drift = live_run_as_drift(client, identities, principal)
+        for code, label in drift:
+            print(f"[{PROG}] REFUSED {code} {label}: {LIVE_RUN_AS_REMEDIES[code]}", file=sys.stderr)
+        if drift:
+            print(f"[{PROG}] {len(drift)} live run_as refusal(s); nothing was granted", file=sys.stderr)
+            return 4
+        print(f"[{PROG}] all {len(identities)} jobs-identity job(s) and pipeline(s) run as it, read live")
         if args.command == "plan":
             gaps = missing(client, targets, principal)
             for target, _ in gaps:
