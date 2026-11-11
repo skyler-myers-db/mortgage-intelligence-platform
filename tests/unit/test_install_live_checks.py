@@ -437,7 +437,9 @@ def test_the_owner_is_a_runner_mask_the_moment_it_is_read(
     for owner, refused in ((DEMO_PROFILE["MIP_UC_METASTORE_OWNER"], False), (OTHER_OWNER, True), ("users", True)):
         workspace = LiveWorkspace(DEMO_PROFILE, identity_ids=IDENTITY_IDS, metastore_owner=owner, **_adopted())
         principal = LiveAccount(IDENTITY_IDS["account_principal"])
-        code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace, account=lambda: principal)
+        code = live_checks.main(
+            [], environ={}, env_file=env_file, client=lambda w=workspace: w, account=lambda p=principal: p
+        )
         err = capsys.readouterr().err
         assert code == (2 if refused else 0), err
         masks = [line for line in err.splitlines() if line.startswith("::add-mask::")]
