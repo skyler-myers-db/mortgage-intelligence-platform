@@ -3669,8 +3669,81 @@ A pair covers the window from this handover to the release's bundle apply;
 no journaled re-own exists. Unset the field once `--verify --released`
 passes after the release; the pairs then match nothing.
 
-**Lakebase (step 8).** After the deployer's Postgres role exists (by the
-mechanism the S3 rehearsal picks), run as the legacy owner:
+**Lakebase (step 8).** Spike S3 rehearsed this on a throwaway of the install's
+type (Provisioned, PostgreSQL 16) and chose L-A role setup with this tool's
+per-object `ALTER ... OWNER TO` at `lock_timeout = '3s'` and
+`statement_timeout = '30s'`: the worst App wait was about the lock timeout,
+with no App error from lock contention. Not `REASSIGN OWNED` (all or nothing
+across every table, and it also takes the instance's other databases and
+extensions) and not L-B (it deletes the legacy role, which stale jobs still
+run as). First print the L-A setup, read-only, as the legacy owner connected
+to the App database:
+
+```bash
+python -m tools.clients.lakebase_handover --preconditions [--report-out <private file>]
+```
+
+It prints, in order and quoted, only the steps that do not hold yet, with the
+role names from the profile and the database (so the output names roles: keep
+it in your terminal or the mode-0600 report, never in a shared log):
+
+1. `CREATE EXTENSION IF NOT EXISTS databricks_auth;` and
+   `SELECT databricks_create_role('<deployer application id>', 'SERVICE_PRINCIPAL');`,
+   run BY THE LEGACY OWNER, which leaves the legacy owner an ADMIN edge on the
+   new role. Never create the deployer's role through the REST API or the UI
+   first: that leaves no ADMIN edge, so step 2 fails; `--preconditions` then
+   refuses `target_role_without_admin_edge` (the tool never drops a role);
+2. `GRANT "<deployer>" TO "<legacy owner>" WITH INHERIT TRUE, SET TRUE;`
+   (SET for the apply, INHERIT for the exact revert);
+3. `GRANT CREATE ON SCHEMA "mip_app" TO "<deployer>";`
+4. `GRANT USAGE ON SCHEMA "<schema>" TO "<deployer>";` for every other
+   non-system schema the deployer cannot use yet (a synced-table or leftover
+   schema, for example). `public` is never printed: the deployer uses it as
+   the database owner. The grants job closes `public` as `pg_database_owner`
+   (it refuses "public-schema closure authority mismatch" unless the role
+   running it may `SET ROLE` to it) and its exact public-schema gate refuses
+   any extra ACL row there, so a USAGE grant on `public` breaks every later
+   release. When the App database belongs to neither the legacy owner (the
+   handover then moves it) nor the deployer, and the deployer holds no
+   `SET` and `INHERIT` membership in its owner, the mode prints no SQL and
+   refuses `target_will_not_own_database`: the database's owner gives it to
+   the legacy owner, then re-run this mode. SET alone fails the grants job's
+   revokes in `public`, and INHERIT alone its closure (PostgreSQL 16.15, PR
+   #336 review round 2). USAGE lets the grants job look up the objects in a
+   schema, but it is not enough on its own:
+5. `GRANT <one privilege> ON <object> TO "<deployer>";` for every table,
+   view, sequence and routine the handover leaves to another owner (anything
+   outside `mip_app`, and a `mip_app` object another role owns) that the
+   deployer holds no privilege on that its revoke accepts: `SELECT` on a
+   table, view or sequence, `EXECUTE` on a routine. The grants job run as the
+   deployer revokes the App roles' privileges on every one of them, and
+   PostgreSQL refuses a revoke outright from a role that holds nothing on the
+   object: with step 4 alone, a legacy-owned table in a usable schema
+   planned clean and the grants job failed "permission denied for table"
+   after the apply (PostgreSQL 16.15, PR #336 review). Its `REVOKE ALL` on a
+   table, view or sequence also revokes each column, where only a column
+   privilege counts: the deployer's `SELECT`, `INSERT`, `UPDATE` or
+   `REFERENCES` on a table or view, or `SELECT` or `UPDATE` on a sequence,
+   is enough, and `TRIGGER`, `DELETE` or `TRUNCATE` alone on a table, or
+   `USAGE` alone on a sequence, failed "permission denied for column
+   tableoid" (round 2). The step prints a grant only where the legacy owner can
+   give one (it owns the object, or holds its owner's privileges); each other
+   object refuses `target_needs_object_privilege` until its owner grants the
+   deployer a privilege on it. Who owns a synced-table schema's tables on the
+   install has not been measured: this step reads it. Column grants and
+   default-privilege rows are not predicted (the grants job revokes only the
+   App roles' entries there, which a grants run before the handover leaves
+   empty); one that appears later fails the grants job closed.
+
+Run them in `psql` as the legacy owner and re-run `--preconditions` until it
+prints `-- Every precondition holds.`. Names in its comments are JSON strings,
+and a statement whose name holds a control character is not printed: it
+refuses `name_has_control_character`, and the owner grants that one by hand. Before the apply, check read-only that
+no App session holds a long transaction: one older than the per-object budget
+(10 attempts, about 120 s) exhausts it into the WR5 window or a revert
+(`SELECT state, now() - xact_start FROM pg_stat_activity WHERE datname =
+current_database() AND xact_start IS NOT NULL ORDER BY 2 DESC;`). Then, as the
+legacy owner:
 
 ```bash
 python -m tools.clients.lakebase_handover --plan
@@ -3688,16 +3761,36 @@ precondition PostgreSQL sets for `ALTER ... OWNER TO`: the target's CREATE on
 `mip_app` for the schema's objects (`target_needs_schema_create`), the
 session's CREATE on the database for the schema
 (`caller_needs_database_create`) and CREATEDB for the database
-(`caller_needs_createdb`). Which mechanism grants them is spike S3's; the
-rehearsal reads the same preconditions first. The apply moves
+(`caller_needs_createdb`). It also refuses an App database the target will
+neither own nor act for as owner (`target_will_not_own_database`, step 4);
+once per schema and by count only, a non-system schema the target cannot use
+(`target_needs_schema_usage`): the grants job the deployer runs after the
+handover revokes on every table in every non-system schema and failed
+"permission denied for schema" without it (spike S3); each object the
+handover leaves to another owner that the target holds no privilege on that
+its revoke accepts (`target_needs_object_privilege`, step 5); and an entry
+naming the target that the revert could not restore exactly
+(`target_grant_unrevertible`, below). The rehearsal reads the same
+preconditions first. The apply moves
 the App database and each `mip_app` object the legacy role owns, one
 `ALTER ... OWNER TO` per transaction under `SET LOCAL lock_timeout = '3s'`
-and `SET LOCAL statement_timeout = '30s'`. `ALTER OWNER` takes an ACCESS
+and `SET LOCAL statement_timeout = '30s'`, in this order: types and domains,
+tables (a column's own sequence moves with its table) and standalone
+sequences, invoker routines, views and materialized views, the schema,
+SECURITY DEFINER routines, the database. A view or a SECURITY DEFINER routine
+reads with its owner's privileges, and under L-A the legacy role holds the
+deployer's privileges but not the reverse, so what is read moves first (S3:
+with views first, every App read through a view failed 42501 for as long as
+the handover ran). A definer routine also resolves the names in its body as
+its owner, which needs USAGE on `mip_app`; step 3 gives the deployer only
+CREATE there, so definer routines move after the schema (moved before it,
+each failed "permission denied for schema mip_app" until the schema
+followed, in the apply and in the revert). `ALTER OWNER` takes an ACCESS
 EXCLUSIVE lock, and App queries queue behind a waiting one, so the lock
 timeout is what bounds an App query's wait. A lock timeout rolls back and
 retries after a backoff, at most 10 times per object and 10 minutes in all.
-It never creates, drops or reassigns a role and emits no DROP, DELETE,
-TRUNCATE, GRANT or REVOKE. When the budget runs out it stops with nothing
+It never creates, drops or reassigns a role, and the apply emits no DROP,
+DELETE, TRUNCATE, GRANT or REVOKE. When the budget runs out it stops with nothing
 half-applied (exit 4) and offers exactly two exits:
 
 - **WR5**, an announced window: `./scripts/lakebase_handover_window.sh
@@ -3734,16 +3827,39 @@ half-applied (exit 4) and offers exactly two exits:
   `--remainder --journal <path>` prints, read-only, the exhausted journal's
   remainder count and the digest the window plan pins.
 - **Revert**: `--revert --journal <path>`, the exact inverse by the same lock
-  bounds.
+  bounds. `ALTER OWNER` merges an entry the legacy owner granted the
+  deployer (step 3's CREATE, say) into the deployer's owner entry, and the
+  inverse leaves the deployer nothing, so the plan journals the GRANT that
+  restores each such entry (`revert_grants`) and the revert runs it, as the
+  legacy owner, in the same transaction as that object's inverse. Any other
+  entry naming the deployer (granted by another role, with a grant option,
+  granted by the deployer, of a privilege the legacy owner's own entry lacks,
+  which the owner would come back holding, a column grant, or on a column's
+  own sequence) could not come back exactly, so the plan refuses it
+  (`target_grant_unrevertible`). Apply, revert and a new plan give the
+  original plan digest.
 
-`--retire-check [--legacy-identity <name>]` (also `python -m
-tools.clients.handover_verify retire-check`; the default identity is the
+`--retire-check [--legacy-identity <name>]` (the default identity is the
 caller's) is the read-only gate before the owner removes the legacy role by
 hand: it refuses while any job or pipeline still runs as the legacy identity,
 judged by its effective run_as (each job read by id; never its creator), or
-while one's run_as cannot be read. `--rehearse --rehearse-instance <throwaway> --rehearse-database
+while one's run_as cannot be read (`python -m tools.clients.handover_verify
+retire-check` checks this half alone); and, from the App database, while the
+legacy Postgres role still owns an extension, owns a default-ACL row, owns any
+other object, holds a privilege, or granted another role a membership, on any
+database of the instance (`legacy_role_residue`, counts by category; names go
+only to `--report-out`); and when no Postgres role has the identity's exact
+name (`legacy_role_not_found`: a typo, or a case variant, which the jobs half
+would still match, would otherwise read as no residue). The handover leaves two of those by design (spike
+S3): the extensions (`pgcrypto` stays the legacy owner's) and the legacy
+owner's own `pg_default_acl` row. Neither affects a deploy; both must be
+cleared before the role can be dropped. `--rehearse --rehearse-instance <throwaway> --rehearse-database
 <db>` is spike S3's mode (owner-run, refused on the install's own instance):
-it creates one table on the throwaway, holds a concurrent long transaction on
+it creates one schema and table on the throwaway, grants the deployer CREATE
+on that schema it owns when the deployer lacks it (and revokes exactly that
+grant at the end, also after a failure; a pass needs the revoke to land, and
+when a failure's revoke fails too it prints the `REVOKE` to run on the
+throwaway), holds a concurrent long transaction on
 it past `lock_timeout`, probes it, runs the handover's own lock-bounded change
 and its inverse, and passes only if the change needed a retry, the inverse
 restored the owner, at least one probe query arrived while the change waited
