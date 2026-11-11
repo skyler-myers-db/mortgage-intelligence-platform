@@ -188,6 +188,7 @@ def collect_facts(
         **_migration(migration_plan),
         instance_update_sha256=str(gate_report.get("instance_update_sha256") or ""),
         blue_deployment_id=blue_id,
+        blue_predecessor_deployment_id=_text(record.get("predecessor_deployment_id")),
         blue_current=last_deployment_is(workspace, app_name=app_name, deployment_id=blue_id),
         restore_source=_text(getattr(blue, "source_code_path", None)),
         default_source_code_path=_text(getattr(app, "default_source_code_path", None)),

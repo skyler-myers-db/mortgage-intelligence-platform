@@ -28,6 +28,11 @@ does that with the v7 core record's own proofs:
 6. under the held lease, the record's next version (same provenance and ack,
    ``predecessor_deployment_id`` blue), read back exactly; health again.
 
+``stranded_start`` reads what an earlier tier-a start left when it failed
+before its re-pin (a FAILED install, a refused proof, a lost runner), so step
+0a and the pre-stop probe re-pin it or start blue's folder again instead of
+stranding a payload-less blue behind it.
+
 A v7 agentic record is refused by the tier gate (M4-PR1). Every refusal is a
 ``CoreBlueRefused`` or a ``StartProofError`` with a reviewed code; no message
 names an id, a path or a value.
@@ -38,6 +43,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from tools.databricks.app_deployment_state import deployment_state, newest_deployment
 from tools.databricks.app_rollback_record_contract import _text
 from tools.databricks.app_rollback_record_v7 import V7RecordError, _genie_space_of
 from tools.databricks.app_rollback_resource_contract import (
@@ -45,6 +51,9 @@ from tools.databricks.app_rollback_resource_contract import (
     validated_app_resource_contract,
 )
 from tools.databricks.app_start_deployment import (
+    StartProofError,
+    env_names,
+    is_stopped,
     last_deployment_is,
     prove_start_deployment,
     tree_digest,
@@ -61,6 +70,9 @@ from tools.databricks.core_blue import (
 )
 
 PREDECESSOR_FIELD = "predecessor_deployment_id"
+# What ``stranded_start`` reads: an earlier tier-a start to re-pin in place, or to start again.
+STRANDED_REPIN = "repin"
+STRANDED_RESTART = "restart"
 
 
 def _assert_start_is_current(workspace: Any, *, app_name: str, deployment_id: str) -> None:
@@ -182,3 +194,62 @@ def repin_core_start(
     )
     health(repinned, proof.deployment_id)
     return repinned
+
+
+def _env_vars(deployment: object) -> tuple[tuple[str, ...], ...]:
+    """A deployment's env vars as the API shows them: name, value and value_from."""
+
+    rows = []
+    for item in getattr(deployment, "env_vars", None) or []:
+        rows.append(tuple(_text(getattr(item, key, None)) for key in ("name", "value", "value_from")))
+    return tuple(sorted(rows))
+
+
+def stranded_start(workspace: Any, record: Mapping[str, Any], *, app_name: str) -> str:
+    """An earlier tier-a start of blue's own folder the record was never re-pinned onto.
+
+    A tier-a start that failed (a FAILED install, a refused proof, a lost
+    runner) is left the App's newest deployment of any state: from the
+    record's ``source_code_path``, with blue's env-name set (a start copies the
+    newest deployment's), the default source still that folder, so a new
+    start snapshots that folder with blue's env set again (spike S7). Its env
+    vars must be blue's as the API shows them (a start copies them; values
+    Databricks redacts are redacted alike), so a deployment of blue's folder
+    with other env values is never taken for one.
+    ``STRANDED_REPIN`` when the running App serves it SUCCEEDED (re-pinned in
+    place once its snapshot is proven to be the signed tree);
+    ``STRANDED_RESTART`` when the App is stopped or serves it unsucceeded
+    (stopped, and blue's folder started again once it still hashes to the
+    signed tree); ``""`` for anything else, nothing pending, always. The
+    pre-stop probe reads the same function.
+    """
+
+    stopped = is_stopped(workspace, app_name=app_name)
+    app = workspace.apps.get(app_name)
+    folder = str(record["source_code_path"])
+    if getattr(app, "pending_deployment", None) is not None or (
+        _text(getattr(app, "default_source_code_path", None)) != folder
+    ):
+        return ""
+    try:
+        newest_id = _text(
+            getattr(newest_deployment(workspace.apps.list_deployments(app_name)), "deployment_id", None)
+        )
+        if not newest_id or newest_id == record["deployment_id"]:
+            return ""
+        start = workspace.apps.get_deployment(app_name, newest_id)
+        blue = workspace.apps.get_deployment(app_name, record["deployment_id"])
+        if (
+            _text(getattr(start, "source_code_path", None)) != folder
+            or env_names(start) != frozenset(record["env_names"])
+            or _env_vars(start) != _env_vars(blue)
+        ):
+            return ""
+    except (RuntimeError, StartProofError):
+        return ""
+    active = _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
+    if stopped:
+        return "" if active else STRANDED_RESTART
+    if active != newest_id:
+        return ""
+    return STRANDED_REPIN if deployment_state(start) == "SUCCEEDED" else STRANDED_RESTART

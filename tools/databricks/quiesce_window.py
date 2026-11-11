@@ -86,6 +86,7 @@ from tools.databricks.quiesce_window_facts import (
 )
 from tools.databricks.quiesce_window_plan import (
     ACK_ENV,
+    acknowledged_digests,
     body_sha256,
     window_plan,
     with_admission,
@@ -117,7 +118,11 @@ def _validated_plan(plan: dict[str, Any], *, acknowledgement: str) -> dict[str, 
         raise RuntimeError("only a passed pre-apply window plan can open a window")
     if not isinstance(canonical, dict) or body_sha256(canonical) != plan.get("window_sha256"):
         raise RuntimeError("the window plan's canonical body does not match its digest")
-    if acknowledgement != plan["window_sha256"]:
+    # The pre-apply plan's own digest, or the pre-lease one step 0a's tier-a re-pin moved.
+    predecessor = str((plan.get("facts") or {}).get("blue_predecessor_deployment_id") or "")
+    if acknowledgement not in acknowledged_digests(
+        canonical, position="pre-apply", predecessor=predecessor
+    ):
         raise RuntimeError(f"{ACK_ENV} is not the exact window digest")
     if plan.get("reasons") != canonical.get("reasons") or not canonical.get("reasons"):
         raise RuntimeError("the window plan's reasons are not its canonical reasons")

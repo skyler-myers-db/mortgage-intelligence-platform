@@ -2004,23 +2004,37 @@ verifier, the agent runtime or the Supervisor proxy:
   serving-endpoint binding refuses by name and is never repaired). Step 0a
   (`app_core_rollback ensure`) restores the record-owned bindings a killed
   run left, proves health against the record's commit with no Gateway
-  binding, and restores blue (tier b) when another deployment is active. A
-  stopped core blue is started and re-pinned (tier a, spike S7): the start's
+  binding, and restores blue (tier b) when another deployment is active or
+  newest. Tier b needs blue's restore payload: an adopted blue no release
+  has proven yet has none, so another deployment over it refuses
+  (`no_restore_payload`), and the pre-stop clause predicts that before the
+  lease (`rollback_record_drift`; the remedy is the owner break-glass or an
+  adopt-live supersede onto the live deployment). A stopped core blue is
+  started and re-pinned (tier a, spike S7): the start's
   new deployment is proven to be blue (its source folder, the record's
   full-tree digest and env names, health) and the record is re-signed onto
-  it (`tools/databricks/core_blue_repin.py`). A stopped App whose next start
-  would not rerun blue (its newest deployment of any state or its default
-  source is not blue's) refuses (`tier_a_refused`): the pre-stop clause
+  it (`tools/databricks/core_blue_repin.py`). A stopped App whose newest
+  deployment is blue but whose default source is not blue's folder (its next
+  start would not rerun blue) refuses (`tier_a_refused`): the pre-stop clause
   predicts it before the lease (`rollback_record_drift`), and step 0a itself
   refuses it before any binding repair. A start snapshots the folder's
   CURRENT bytes, so before any start step 0a re-hashes the folder against the
   record's signed `source_tree_sha256` and checks blue's env names: a folder
   that is no longer blue's is tier b's (restored from the immutable copy, or
   refused before any start, `no_restore_payload`, when the record has no
-  restore payload; the pre-stop clause predicts both). A start that then
-  fails its proof never keeps serving: tier b replaces it, or, with no
-  restore payload, it is stopped, pinned to the App's id and the record's
-  identity, and the refusal raised.
+  restore payload; the pre-stop clause predicts both). Databricks deploys
+  only to a running App, so tier b over a stopped App starts it first: that
+  start runs the folder's current bytes, as the App's service principal,
+  until blue's immutable copy replaces them. A start that then fails its
+  proof, its health or anything else before its re-pin never keeps serving:
+  tier b replaces it, or, with no restore payload, it is stopped, pinned to
+  the App's id and the record's identity, and the refusal raised. Such a
+  failed start (or one a lost runner left behind) is the App's newest
+  deployment, from blue's own folder with blue's env names, so the next run
+  never strands on it: step 0a re-pins it in place when the running App
+  serves it SUCCEEDED and its snapshot proves to be blue's signed tree, and
+  otherwise stops it if running and starts blue's folder again
+  (`core_blue_restore.stranded_start`), which the pre-stop clause predicts.
 - **The tier gate.** A core release stands on a core blue. An agentic blue (a
   v5, v6 or v7 agentic record) under a core profile refuses
   (`blue_tier_mismatch`) and no ack lifts it: its restore needs the Gateway
@@ -2878,7 +2892,15 @@ role and jobs-reader grant states and the migration's compatibility, so the
 opened reasons are exactly the predicted ones. Export the digest for that run only. It is a shell-only, one-run value,
 never a `.env.local` line. (The owner hardware-key operation attestation the
 plan names is deferred; this exact digest ack stands in for it.) No reason
-needs no ack, and a reason that appears only at the recheck refuses.
+needs no ack, and a reason that appears only at the recheck refuses. Over a
+stopped blue, step 0a's tier a starts it and re-pins the record onto the
+start between the two positions, so the pre-apply body names the start where
+the acknowledged pre-lease body named blue. The pre-apply recheck and the
+open therefore also accept the digest of that body with
+`blue_deployment_id` set back to the signed record's
+`predecessor_deployment_id` (`acknowledged_digests`); every other fact must
+be identical, so a re-pin from another folder or tree (a tier-b restore names
+the immutable copy) still refuses, and the opened window journals the start.
 
 **The window** (`scripts/lib/deploy_quiesce_window_lifecycle.sh`) opens at the
 first mutation that needs it (WR4 before the non-App apply, WR1 before the
@@ -3108,9 +3130,12 @@ blue's restore folder to keep the journal's digest, then proves source,
 snapshot digest, env names, bindings (the record's or exactly this run's
 bundle payload) and health, signs a new record version under this lease and
 closes the journal (`closed_by: deadman_repin`). The re-pin changes blue's
-deployment id, so a recovering run that also needs a window refuses it at the
-pre-apply recheck (`window_unacked`: the digest moved); the next run plans and
-acks it afresh. A refusal exits 2 with nothing else run: the App stays exactly
+deployment id but nothing else the window digests, and its signed
+`predecessor_deployment_id` is the blue the pre-lease plan named, so a
+recovering run that also needs a window keeps its pre-lease ack at the
+pre-apply recheck (see the exact digest ack above); any other fact that moved
+still refuses it (`window_unacked`), and the next run plans and acks it
+afresh. A refusal exits 2 with nothing else run: the App stays exactly
 as the dead-man left it, the journal open and the lease released, so the next
 run retries a transient failure (a re-pin already signed resumes at the
 journal close). A WR1 window restarted on the dead runner's applied bindings
@@ -3169,9 +3194,10 @@ one-use Lakebase role bootstraps when the window plan reads `not_applicable` (a
 first install, or one resumed after the owner bootstrap: the App's role, and the
 verifier's in the agentic tier) and the window's own length and restore when it
 reads `window`. Over a signed blue (`none` or `window`) it also adds
-`step0a_start`, the window's start and re-pin budgets: step 0a starts and
-re-pins a stopped blue (tier a, spike S7), and the plan cannot tell a stopped
-blue from a serving one. A release refuses before its lease; a data phase refuses in its
+`step0a_start`, the window's stop, start and re-pin budgets: step 0a starts and
+re-pins a stopped blue (tier a, spike S7), stopping first an earlier failed
+start a lost runner left active, and the plan cannot tell a stopped blue from
+a serving one. A release refuses before its lease; a data phase refuses in its
 read-only data plan, also before its lease. The numbers are not measurements:
 the first governed run owes the live timings.
 
@@ -3447,7 +3473,9 @@ and one signed record version.
 
 **Preconditions** (`tools/databricks/adopt_live_facts.py`), each with its own
 refusal, all before the lease: the active deployment is the newest SUCCEEDED
-one, nothing is pending and the compute is ACTIVE (`deployment_unstable`); its
+one, nothing is pending and the compute is ACTIVE (`deployment_unstable`; a
+stopped App has no active deployment, spike S7, so it is never adopted: step
+0a's tier a starts only an already-adopted blue); its
 env-name set (names only; Databricks redacts the values) carries no agent
 model, serving, Gateway, Supervisor, eval, Gateway-attestation or proxy name
 (`env_names_not_proxyless`; the two agentic switches `MIP_AI_GATEWAY` and

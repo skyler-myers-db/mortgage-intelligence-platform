@@ -4,14 +4,22 @@
 treatment is quiesced, the record is loaded through the tier gate
 (core_blue.load_core_blue), the App's identity is checked, and then:
 
-* the active deployment is not the record's (a run killed after a green
+* the App's newest deployment is an earlier tier-a start of blue's own
+  folder that was never re-pinned (``stranded_start``: a FAILED install, a
+  refused proof, a lost runner): from the record's ``source_code_path``, with
+  blue's env-name set, the default source still that folder. A running App
+  serving it SUCCEEDED has it proven and re-pinned in place; otherwise it is
+  stopped if running and blue's folder started again (tier a, below), so no
+  release is stranded behind its own failed start;
+* any other deployment is active or newest (a run killed after a green
   activation and before its signed capture): blue is restored first (tier b,
-  below), with treatment left quiesced;
+  below), with treatment left quiesced; with no restore payload that refuses
+  (``no_restore_payload``), which the pre-stop probe predicts;
 * otherwise a stopped App whose next start would not rerun blue refuses
-  first (``tier_a_refused``), before any binding repair: its newest
-  deployment of any state must be blue and its default source blue's folder
-  (spike S7: a STOPPED App's GET has no active deployment, and a FAILED
-  deployment becomes active and moves the default source). The pre-stop probe
+  first (``tier_a_refused``), before any binding repair: blue is its newest
+  deployment of any state, so its default source is not blue's folder (spike
+  S7: a STOPPED App's GET has no active deployment, and a FAILED deployment
+  becomes active and moves the default source). The pre-stop probe
   predicts that refusal before the lease. Then the record's own bindings are
   restored when a killed run left a candidate's (the restore-owned repair,
   the one ``apps.update`` site), and identity and the core resource proof are
@@ -22,9 +30,10 @@ treatment is quiesced, the record is loaded through the tier gate
   folder is re-hashed against the record's ``source_tree_sha256`` and blue's
   env-name set checked (``start_reruns_record``); a folder that is not blue's
   is tier b's, which refuses before any start when the record has no restore
-  payload. A start that then fails its proof never keeps serving: tier b
-  replaces it, or, with no restore payload, it is stopped, identity-pinned,
-  and the refusal raised. Health is proven against the record's deployment.
+  payload (with one, tier b's own start runs the folder's current bytes until
+  blue's copy replaces them). A start that then fails its proof, or anything
+  else after it, never keeps serving: tier b replaces it, or, with no restore
+  payload, it is stopped, identity-pinned, and the refusal raised.
 
 ``restore_core_blue`` is tier b, the only rollback once green was activated:
 blue's restore payload (``blue_restore_proof.tier_b_payload``: the immutable
@@ -89,15 +98,21 @@ from tools.databricks.core_blue import (
     resign,
     verify_core_blue,
 )
-from tools.databricks.core_blue_repin import repin_core_start
+from tools.databricks.core_blue_repin import (
+    STRANDED_REPIN,
+    STRANDED_RESTART,
+    repin_core_start,
+    stranded_start,
+)
 
 DEPLOY_TIMEOUT = timedelta(minutes=20)
 # The step-0a refusal for a stopped core App whose start would not rerun blue
-# (spike S7); the pre-stop probe predicts it.
+# (spike S7): blue is its newest deployment, its default source another folder
+# (a newer deployment is tier b's). The pre-stop probe predicts it.
 TIER_A_REFUSED = (
-    "the core App is stopped and its next start would not rerun blue (its newest deployment "
-    "or its default source is not blue's), so step 0a never starts it; restore blue from the "
-    "immutable copy (app_core_rollback restore) or the owner break-glass, then re-run"
+    "the core App is stopped and its next start would not rerun blue (its default source is "
+    "not blue's folder), so step 0a never starts it; restore blue from the immutable copy "
+    "(app_core_rollback restore) or the owner break-glass, then re-run"
 )
 
 
@@ -361,11 +376,19 @@ def ensure_core_blue(
         # A stopped App has no active deployment: its newest one is what a start reruns (S7).
         active = current_deployment_id(workspace, app_name=app_name)
         latest = _text(getattr(latest_succeeded(workspace, app_name=app_name), "deployment_id", None))
+        stranded = ""
         if active != blue_id or latest != active:
-            return tier_b()
+            # An earlier tier-a start that never got re-pinned is tier a's again, never tier b's.
+            stranded = stranded_start(workspace, record, app_name=app_name)
+            if not stranded:
+                return tier_b()
         # Before any binding repair: a stopped App a start would not restore is left as it is.
         stopped = is_stopped(workspace, app_name=app_name)
-        if stopped and not last_deployment_is(workspace, app_name=app_name, deployment_id=active):
+        if (
+            not stranded
+            and stopped
+            and not last_deployment_is(workspace, app_name=app_name, deployment_id=active)
+        ):
             raise CoreBlueRefused("tier_a_refused", TIER_A_REFUSED)
         live_core_bindings(workspace, app_name=app_name)  # a serving binding refuses, unrepaired
         lease()
@@ -373,16 +396,21 @@ def ensure_core_blue(
             workspace, app_name=app_name, resources=record["app_resources"]
         )
         verify_core_blue(workspace, record, app_name=app_name)
-        if stopped:
+        restart = stopped or stranded == STRANDED_RESTART
+        if restart and not start_reruns_record(workspace, record, app_name=app_name, tree=tree):
             # Tier a (spike S7): the start makes a new deployment from the folder's
-            # CURRENT bytes, so they are proven blue's first; else tier b, never a start.
-            if not start_reruns_record(workspace, record, app_name=app_name, tree=tree):
-                return tier_b()
+            # CURRENT bytes, so they are proven blue's first; else tier b, whose own
+            # start runs them only until blue's immutable copy replaces them.
+            return tier_b()
+        if restart or stranded == STRANDED_REPIN:
             app_id = _text(getattr(workspace.apps.get(app_name), "id", None))
             if not app_id:
                 raise CoreBlueRefused("identity_drift", "the App has no id to pin a stop of its start to")
             try:
-                active = ensure_started(workspace, app_name=app_name)
+                if restart:
+                    if not stopped:  # a running unsucceeded start: stopped, then blue's folder again
+                        _stop_unproven_start(workspace, app_name=app_name, app_id=app_id, record=record)
+                    active = ensure_started(workspace, app_name=app_name)
                 record = repin_core_start(
                     workspace,
                     app_name=app_name,
@@ -396,9 +424,10 @@ def ensure_core_blue(
                     tier_transition_ack=tier_transition_ack,
                     digest=tree,
                 )
-            except StartProofError:
-                # Not provably blue: it never keeps serving. Tier b replaces it from
-                # the immutable copy; with no restore payload there is no tier b.
+            except Exception:
+                # Not provably blue, whatever raised: it never keeps serving. Tier b
+                # replaces it from the immutable copy; with no restore payload there
+                # is no tier b, so it is stopped and the refusal raised.
                 if record.get("restore_payload") is not None:
                     return tier_b()
                 _stop_unproven_start(workspace, app_name=app_name, app_id=app_id, record=record)

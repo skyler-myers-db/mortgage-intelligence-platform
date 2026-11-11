@@ -717,6 +717,43 @@ def test_ensure_of_a_stopped_blue_re_pins_the_start_instead_of_failing_its_check
     assert (estate.apps.starts, estate.apps.deploys) == (1, 0)
 
 
+def test_a_window_acked_over_a_stopped_v6_blue_opens_after_step_0a_re_pins_it() -> None:
+    """Round 2 of #334: step 0a's tier a re-pins between the pre-lease ack and the recheck."""
+
+    estate = _estate()
+    estate.apps.compute = "STOPPED"
+    ack = _plan(estate).sha256  # the operator's pre-lease ack names the stopped blue
+    rollback.ensure_current(
+        estate.workspace,
+        app_name=APP_NAME,
+        scope=SCOPE,
+        base_url="https://mip.example",
+        bearer_token="token",
+        deployment_lease_id=LEASE_ID,
+        deployment_source_git_sha=GIT_SHA,
+        treatment_warehouse_id="warehouse-id",
+        treatment_catalog="mip",
+    )
+    record = stored_record(estate)
+    assert record["deployment_id"] != BLUE_ID and record["predecessor_deployment_id"] == BLUE_ID
+
+    plan = _plan(estate, ack=ack)
+    assert plan.code == "window" and plan.ack == "matched", plan.refusals
+    assert plan.canonical["blue_deployment_id"] == record["deployment_id"] and plan.sha256 != ack
+    opened = window.open_window(
+        estate.workspace,
+        app_name=APP_NAME,
+        plan=plan.full(),
+        acknowledgement=ack,
+        lease_id=LEASE_ID,
+        source_git_sha=GIT_SHA,
+        assert_lease_held=lambda: None,
+        stop=_stop(estate),
+        **window_hooks(estate),
+    )
+    assert opened["blue_deployment_id"] == record["deployment_id"]
+
+
 def test_ensure_refuses_tier_a_when_a_start_would_not_snapshot_blue() -> None:
     estate = _estate()
     estate.apps.compute = "STOPPED"

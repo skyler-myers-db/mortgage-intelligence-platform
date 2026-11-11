@@ -27,11 +27,13 @@ lease each, data included):
   predicted length and restore (``quiesce_window_plan.budget_body``). The two
   never meet: a window needs signed blue. An existing signed blue (``none``
   or ``window``) also adds step 0a's tier a (``step0a_start``: the window's
-  own start and re-pin budgets): a release over a STOPPED blue starts and
-  re-pins it before any other mutation, compute ACTIVE alone 96-108 s on
-  the trivial App (S7) before the real App's install. The plan cannot tell
-  a stopped blue from a serving one, so it is always predicted. No dead-man
-  races that start: one is armed only by a window's open, after step 0a.
+  own stop, start and re-pin budgets): a release over a STOPPED blue starts
+  and re-pins it before any other mutation, compute ACTIVE alone 96-108 s on
+  the trivial App (S7) before the real App's install, and one over an
+  earlier failed start a lost runner left active stops it first. The plan
+  cannot tell a stopped blue from a serving one, so it is always predicted.
+  No dead-man races that start: one is armed only by a window's open, after
+  step 0a.
 * **data**: the silver refresh (unless ``--skip-silver``), then
   ``mip_scheduled_refresh`` (its own ``timeout_seconds`` bounds it), each
   followed by the reviewed-function grant reconcile and verify, then the
@@ -122,8 +124,9 @@ def _release_components(*, agentic: bool, window_code: str, window: Mapping[str,
         # A first install bootstraps the App's role, and the agentic tier the verifier's.
         components["role_bootstrap"] = STEP_BUDGET_S["role_bootstrap"] * (2 if agentic else 1)
     else:
-        # Signed blue: step 0a may start and re-pin a stopped one (tier a, spike S7).
-        components["step0a_start"] = WINDOW_STEP_BUDGET_S["start"] + WINDOW_STEP_BUDGET_S["repin"]
+        # Signed blue: step 0a may start and re-pin a stopped one (tier a, spike S7),
+        # stopping first an earlier failed start a lost runner left active.
+        components["step0a_start"] = sum(WINDOW_STEP_BUDGET_S[step] for step in ("stop", "start", "repin"))
     if window_code == "window":
         if not isinstance(window, Mapping):
             raise PhaseBudgetRefused("phase_budget_refused: a planned window carries no budget")

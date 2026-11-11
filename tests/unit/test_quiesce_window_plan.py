@@ -189,6 +189,49 @@ def test_a_toctou_drift_changes_the_digest_and_the_old_ack_refuses(drift: dict[s
     assert "window_unacked" in recheck.refusals and recheck.ack == "mismatch"
 
 
+def test_a_tier_a_re_pin_between_the_gates_keeps_the_pre_lease_ack() -> None:
+    """Round 2 of #334: step 0a's tier a re-pins a stopped blue onto its start before pre-apply."""
+
+    facts = _facts("WR3")
+    ack = window_plan(facts, position="pre-lease", acknowledgement="").sha256
+    repinned = replace(
+        facts,
+        blue_deployment_id="deployment-start-PLACEHOLDER",
+        blue_predecessor_deployment_id=facts.blue_deployment_id,
+    )
+    recheck = window_plan(repinned, position="pre-apply", acknowledgement=ack)
+    assert recheck.code == "window" and recheck.ack == "matched", recheck.refusals
+    assert recheck.canonical["blue_deployment_id"] == "deployment-start-PLACEHOLDER", "the start is blue now"
+    assert recheck.sha256 != ack and body_sha256(recheck.canonical) == recheck.sha256
+
+
+@pytest.mark.parametrize(
+    ("position", "drift"),
+    (
+        ("pre-lease", {}),  # only the recheck after step 0a re-derives blue
+        ("pre-apply", {"blue_predecessor_deployment_id": "deployment-other-PLACEHOLDER"}),
+        ("pre-apply", {"restore_source": "/Workspace/Users/app-sp-PLACEHOLDER/immutable"}),
+        ("pre-apply", {"source_tree_sha256": "d" * 64, "artifact_tree_sha256": "d" * 64}),
+        ("pre-apply", {"migration_pending": ("0042", "0043")}),
+    ),
+    ids=("pre-lease", "another-predecessor", "another-source", "another-tree", "another-reason-fact"),
+)
+def test_a_re_pin_keeps_the_ack_only_when_nothing_else_moved(position: str, drift: dict[str, object]) -> None:
+    facts = _facts("WR3")
+    ack = window_plan(facts, position="pre-lease", acknowledgement="").sha256
+    repinned = replace(
+        facts,
+        **{
+            "blue_deployment_id": "deployment-start-PLACEHOLDER",
+            "blue_predecessor_deployment_id": facts.blue_deployment_id,
+            "default_source_code_path": str(drift.get("restore_source", facts.restore_source)),
+            **drift,
+        },
+    )
+    recheck = window_plan(repinned, position=position, acknowledgement=ack)
+    assert recheck.ack == "mismatch" and "window_unacked" in recheck.refusals
+
+
 def test_new_reasons_at_the_recheck_refuse_a_run_planned_without_a_window() -> None:
     assert window_plan(_facts(), position="pre-lease", acknowledgement="").code == "none"
     recheck = window_plan(_facts("WR2"), position="pre-apply", acknowledgement="")

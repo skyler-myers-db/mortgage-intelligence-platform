@@ -57,8 +57,9 @@ def test_a_stopped_blue_whose_folder_changed_is_restored_by_tier_b() -> None:
 
     record = stored_record(estate)
     assert record["deployment_id"] == estate.apps.active_id == "deployment-redeploy-1"
-    assert estate.apps.compute == "ACTIVE", "blue's signed snapshot serves, never the changed folder"
-    # Tier b deploys only to a running App: its start is replaced by the signed snapshot.
+    assert estate.apps.compute == "ACTIVE", "blue's signed snapshot serves in the end"
+    # Tier b deploys only to a running App: its start runs the changed folder's
+    # bytes until the signed snapshot's redeploy replaces them.
     assert (estate.apps.starts, estate.apps.deploys) == (1, 1)
 
 

@@ -29,6 +29,14 @@ migration's compatibility), and its sha256 is the window's identity.
 (the review mode is single-maintainer audited). In its place a window opens
 only when ``MIP_ACK_QUIESCE_WINDOW`` equals this sha256 at both positions, so
 the opened reasons are exactly the predicted ones. No reason needs no ack.
+One re-derivation is accepted, at pre-apply only: step 0a's tier a starts a
+stopped blue and re-pins the record onto the start between the two gates, so
+the pre-apply body names the start where the acked pre-lease body named blue.
+The body with ``blue_deployment_id`` set back to the record's signed
+``predecessor_deployment_id`` is then the acked window
+(``acknowledged_digests``); every other fact must be identical, so a re-pin
+from another folder or tree (a tier-b restore names the immutable copy)
+never matches.
 
 **Tier a.** The window closes with a start-only restore, which is valid only
 while blue is the App's last deployment and a start would snapshot blue's own
@@ -166,6 +174,8 @@ class WindowFacts:
     migration_pending_contract: tuple[str, ...] = ()
     instance_update_sha256: str = ""
     blue_deployment_id: str = ""
+    # The signed record's predecessor_deployment_id: the blue a re-pin replaced.
+    blue_predecessor_deployment_id: str = ""
     blue_current: bool = False
     restore_source: str = ""
     default_source_code_path: str = ""
@@ -301,6 +311,22 @@ def body_sha256(body: Mapping[str, Any]) -> str:
     return hashlib.sha256(b"mip-quiesce-window-plan\0" + canonical).hexdigest()
 
 
+def acknowledged_digests(body: Mapping[str, Any], *, position: str, predecessor: str) -> tuple[str, ...]:
+    """The digests an exact ack may equal: the body's own, and at pre-apply its re-pin's.
+
+    Step 0a's tier a re-pins a stopped blue onto its start between the two
+    gates, and the start is proven to be blue's signed tree from blue's own
+    folder with blue's env names, so only ``blue_deployment_id`` moves: the
+    body with it set back to the record's signed predecessor is the window
+    the operator acked before the lease.
+    """
+
+    digests = [body_sha256(body)]
+    if position == "pre-apply" and predecessor and predecessor != body.get("blue_deployment_id"):
+        digests.append(body_sha256({**body, "blue_deployment_id": predecessor}))
+    return tuple(digests)
+
+
 def predicted_seconds(reasons: tuple[str, ...], *, blue_restorable: bool) -> int:
     """The window's predicted length: from the stop to the step that closes it.
 
@@ -407,8 +433,11 @@ def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> W
         refusals.append("window_migration_refused")
     if not reasons and not refusals:
         return WindowPlan(**common, code="none", ack="not_required")
+    acked = acknowledged_digests(
+        body, position=position, predecessor=facts.blue_predecessor_deployment_id
+    )
     ack = (
-        "matched" if acknowledgement == digest else "absent" if not acknowledgement else "mismatch"
+        "matched" if acknowledgement in acked else "absent" if not acknowledgement else "mismatch"
     )
     if reasons:
         if not (facts.blue_deployment_id and facts.restore_source and facts.env_names_sha256):

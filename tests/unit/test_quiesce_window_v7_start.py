@@ -312,6 +312,52 @@ def test_step_0a_starts_and_re_pins_a_stopped_core_blue(world: CoreWorld) -> Non
     assert world.treatments == ["quiesce"], "step 0a leaves treatment quiesced"
 
 
+def test_a_window_acked_over_a_stopped_blue_opens_after_step_0a_re_pins_it(world: CoreWorld) -> None:
+    """Round 2 of #334: the pre-lease ack names the stopped blue; step 0a then re-pins its start."""
+
+    world.compute = "STOPPED"  # client #1's shape: stopped, blue newest SUCCEEDED
+    values = {
+        "app_name": rr.APP_NAME,
+        "scope": rr.SCOPE,
+        "lakebase_instance": rr.LAKEBASE,
+        "gate_report": {"verdict": "passed", "instance_update_sha256": ""},
+        "binding_payload": {"name": rr.APP_NAME, "resources": copy.deepcopy(rr.APP_RESOURCES)},
+        "role_state": "exact",
+        "verifier_role_state": "absent",
+        "jobs_reader_role_state": "exact",
+        "migration_plan": APPLY,
+        "rebase_unverified_app": False,
+    }
+    ack = window_plan(facts.collect_facts(world, **values), position="pre-lease", acknowledgement="").sha256
+    pre_lease = window_plan(facts.collect_facts(world, **values), position="pre-lease", acknowledgement=ack)
+    assert pre_lease.code == "window" and pre_lease.canonical["blue_deployment_id"] == BLUE
+
+    record = core_blue_restore.ensure_core_blue(world, **world.kwargs())  # step 0a: tier a
+    started = record["deployment_id"]
+    assert started != BLUE and record["predecessor_deployment_id"] == BLUE
+
+    pre_apply = window_plan(facts.collect_facts(world, **values), position="pre-apply", acknowledgement=ack)
+    assert pre_apply.code == "window" and pre_apply.ack == "matched", pre_apply.refusals
+    assert pre_apply.canonical["blue_deployment_id"] == started
+    opened = window.open_window(
+        world,
+        app_name=rr.APP_NAME,
+        plan=pre_apply.full(),
+        acknowledgement=ack,
+        lease_id=rr.LEASE_ID,
+        source_git_sha=rr.GIT_SHA,
+        assert_lease_held=lambda: None,
+        stop=_stop(world),
+        admit=lambda _canonical: None,
+        arm=lambda _canonical: "run-1",
+        cancel=lambda _run_id: None,
+    )
+    assert opened["state"] == "window_open" and opened["blue_deployment_id"] == started
+    assert opened["window_sha256"] == pre_apply.sha256 and world.apps.mutations == ["start", "stop"]
+    with pytest.raises(RuntimeError, match="exact window digest"):
+        window._validated_plan(pre_apply.full(), acknowledgement="0" * 64)
+
+
 def test_step_0a_restores_a_stopped_core_app_whose_newest_deployment_is_not_blue(world: CoreWorld) -> None:
     payload = world.prove_restore_payload()
     world.activate_green()

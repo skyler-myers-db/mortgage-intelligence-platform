@@ -56,10 +56,24 @@ def test_the_paychex_case_an_adopted_core_blue_passes_the_core_clause(
 def test_a_green_left_active_is_a_note_the_core_step_0a_restores_over(
     world: CoreWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    world.prove_restore_payload()  # a release proves blue's payload before it activates green
     world.activate_green()
 
     verdict = _verdict(world, monkeypatch)
     assert verdict.refusals == () and "restores the record's deployment over it" in verdict.notes[0]
+
+
+def test_another_active_deployment_over_an_adopted_blue_with_no_payload_refuses(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 2 of #334: step 0a's tier b would refuse no_restore_payload under the lease."""
+
+    world.redeploy("deployment-emergency")  # a peer's deployment from another folder
+
+    verdict = _verdict(world, monkeypatch)
+    assert [refusal.code for refusal in verdict.refusals] == [codes.ROLLBACK_RECORD_DRIFT]
+    assert "no_restore_payload" in verdict.refusals[0].message
+    assert world.apps.mutations == []
 
 
 def test_a_stopped_core_blue_is_a_note_step_0a_starts_and_re_pins(
@@ -89,6 +103,7 @@ def test_a_stopped_core_app_whose_start_would_not_rerun_blue_refuses_before_the_
 def test_a_stopped_app_over_a_green_left_active_is_the_restores_note(
     world: CoreWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    world.prove_restore_payload()
     world.activate_green()
     world.compute = "STOPPED"  # a killed run's candidate, stopped: step 0a's restore starts it
 

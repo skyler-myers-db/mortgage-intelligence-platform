@@ -67,7 +67,7 @@ def test_a_release_over_signed_blue_budgets_step_0as_start_and_re_pin(agentic: b
     window = budget_body(("WR3",), blue_restorable=True)
     for code, given in (("none", None), ("window", window)):
         body = budget.predict("release", agentic=agentic, window_code=code, window_budget=given)
-        assert body["components"]["step0a_start"] == WINDOW["start"] + WINDOW["repin"], code
+        assert body["components"]["step0a_start"] == WINDOW["stop"] + WINDOW["start"] + WINDOW["repin"], code
     for code in ("not_applicable", "unknown"):
         body = budget.predict("release", agentic=agentic, window_code=code)
         assert "step0a_start" not in body["components"], "no signed blue, no step-0a start"

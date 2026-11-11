@@ -44,8 +44,10 @@ So this module proves everything from what the API shows:
 * ``start_reruns_blue`` (tier a, before any start) re-hashes that folder
   against blue's signed digest and checks blue's env-name set: a start
   snapshots the folder's CURRENT bytes, so anyone editing it silently
-  changes what a start runs, and step 0a never starts bytes it already
-  knows are not blue.
+  changes what a start runs, and tier a never starts bytes it already
+  knows are not blue. (Tier b over a stopped App still starts it first,
+  since Databricks deploys only to a running App: that start runs the
+  folder's current bytes until blue's immutable copy replaces them.)
 
 Every refusal is a ``StartProofError`` with a reviewed code, and no message
 names a path, an id or a value.
