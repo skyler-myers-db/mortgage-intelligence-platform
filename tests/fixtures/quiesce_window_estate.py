@@ -1,11 +1,16 @@
-"""A fake Apps estate in which ``apps start`` creates a NEW deployment (attack O1, M0-PR8).
+"""A fake Apps estate with the Apps API spike S7 measured (attack O1, M0-PR8).
 
-The worst case spike S7 has not ruled out: a start never resumes the stopped
-deployment. It snapshots the App's ``default_source_code_path`` into a fresh
-deployment id (SNAPSHOT mode) whose ``/src/`` snapshot is a byte copy of that
-folder, and the env config may or may not carry over. ``FakeApps`` does that,
-with knobs for every way a start can differ from blue: another source, a
-tampered snapshot, a dropped env, a FAILED start, no readable pending id.
+``FakeApps`` models tests/fixtures/measured_apps.py: a start never resumes the
+stopped deployment. It snapshots the App's ``default_source_code_path`` into
+a fresh deployment id (SNAPSHOT mode) whose ``/src/`` snapshot is a byte copy
+of that folder, with the newest deployment's env-name set. The start response
+is empty and the new deployment shows only after ``HIDDEN_READS`` reads (the
+measured ~100 s), then pending for one GET, then active; a STOPPED App's GET
+has no active (or pending) deployment; a FAILED deployment stays active and
+moves the default source; ``update`` never moves it and ``create_update``
+rejects its mask. Knobs cover every way a start can differ from blue: another
+source, a tampered snapshot, a dropped env, a FAILED start, a deployment that
+never shows, a second new one with it.
 
 ``Estate`` also holds the workspace files (the release folder, the snapshots,
 the window journal) and the secret scope holding the signed rollback record,
@@ -41,6 +46,7 @@ from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceAlreadyExists, ResourceDoesNotExist
 
+from tests.fixtures.measured_apps import HIDDEN_READS, StartVisibility, check_create_update_mask
 from tools.databricks import app_release_contract as contract
 from tools.databricks import quiesce_window_deadman as deadman
 from tools.databricks.app_release_source import PublishPlan
@@ -147,7 +153,9 @@ class StartBehaviour:
     tamper_snapshot: bool = False
     state: str = "SUCCEEDED"
     polls_in_progress: int = 1
-    readable_pending_id: bool = True
+    hidden_reads: int = HIDDEN_READS  # the measured ~100 s before the id shows
+    never_visible: bool = False  # the start's deployment never shows (start_timeout)
+    twin: bool = False  # a second new deployment shows with it (start_ambiguous)
 
 
 @dataclass
@@ -165,10 +173,14 @@ class FakeApps:
     resources: list[dict[str, Any]] = field(default_factory=list)
     get_calls: int = 0
     deployments: dict[str, SimpleNamespace] = field(default_factory=dict)
+    # The App's last active deployment; a STOPPED (or STARTING) App's GET omits it.
     active_id: str = BLUE_ID
     pending_id: str = ""
-    # A start whose id the API never showed: it settles on the next read.
-    hidden_start: str = ""
+    # Not a measured shape: a pending deployment a STOPPED App's GET shows, for
+    # the dead-man's defensive branch only.
+    unmeasured_stopped_pending: str = ""
+    _start: StartVisibility | None = None
+    _hidden: dict[str, SimpleNamespace] = field(default_factory=dict)
     _polls: dict[str, int] = field(default_factory=dict)
     _final: dict[str, str] = field(default_factory=dict)
 
@@ -179,8 +191,14 @@ class FakeApps:
 
     # --- reads --------------------------------------------------------------
     def _app(self) -> SimpleNamespace:
-        active = self.deployments.get(self.active_id)
-        pending = self.deployments.get(self.pending_id) if self.pending_id else None
+        # Measured: no active deployment while STOPPED, STARTING or a start's id is
+        # still pending. Failure injection (``never_visible``) keeps the last one.
+        serving = self.compute not in {"STOPPED", "STARTING"}
+        in_flight = self._start is not None and not self._start.never
+        active = self.deployments.get(self.active_id) if serving and not in_flight else None
+        pending = self.deployments.get(self.pending_id) if self.pending_id and serving else None
+        if self.compute == "STOPPED" and self.unmeasured_stopped_pending:
+            pending = SimpleNamespace(deployment_id=self.unmeasured_stopped_pending)
         app = SimpleNamespace(
             name=APP_NAME,
             id="app-object-id",
@@ -201,21 +219,53 @@ class FakeApps:
         }
         return app
 
+    def _tick(self, *, is_get: bool) -> None:
+        """One read of a start in flight: hidden, then listed or pending, then active (S7)."""
+
+        start = self._start
+        if start is None:
+            return
+        phase = start.read(is_get=is_get)
+        if phase == "hidden":
+            return
+        if phase == "compute_only":
+            self.compute = "ACTIVE"
+            return
+        surfaced = [item for item in self._hidden if item.startswith(start.deployment_id)]
+        for hidden_id in surfaced:
+            self.deployments[hidden_id] = self._hidden.pop(hidden_id)
+        if surfaced:
+            self.compute = "ACTIVE"  # the id shows only once the compute is ACTIVE
+        if phase == "pending":
+            self.pending_id = start.deployment_id
+        elif phase == "active":
+            self._activate(start)
+
+    def _activate(self, start: StartVisibility) -> None:
+        """The start's deployment is active: it moved the default source, FAILED or not (S7-3)."""
+
+        self.pending_id, self.active_id, self._start = "", start.deployment_id, None
+        self.default_source = self.deployments[start.deployment_id].source_code_path
+
     def get(self, _name: str) -> SimpleNamespace:
         self.get_calls += 1
-        if self.hidden_start:
-            hidden, self.hidden_start = self.hidden_start, ""
-            self._settle(hidden)
+        self._tick(is_get=True)
         return self._app()
 
     def list(self) -> list[SimpleNamespace]:
         return [self._app()]
 
     def list_deployments(self, _name: str) -> list[SimpleNamespace]:
-        return list(self.deployments.values())
+        self._tick(is_get=False)
+        return sorted(self.deployments.values(), key=lambda item: item.create_time, reverse=True)
 
     def get_deployment(self, _name: str, deployment_id: str) -> SimpleNamespace:
+        if deployment_id not in self.deployments:
+            raise NotFound("deployment not found")
         found = self.deployments[deployment_id]
+        start = self._start
+        if start is not None and start.deployment_id == deployment_id:
+            self._activate(start)  # a poll of a shown start: time passed, it is active
         if deployment_id in self._polls:
             if self._polls[deployment_id] > 0:
                 self._polls[deployment_id] -= 1
@@ -227,15 +277,17 @@ class FakeApps:
         found = self.deployments[deployment_id]
         del self._polls[deployment_id]
         found.status.state = self._final.pop(deployment_id)
-        self.pending_id = ""
-        if found.status.state == "SUCCEEDED":
-            self.active_id = deployment_id
-            self.compute = "ACTIVE"
-            self.default_source = found.source_code_path
 
     # --- primitives ---------------------------------------------------------
     def stop(self, _name: str) -> object:
         self.stops += 1
+        # Not measured: a start stopped before its deployment showed never shows,
+        # and one that showed had become the App's last active deployment.
+        if self._start is not None and self._start.phase == "hidden":
+            self._hidden.clear()
+            self._start = None
+        elif self._start is not None:
+            self._activate(self._start)
         self.compute = "STOPPED"
         return SimpleNamespace(response=self._app())
 
@@ -243,7 +295,12 @@ class FakeApps:
         self.compute = "STOPPED"
         return self._app()
 
+    def _newest(self) -> SimpleNamespace:
+        return max(self.deployments.values(), key=lambda item: (item.create_time, item.deployment_id))
+
     def start(self, _name: str) -> object:
+        """The measured start: a new deployment that shows ~100 s later; an empty response."""
+
         self.starts += 1
         new_id = f"deployment-start-{self.starts}"
         source = self.behaviour.source or self.default_source
@@ -256,31 +313,46 @@ class FakeApps:
         if self.behaviour.tamper_snapshot:
             snapshot["backend/runtime.py"] = b"print('not blue')\n"
         self.files.put_tree(artifact, snapshot)
-        names = self.env_names if self.behaviour.carry_env else ["DATABRICKS_WAREHOUSE_ID"]
-        self.deployments[new_id] = deployment(
-            new_id,
-            source=source,
-            artifact=artifact,
-            env_names=names,
-            state="IN_PROGRESS",
-            created=f"2026-10-02T00:00:0{self.starts}Z",
+        # The newest deployment's env-name set carries over (S7-1c).
+        newest = [str(item.name) for item in self._newest().env_vars]
+        names = newest if self.behaviour.carry_env else ["DATABRICKS_WAREHOUSE_ID"]
+        created = f"2026-10-02T00:00:{self.starts:02d}Z"
+        self._hidden[new_id] = deployment(
+            new_id, source=source, artifact=artifact, env_names=names, state="IN_PROGRESS", created=created
         )
-        self.pending_id = new_id
+        if self.behaviour.twin:
+            twin = f"{new_id}-twin"
+            self._hidden[twin] = deployment(
+                twin, source=source, artifact=artifact, env_names=names, state="IN_PROGRESS", created=created
+            )
         self.compute = "STARTING"
+        self._start = StartVisibility(
+            new_id, hidden=self.behaviour.hidden_reads, never=self.behaviour.never_visible
+        )
         self._polls[new_id] = self.behaviour.polls_in_progress
         self._final[new_id] = self.behaviour.state
-        pending = SimpleNamespace(deployment_id=new_id if self.behaviour.readable_pending_id else "")
-        if not self.behaviour.readable_pending_id:
-            self.pending_id = ""
-            self.hidden_start = new_id
-        return SimpleNamespace(response=SimpleNamespace(pending_deployment=pending))
+        return SimpleNamespace(
+            response=SimpleNamespace(
+                name=APP_NAME,
+                compute_status=SimpleNamespace(state="STARTING"),
+                active_deployment=None,
+                pending_deployment=None,
+            )
+        )
 
     def update(self, _name: str, app: object) -> object:
-        """A binding update: resources only, never the deployment or the compute."""
+        """A binding update: resources only; a default_source_code_path in it is ignored (S7-2)."""
 
         self.updates += 1
         self.resources = copy.deepcopy(app.as_dict()["resources"])
         return self._app()
+
+    def create_update(self, _name: str, update_mask: str, *, app: object = None) -> object:
+        """The mask check S7-2 measured: default_source_code_path is rejected."""
+
+        check_create_update_mask(update_mask)
+        self.updates += 1
+        return SimpleNamespace(response=self._app())
 
     def deploy_and_wait(self, _name: str, app_deployment: object, *, timeout: object) -> object:
         self.deploys += 1
@@ -292,10 +364,12 @@ class FakeApps:
             source=str(payload["source_code_path"]),
             artifact=artifact,
             env_names=[str(item["name"]) for item in payload["env_vars"]],
-            created=f"2026-10-03T00:00:0{self.deploys}Z",
+            created=f"2026-10-03T00:00:{self.deploys:02d}Z",
         )
         self.active_id = new_id
         self.compute = "ACTIVE"
+        # Only a deployment moves the default source (S7-2), a redeploy included.
+        self.default_source = str(payload["source_code_path"])
         return self.deployments[new_id]
 
 

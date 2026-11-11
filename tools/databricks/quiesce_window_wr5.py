@@ -26,7 +26,16 @@ them changing in between refuses.
 
 **Budget.** The in-window apply is bounded at ``WR5_APPLY_BUDGET_S`` (300 s,
 lakebase_handover.WINDOW_BUDGET); the stop and start take #307's conservative
-per-step budgets, which spikes S2 and S7 still owe live timings for.
+per-step budgets, which are not shrunk: spike S7 measured a trivial App's
+compute start at 96-108 s and its stop at about 40-45 s, and the real App's
+start deployment installs its whole tree on top.
+
+**The start (spike S7).** The CLI ``apps start`` returns once the compute is
+ACTIVE; the deployment that start created shows only from about then, for
+about 1 s as ``pending_deployment`` and then as ``active_deployment``. A
+stopped App's GET has no active deployment, so the only id that can show is
+the new one. ``prove_start`` polls, at most every 5 s for
+``START_ID_WAIT_S``, for an id that is not the planned active deployment.
 """
 
 from __future__ import annotations
@@ -35,6 +44,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -44,6 +54,7 @@ from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_deployment_state import deployment_state
 from tools.databricks.app_rollback_record_contract import _load_record, _text
 from tools.databricks.app_start_deployment import (
+    START_ID_POLL_INTERVAL_S,
     StartProofError,
     wait_for_compute_active,
     wait_for_terminal,
@@ -57,6 +68,8 @@ from tools.databricks.quiesce_window_plan import (
 )
 
 CANONICAL_SCHEMA = "mip.quiesce-window-plan.wr5.canonical.v1"
+# The CLI start returns at compute ACTIVE; the new id shows within about 1 s of it (spike S7).
+START_ID_WAIT_S = 120.0
 PUBLIC_SCHEMA = "mip.quiesce-window-plan.wr5.public.v1"
 WR5_APPLY_BUDGET_S = 300
 REFUSAL_CODES = frozenset(
@@ -197,6 +210,28 @@ def window_plan(facts: HandoverWindowFacts, *, acknowledgement: str) -> dict[str
     return {"public": public, "canonical": body, "facts": asdict(facts), "remedies": {code: REMEDIES[code] for code in refusals}}
 
 
+def _start_id(
+    workspace: Any,
+    *,
+    app_name: str,
+    planned: str,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> str:
+    """The id the start created: pending, else active, never the planned one, polled briefly."""
+
+    deadline = clock() + START_ID_WAIT_S
+    while True:
+        app = workspace.apps.get(app_name)
+        pending = _text(getattr(getattr(app, "pending_deployment", None), "deployment_id", None))
+        created = pending or _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
+        if created and created != planned:
+            return created
+        if clock() >= deadline:
+            raise StartProofError("start_unreadable", "the start created no new deployment")
+        sleep(START_ID_POLL_INTERVAL_S)
+
+
 def prove_start(
     workspace: Any,
     *,
@@ -204,17 +239,17 @@ def prove_start(
     plan: dict[str, Any],
     wait: Any = wait_for_terminal,
     wait_active: Any = wait_for_compute_active,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> str:
     """Read-only: the start created a new deployment that SUCCEEDED from the planned folder."""
 
     canonical = plan["canonical"]
     if plan["public"]["code"] != "window" or body_sha256(canonical) != plan["public"]["window_sha256"]:
         raise StartProofError("start_record_changed", "the WR5 plan is not a passed, intact plan")
-    app = workspace.apps.get(app_name)
-    pending = _text(getattr(getattr(app, "pending_deployment", None), "deployment_id", None))
-    created = pending or _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
-    if not created or created == canonical["active_deployment_id"]:
-        raise StartProofError("start_unreadable", "the start created no new deployment")
+    created = _start_id(
+        workspace, app_name=app_name, planned=canonical["active_deployment_id"], sleep=sleep, clock=clock
+    )
     deployment = wait(workspace, app_name=app_name, deployment_id=created)
     if deployment_state(deployment) != "SUCCEEDED":
         raise StartProofError("start_not_succeeded", "the start deployment did not succeed")

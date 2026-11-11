@@ -2043,7 +2043,7 @@ tier.
 | App payload | unchanged | `MIP_AGENT_ORCHESTRATOR=0`, `MIP_AI_GATEWAY=0`; an operator value turning either on refuses; no other agentic name (agent model, Supervisor, Gateway, proxy, proof key or eval; M2-PR7b) |
 | capability preflight (`tools/clients/capabilities.py`, in the live checks) | Apps, Lakebase, Genie, SQL warehouses, Model Serving, MLflow (the pre-stop probes' Supervisor listing proves the Supervisor API) | Apps, Lakebase, Genie, SQL warehouses |
 | pre-stop record clause and step 0a (M2-PR7b) | v5/v6 `verified_signed_last_good_contract` and `app_deployment_rollback ensure`; a v7 record refuses | a v7 core record through the tier gate and the core resource proof (`app_core_rollback ensure`) |
-| quiesce window over signed blue (M2-PR7b) | v5/v6, start and re-pin | a v7 core blue with no window reason only; one that needs a window refuses before the lease (`window_over_v7_blue`) |
+| quiesce window over signed blue (M2-PR7b) | v5/v6, start and re-pin | a v7 core blue, start and re-pin onto the next v7 version (`app_core_rollback repin`, spike S7) |
 | steps 10b-10c: agentic provisioning, cutover, Agent Evaluation and the retirement after capture | run (`deploy_step_agentic_*.sh`, `deploy_step_agent_eval_and_smoke.sh`) | skipped by name: never sourced, and each refuses the core tier (`deploy_step_core_activation.sh` runs instead) |
 | activation (M2-PR7b) | the cutover's activation, then the Agent Evaluation redeploy | one activation rollover (a first install's is step 5's) |
 | live smoke | `MIP_EXPECT_AGENTIC_CAPABILITIES=1` by default | `MIP_EXPECT_AGENTIC_CAPABILITIES=0`, `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=0`; Genie is still smoked |
@@ -2072,11 +2072,37 @@ verifier, the agent runtime or the Supervisor proxy:
   serving-endpoint binding refuses by name and is never repaired). Step 0a
   (`app_core_rollback ensure`) restores the record-owned bindings a killed
   run left, proves health against the record's commit with no Gateway
-  binding, and restores blue (tier b) when another deployment is active. It
-  never starts a stopped core blue (`blue_stopped`): tier a's start and
-  re-pin for a v7 record waits for spike S7. The pre-stop clause predicts
-  that refusal before the lease (`rollback_record_drift`, naming
-  `blue_stopped`), and step 0a itself refuses it before any binding repair.
+  binding, and restores blue (tier b) when another deployment is active or
+  newest. Tier b needs blue's restore payload: an adopted blue no release
+  has proven yet has none, so another deployment over it refuses
+  (`no_restore_payload`), and the pre-stop clause predicts that before the
+  lease (`rollback_record_drift`; the remedy is the owner break-glass or an
+  adopt-live supersede onto the live deployment). A stopped core blue is
+  started and re-pinned (tier a, spike S7): the start's
+  new deployment is proven to be blue (its source folder, the record's
+  full-tree digest and env names, health) and the record is re-signed onto
+  it (`tools/databricks/core_blue_repin.py`). A stopped App whose newest
+  deployment is blue but whose default source is not blue's folder (its next
+  start would not rerun blue) refuses (`tier_a_refused`): the pre-stop clause
+  predicts it before the lease (`rollback_record_drift`), and step 0a itself
+  refuses it before any binding repair. A start snapshots the folder's
+  CURRENT bytes, so before any start step 0a re-hashes the folder against the
+  record's signed `source_tree_sha256` and checks blue's env names: a folder
+  that is no longer blue's is tier b's (restored from the immutable copy, or
+  refused before any start, `no_restore_payload`, when the record has no
+  restore payload; the pre-stop clause predicts both). Databricks deploys
+  only to a running App, so tier b over a stopped App starts it first: that
+  start runs the folder's current bytes, as the App's service principal,
+  until blue's immutable copy replaces them. A start that then fails its
+  proof, its health or anything else before its re-pin never keeps serving:
+  tier b replaces it, or, with no restore payload, it is stopped, pinned to
+  the App's id and the record's identity, and the refusal raised. Such a
+  failed start (or one a lost runner left behind) is the App's newest
+  deployment, from blue's own folder with blue's env names, so the next run
+  never strands on it: step 0a re-pins it in place when the running App
+  serves it SUCCEEDED and its snapshot proves to be blue's signed tree, and
+  otherwise stops it if running and starts blue's folder again
+  (`core_blue_restore.stranded_start`), which the pre-stop clause predicts.
 - **The tier gate.** A core release stands on a core blue. An agentic blue (a
   v5, v6 or v7 agentic record) under a core profile refuses
   (`blue_tier_mismatch`) and no ack lifts it: its restore needs the Gateway
@@ -2088,10 +2114,14 @@ verifier, the agent runtime or the Supervisor proxy:
   blue before the lease as before. Client #1's run 1 needs no transition:
   blue was adopted as core and green is core.
 - **The quiesce window.** The window plan reads a v7 core blue (its env-name
-  set from the record) and plans no window when no reason exists. A v7 blue
-  that needs one refuses before the lease (`window_over_v7_blue`), with the
-  App untouched: the window's start-and-re-pin is written for v5 and v6
-  records, and a v7 one waits for spike S7.
+  set from the record) and plans no window when no reason exists. Spike S7 is
+  recorded, so a v7 core blue that needs a window gets the one v5 and v6 get:
+  the folder's full-tree digest is checked against the record's own
+  `source_tree_sha256`, the start is proven with the record's env-name set,
+  and the window library re-pins it with `app_core_rollback repin` (the
+  dead-man's restart with `repin --from-deadman`) onto the record's next v7
+  version (same provenance and ack, `predecessor_deployment_id` blue). A v7
+  agentic record is still refused (M4-PR1).
 - **Activation** (`scripts/lib/deploy_step_core_activation.sh`): one
   activation rollover over signed blue, with blue's treatment authority
   quiesced immediately before it, exactly as the agentic cutover activates.
@@ -2930,7 +2960,15 @@ role and jobs-reader grant states and the migration's compatibility, so the
 opened reasons are exactly the predicted ones. Export the digest for that run only. It is a shell-only, one-run value,
 never a `.env.local` line. (The owner hardware-key operation attestation the
 plan names is deferred; this exact digest ack stands in for it.) No reason
-needs no ack, and a reason that appears only at the recheck refuses.
+needs no ack, and a reason that appears only at the recheck refuses. Over a
+stopped blue, step 0a's tier a starts it and re-pins the record onto the
+start between the two positions, so the pre-apply body names the start where
+the acknowledged pre-lease body named blue. The pre-apply recheck and the
+open therefore also accept the digest of that body with
+`blue_deployment_id` set back to the signed record's
+`predecessor_deployment_id` (`acknowledged_digests`); every other fact must
+be identical, so a re-pin from another folder or tree (a tier-b restore names
+the immutable copy) still refuses, and the opened window journals the start.
 
 **The window** (`scripts/lib/deploy_quiesce_window_lifecycle.sh`) opens at the
 first mutation that needs it (WR4 before the non-App apply, WR1 before the
@@ -2985,7 +3023,9 @@ to the dead-man;
 lease. The rollback's
 `ensure` and `restore` re-pin the same way when they start a stopped blue
 (tier a, only while blue is the App's last deployment); `restore` redeploys
-the signed snapshot (tier b) otherwise.
+the signed snapshot (tier b) otherwise, and `ensure` hands a start that fails
+its proof (a changed folder's included: a start snapshots its CURRENT bytes)
+to that same tier b, which starts a stopped App itself before its redeploy.
 
 **Catalog bootstrap skip rule** (attack O12,
 `tools/databricks/catalog_bootstrap_skip_rule.py`). `mip_init_catalog_schemas`
@@ -3008,9 +3048,22 @@ mutating mode, by `-m` or by its `tools/databricks/<module>.py` path (the mode
 is read from that one command's own tokens), or import a stop module in a
 heredoc or `-c`.
 
-**Owed live confirmations.** Spike S7 (a throwaway App): that `apps start`
-creates a new deployment from `default_source_code_path`, whether the env
-config carries over, and the start of a FAILED-active App. Spike S2: whether
+**Spike S7 is recorded** (a throwaway App, 2026-11-10). Every `apps start`
+creates a new SNAPSHOT deployment from the current bytes of
+`default_source_code_path`, with the newest deployment's env-name set. Neither
+the start response nor a GET right after it shows that deployment: the
+compute turns ACTIVE after 96-108 s (a trivial App), and only then does the
+new id show, about 1 s as `pending_deployment`, then as `active_deployment`.
+So `start` lists the App's deployment ids first, journals them with
+`window_starting` (journal version 2), starts without waiting and polls, at
+most every 5 s, for exactly one id outside that list (two refuse
+`start_ambiguous`, none `start_timeout`); a resumed start finds it against the
+journaled list. A STOPPED App's GET has no `active_deployment`, and a FAILED
+deployment becomes active and moves the default source, so blue is current
+(tier a, the plan's `blue_current`, the dead-man) only while nothing is
+pending, blue is the newest deployment of ANY state and SUCCEEDED, the
+default source is blue's folder and, on a running App, blue is active.
+`default_source_code_path` is not settable. Spike S2: whether
 `apps update` with an unchanged database binding touches a running App or its
 role. Until then the code assumes the worst case for both. The live shape of
 `information_schema.routines.routine_definition` is also derived, not
@@ -3145,9 +3198,12 @@ blue's restore folder to keep the journal's digest, then proves source,
 snapshot digest, env names, bindings (the record's or exactly this run's
 bundle payload) and health, signs a new record version under this lease and
 closes the journal (`closed_by: deadman_repin`). The re-pin changes blue's
-deployment id, so a recovering run that also needs a window refuses it at the
-pre-apply recheck (`window_unacked`: the digest moved); the next run plans and
-acks it afresh. A refusal exits 2 with nothing else run: the App stays exactly
+deployment id but nothing else the window digests, and its signed
+`predecessor_deployment_id` is the blue the pre-lease plan named, so a
+recovering run that also needs a window keeps its pre-lease ack at the
+pre-apply recheck (see the exact digest ack above); any other fact that moved
+still refuses it (`window_unacked`), and the next run plans and acks it
+afresh. A refusal exits 2 with nothing else run: the App stays exactly
 as the dead-man left it, the journal open and the lease released, so the next
 run retries a transient failure (a re-pin already signed resumes at the
 journal close). A WR1 window restarted on the dead runner's applied bindings
@@ -3172,13 +3228,14 @@ reads the raw journal, labelled unverified; `--unverified` refuses
 journal. The emergency recipe never runs
 `scripts/deploy.sh`, so it opens no window and arms no dead-man.
 
-**Owed live confirmations.** Spike S7 (a throwaway App only the owner can
-delete) also owes the dead-man's live facts: a one-time serverless run from a
-`/Workspace/Users/.../app-src/<id>/jobs/` file with these parameters, how long
-it takes to reach RUNNING and arm (`ARM_WAIT_S` assumes at most 600 s), its
-idempotency token and timeout, `apps start` as the deployer on a stopped App,
-and the cancel of a sleeping run. Until then the worst case is assumed: a start
-creates a new deployment, and nothing is trusted without the re-proof above.
+**Owed live confirmations.** Spike S7 recorded the start the dead-man makes
+(above): it judges the stopped App by its newest deployment and default source
+and finds its start's deployment against the ids listed before it, within the
+one `--start-timeout-seconds` budget. Still owed: a one-time serverless run
+from a `/Workspace/Users/.../app-src/<id>/jobs/` file with these parameters,
+how long it takes to reach RUNNING and arm (`ARM_WAIT_S` assumes at most
+600 s), its idempotency token and timeout, `apps start` as the deployer, and
+the cancel of a sleeping run. Nothing is trusted without the re-proof above.
 
 ### Governed run phases: plan, release and data (M1-PR6)
 
@@ -3205,7 +3262,11 @@ decided by the window's own admission rule under its own schema
 one-use Lakebase role bootstraps when the window plan reads `not_applicable` (a
 first install, or one resumed after the owner bootstrap: the App's role, and the
 verifier's in the agentic tier) and the window's own length and restore when it
-reads `window`. A release refuses before its lease; a data phase refuses in its
+reads `window`. Over a signed blue (`none` or `window`) it also adds
+`step0a_start`, the window's stop, start and re-pin budgets: step 0a starts and
+re-pins a stopped blue (tier a, spike S7), stopping first an earlier failed
+start a lost runner left active, and the plan cannot tell a stopped blue from
+a serving one. A release refuses before its lease; a data phase refuses in its
 read-only data plan, also before its lease. The numbers are not measurements:
 the first governed run owes the live timings.
 
@@ -3490,7 +3551,9 @@ and one signed record version.
 
 **Preconditions** (`tools/databricks/adopt_live_facts.py`), each with its own
 refusal, all before the lease: the active deployment is the newest SUCCEEDED
-one, nothing is pending and the compute is ACTIVE (`deployment_unstable`); its
+one, nothing is pending and the compute is ACTIVE (`deployment_unstable`; a
+stopped App has no active deployment, spike S7, so it is never adopted: step
+0a's tier a starts only an already-adopted blue); its
 env-name set (names only; Databricks redacts the values) carries no agent
 model, serving, Gateway, Supervisor, eval, Gateway-attestation or proxy name
 (`env_names_not_proxyless`; the two agentic switches `MIP_AI_GATEWAY` and
@@ -3606,12 +3669,14 @@ release's rebuild of an adopted blue's restore payload, handed to the proof
 only with blue's exact env-name set (D0's names carry neither agentic
 switch, so the rebuild leaves both out).
 
-**Spike S7 is owed** (whether the Apps update API can set
-`default_source_code_path`, and how an App start snapshots source). The worst
-case holds: the App's default source is never pointed at the copy.
-`S7_DEFAULT_SOURCE_SETTABLE` in `adopt_live.py` is the reviewed switch a later
-PR flips with the recorded S7 result (a code constant, never an environment
-variable); until then the switch refuses.
+**Spike S7 is recorded: the default source is not settable.**
+`apps create-update` rejects the `default_source_code_path` mask, and
+`apps update` succeeds but ignores the field; only a deployment moves it.
+`S7_DEFAULT_SOURCE_SETTABLE` in `adopt_live.py` stays False and the switch
+refuses for good (`default_source_not_settable`; the adopt plan records
+`s7_default_source: not_settable`). The default source stays on D0's own
+folder, and any later start snapshots that folder's current bytes, which the
+start proofs' full-tree digests check.
 
 **The pre-activation rollback proof (attack O2).** The first activation of a
 run (`deploy_app_snapshot`) first runs
@@ -3877,7 +3942,10 @@ half-applied (exit 4) and offers exactly two exits:
   stop (120 s) and start (600 s) budgets plus the 300 s apply bound; announce
   that figure. The plan's "5 minutes or less" is not met by those budgets and
   is not a gate (a 300 s refusal would refuse every WR5 window: the start
-  budget alone is 600 s); spikes S2 and S7 owe the live timings. The release
+  budget alone is 600 s). Spike S7 measured a trivial App's start (96-108 s
+  to compute ACTIVE before its deployment even begins) and stop (about
+  40-45 s); the real App installs its whole tree on top, so no budget is
+  shrunk. The release
   window (WR1-WR4) never plans WR5, and its digests are unchanged.
   `--remainder --journal <path>` prints, read-only, the exhausted journal's
   remainder count and the digest the window plan pins.
@@ -4110,7 +4178,10 @@ Three values that were committed defaults are now inputs:
   <app-name>` prints it as `url`. The verifier's report names the URL, so it
   is written to a new private (0700) `mip-verify-live-*` directory in the
   system temp directory, never a fixed path there, and an `--out` inside the
-  checkout that git does not ignore, or cannot answer for, is refused.
+  checkout that git does not ignore, or cannot answer for, is refused. So is
+  the default when `TMPDIR` puts that directory inside the checkout and git
+  does not ignore the report there: the path mkdtemp picks is checked again
+  before it is opened.
 - **The load-test target** recorded in `tools/load_test/baseline.json` reads
   `https://<app-host>/api/v1`. It is a label, never compared:
   `tools/load_test/baseline.py --target` keeps the scheme and path and
@@ -4636,10 +4707,24 @@ them, so the tests that write them are deselected (listed under gaps): the
 suite test
 `test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`
 (`--deselect`) and four browser tests (the real-UC step's `--grep-invert`).
-`tests/unit/test_nightly_workflow_writes.py` scans every pytest suite,
-Playwright spec and `tools` module nightly runs, with their imports and
-conftests, for those write paths, and fails on one that a running test can
-reach or that no single test holds.
+`tests/unit/test_nightly_workflow_writes.py` scans what nightly runs for
+those write paths. It reads every string in `nightly.yml` (inline
+`python - <<'PY'` scripts included) and splits each step's `run:` into
+commands, in the step's shell and `working-directory` and following `cd`.
+From those commands it reads each pytest suite with its imports,
+`pytest_plugins` and conftests; each Playwright spec with its relative
+imports; the `package.json` scripts an npm command runs; and each repo
+script or module a command runs (by path, with `-m`, sourced, or as inline
+`-c` or here-document code), with what those import, source or run in turn.
+It fails on a write that a running test can reach, that no single test
+holds, or that pytest runs by name. It also fails on what a step runs that
+it cannot read: a pytest or Playwright command that names no suite or spec
+file (a directory, a marker, `testpaths`), a script or import that resolves
+to no file, a program outside the repo or named by a variable, inline code
+it cannot parse, `make`, another package manager, or a shell other than
+bash, sh or python. It does not read a program that builds its own command
+line (`xargs`, `find -exec`), an installed tool's config file, or an
+environment one step writes to `$GITHUB_ENV` for a later one.
 
 **What left nightly, and its home.** Each runs under the deployer in
 `./scripts/deploy.sh`, at deploy time only: between deploys nothing re-runs

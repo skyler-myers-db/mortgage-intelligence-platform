@@ -47,12 +47,14 @@ one planned, and write the v7 core record (``provenance: adopted``,
 ``restore_payload`` null until a release proves it before activation) under
 the lease, read back exactly.
 
-Spike S7 is owed (whether the Apps update API can set
-``default_source_code_path``, and how an App start snapshots source), so the
-worst case holds: the App's default source is never pointed at the copy. ``S7_DEFAULT_SOURCE_SETTABLE`` is the
-reviewed switch a later PR flips with the recorded S7 result (a code
-constant, never an environment variable); until then
-``point_default_source_at_copy`` refuses.
+Spike S7 is recorded (a throwaway App, 2026-11-10): ``default_source_code_path``
+is not settable. The Apps API's create-update rejects the mask, its plain
+update returns success and ignores the field, and only a deployment moves it
+(a FAILED one too). So the App's default source is never pointed at the copy:
+``S7_DEFAULT_SOURCE_SETTABLE`` stays False and ``point_default_source_at_copy``
+refuses for good. The default source stays on D0's own folder, and any later
+start (a window's tier a, the dead-man) snapshots that folder's CURRENT bytes,
+which the start proofs' full-tree digests check.
 
 Exit codes: 0 done (or planned), 2 refused with nothing changed by this run.
 """
@@ -104,23 +106,22 @@ from tools.databricks.operation_ack import AckRefused, ack_digest, require_ack  
 MODES = ("adopt", "supersede", "unadopt")
 PURPOSE = {"adopt": "adopt_live", "supersede": "supersede", "unadopt": "unadopt"}
 _PREFIX = "[mip-adopt-live]"
-# Spike S7 is owed. Flipped only by a reviewed PR that records S7's result.
+# Spike S7 (recorded 2026-11-10): NOT settable. The Apps API's create-update
+# rejects the default_source_code_path mask, its plain update returns success
+# and ignores the field, and only a deployment moves it. It stays False for good.
 S7_DEFAULT_SOURCE_SETTABLE = False
 
 
 def point_default_source_at_copy(
     workspace: Any, *, app_name: str, restore_source_path: str
 ) -> None:
-    """Point the App's default source at the immutable copy: refused until S7 is recorded."""
+    """Point the App's default source at the immutable copy: refused for good (spike S7)."""
 
-    if not S7_DEFAULT_SOURCE_SETTABLE:
-        raise AdoptLiveRefused(
-            "s7_owed",
-            "spike S7 is owed: whether the Apps update API can set default_source_code_path "
-            "is unobserved, so the App's default source stays as it is",
-        )
     raise AdoptLiveRefused(
-        "s7_unimplemented", "the reviewed default-source update lands with the recorded S7 result"
+        "default_source_not_settable",
+        "spike S7 measured that the Apps API cannot set default_source_code_path (create-update "
+        "rejects the mask, update ignores the field; only a deployment moves it), so the App's "
+        "default source stays as it is",
     )
 
 
@@ -240,7 +241,7 @@ def compute_plan(
         # The exact record version this plan acts on, so an ack covers one version only.
         "record_sha256": None if record is None else record_digest(record),
         "restore_folder": target.folder_path(facts).rsplit("/", 1)[-1],
-        "s7_default_source": "owed" if not S7_DEFAULT_SOURCE_SETTABLE else "settable",
+        "s7_default_source": "settable" if S7_DEFAULT_SOURCE_SETTABLE else "not_settable",
         **plan_facts(facts),
     }
     if mode == "supersede":
