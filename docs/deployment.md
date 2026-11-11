@@ -3654,9 +3654,10 @@ it in your terminal or the mode-0600 report, never in a shared log):
    the grants job look up the objects there, but it is not enough on its own:
 5. `GRANT <one privilege> ON <object> TO "<deployer>";` for every table,
    view, sequence and routine the handover leaves to another owner (anything
-   outside `mip_app`, and a `mip_app` object another role owns) that the
-   deployer holds no privilege on: `SELECT` on a table, view or sequence,
-   `EXECUTE` on a routine. The grants job run as the deployer revokes the App
+   outside `mip_app`, and a `mip_app` object another role owns), and the
+   database when it stays another role's, that the deployer holds no
+   privilege on: `SELECT` on a table, view or sequence, `EXECUTE` on a
+   routine, `CONNECT` on the database. The grants job run as the deployer revokes the App
    roles' privileges on every one of them, and PostgreSQL refuses a revoke
    outright from a role that holds nothing on the object: with step 4 alone,
    a legacy-owned table in a usable schema planned clean and the grants job
