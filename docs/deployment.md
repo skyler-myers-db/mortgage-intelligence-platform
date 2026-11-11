@@ -4423,10 +4423,15 @@ them, so the tests that write them are deselected (listed under gaps): the
 suite test
 `test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`
 (`--deselect`) and four browser tests (the real-UC step's `--grep-invert`).
-`tests/unit/test_nightly_workflow_writes.py` scans every pytest suite,
-Playwright spec and `tools` module nightly runs, with their imports and
-conftests, for those write paths, and fails on one that a running test can
-reach or that no single test holds.
+`tests/unit/test_nightly_workflow_writes.py` scans what nightly runs for
+those write paths: every string in `nightly.yml` (inline `python - <<'PY'`
+scripts included), each pytest suite with its imports, `pytest_plugins` and
+conftests, each Playwright spec with its relative imports, and each `tools`
+script or module a step runs by path or with `-m`, with what those import,
+source or run in turn. It fails on a write that a running test can reach,
+that no single test holds, or that pytest runs by name, and on anything a
+step runs that it cannot read: a relative import or a script path that
+resolves to no file, or an interpreter started on code outside the repo.
 
 **What left nightly, and its home.** Each runs under the deployer in
 `./scripts/deploy.sh`, at deploy time only: between deploys nothing re-runs
