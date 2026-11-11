@@ -134,6 +134,8 @@ def test_a_pair_for_another_object_or_a_case_variant_owner_still_refuses() -> No
 def test_an_expired_pair_refuses_its_object() -> None:
     refused = _refusals(_estate(), _pairs(_pair(expires_at="2026-11-03")))
     assert len(refused) == 1 and "expired interim owner pair" in refused[0]
+    # Spike S4: no ALTER can re-own a pipeline dataset, the only object a pair exists for.
+    assert "release or renew the pair" in refused[0] and "re-own the object" not in refused[0]
 
 
 def test_a_pair_never_admits_the_apps_own_service_principal() -> None:
