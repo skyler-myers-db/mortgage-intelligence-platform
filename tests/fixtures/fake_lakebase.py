@@ -23,7 +23,9 @@ in tests/unit/test_lakebase_handover_s3.py):
 * the new owner of a schema's object needs CREATE on that schema;
 * a view, or a SECURITY DEFINER routine, reads with its owner's privileges
   (``owner_reads``), so one the target owns cannot read a table the legacy
-  role still owns: 42501 (S3, answer 3c);
+  role still owns: 42501 (S3, answer 3c); a definer routine's owner also
+  needs USAGE on its schema, which L-A gives the target only once it owns
+  the schema (review of PR #336);
 * the rehearsal's ``CREATE SCHEMA`` leaves the target no CREATE there (S3,
   answer 6: the first ``--rehearse`` refused ``target_needs_schema_create``);
 * the legacy role keeps the extensions and its ``pg_default_acl`` row the
@@ -269,9 +271,18 @@ class FakeServer:
         self.owners[key] = new
 
     def app_read(self, key: str) -> None:
-        """An App read through ``key``, which reads its sources with its owner's privileges."""
+        """An App read through ``key``, which reads its sources with its owner's privileges.
+
+        A SECURITY DEFINER routine also resolves the names in its body as its
+        owner, so the owner needs USAGE on the routine's schema; a view's
+        query was resolved when it was created, so it needs none (both
+        measured on PostgreSQL 16.15).
+        """
 
         owner = self.owner_of(key)
+        routine = next((item for item in self.objects if item.key == key and item.definer), None)
+        if routine is not None and not self.has_privilege(owner, f"SCHEMA:{routine.schema}", "USAGE"):
+            raise InsufficientPrivilege("permission denied for schema")
         for source in self.owner_reads.get(key, ()):
             if not self.has_privilege(owner, source, "SELECT"):
                 raise InsufficientPrivilege("permission denied for table")

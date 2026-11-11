@@ -96,7 +96,9 @@ def test_the_plan_reads_only_and_leaves_other_owners_alone() -> None:
     keys = [entry["key"] for entry in current.document["changes"]]
     assert "TABLE:mip_app.app_owned_scratch" not in keys
     assert current.document["left_alone"] == {"other_owner": 1}
-    assert keys[-2:] == ["SCHEMA:mip_app", "DATABASE:mip_app_state"], "schema and database last"
+    assert keys[-3:] == ["SCHEMA:mip_app", "FUNCTION:mip_app.approval_count()", "DATABASE:mip_app_state"], (
+        "the schema, then the SECURITY DEFINER routines that resolve names through it, then the database"
+    )
 
 
 @pytest.mark.parametrize(

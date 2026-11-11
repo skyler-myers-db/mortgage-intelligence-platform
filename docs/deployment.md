@@ -3687,12 +3687,16 @@ the App database and each `mip_app` object the legacy role owns, one
 `ALTER ... OWNER TO` per transaction under `SET LOCAL lock_timeout = '3s'`
 and `SET LOCAL statement_timeout = '30s'`, in this order: types and domains,
 tables (a column's own sequence moves with its table) and standalone
-sequences, invoker routines, views and materialized views, SECURITY DEFINER
-routines, the schema, the database. A view or a SECURITY DEFINER routine reads
-with its owner's privileges, and under L-A the legacy role holds the
+sequences, invoker routines, views and materialized views, the schema,
+SECURITY DEFINER routines, the database. A view or a SECURITY DEFINER routine
+reads with its owner's privileges, and under L-A the legacy role holds the
 deployer's privileges but not the reverse, so what is read moves first (S3:
 with views first, every App read through a view failed 42501 for as long as
-the handover ran). `ALTER OWNER` takes an ACCESS
+the handover ran). A definer routine also resolves the names in its body as
+its owner, which needs USAGE on `mip_app`; step 3 gives the deployer only
+CREATE there, so definer routines move after the schema (moved before it,
+each failed "permission denied for schema mip_app" until the schema
+followed, in the apply and in the revert). `ALTER OWNER` takes an ACCESS
 EXCLUSIVE lock, and App queries queue behind a waiting one, so the lock
 timeout is what bounds an App query's wait. A lock timeout rolls back and
 retries after a backoff, at most 10 times per object and 10 minutes in all.

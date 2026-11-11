@@ -5,9 +5,10 @@ measured on PostgreSQL 16.15; the first tests pin that model so a future fake
 cannot drift back to answering the way the tool hoped:
 
 * order: tables and sequences move before views, and SECURITY DEFINER
-  routines after the tables they read, so an App read through a view or a
-  definer routine never fails during the apply (it failed 42501 when views
-  moved first);
+  routines after the schema (their owner resolves names with its USAGE
+  there), so an App read through a view or a definer routine never fails
+  during the apply or the revert (it failed 42501 when views moved first,
+  and a definer did while it moved before the schema);
 * schema usage: the plan refuses a non-system schema the target cannot use
   (``target_needs_schema_usage``, a count), because the grants job it runs
   next revokes in every one;
@@ -133,18 +134,49 @@ def test_the_fake_rewrites_every_target_entry_on_the_inverse_whatever_its_granto
     assert (LEGACY, APP_ROLE, "SELECT") in server.acl[key] and (DEPLOYER, APP_ROLE, "SELECT") not in server.acl[key]
 
 
+def test_the_fake_resolves_a_definer_routines_names_with_its_owners_schema_usage() -> None:
+    """PostgreSQL 16.15: a target-owned definer in a legacy-owned mip_app is 42501 (schema); a view is not."""
+
+    server = FakeServer()
+    server.owners["TABLE:mip_app.approvals"] = DEPLOYER
+    server.owners["TABLE:mip_app.campaigns"] = DEPLOYER
+    server.owners[VIEW] = DEPLOYER
+    server.app_read(VIEW)  # a view's names were resolved when it was created
+    server.owners[DEFINER] = DEPLOYER
+    with pytest.raises(InsufficientPrivilege, match="schema"):
+        server.app_read(DEFINER)
+    server.owners[SCHEMA] = DEPLOYER
+    server.app_read(DEFINER)
+    server.owners[DEFINER] = LEGACY
+    server.app_read(DEFINER)  # the legacy owner inherits the target's ownership of the schema
+
+
 # -- order ---------------------------------------------------------------------
 
 
-def test_no_app_read_through_a_view_or_a_definer_routine_fails_during_the_apply(tmp_path: Path) -> None:
+def test_no_app_read_through_a_view_or_a_definer_routine_fails_during_the_apply_or_the_revert(tmp_path: Path) -> None:
     server = FakeServer()
     failures = _probe_owner_reads(server)
     journal = _apply(server, tmp_path / "j.json")
     assert journal.status == "applied" and len(server.transactions) == len(journal.entries)
     assert failures == []
     phases = [entry["phase"] for entry in journal.entries]
-    assert phases.index("TABLE") < phases.index("VIEW") < phases.index(sql.DEFINER_PHASE) < phases.index("SCHEMA")
+    assert phases.index("TABLE") < phases.index("VIEW") < phases.index("SCHEMA") < phases.index(sql.DEFINER_PHASE) < phases.index("DATABASE")
     assert journal.entry(DEFINER)["kind"] == "FUNCTION" and journal.entry(DEFINER)["phase"] == sql.DEFINER_PHASE
+    assert _revert(server, tmp_path / "j.json")
+    assert failures == []
+
+
+def test_a_definer_routine_moved_before_the_schema_fails_until_the_schema_follows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Positive control: definers before the schema (the PR's first order) broke the definer's reads both ways."""
+
+    monkeypatch.setattr(sql, "ORDER", ("TYPE", "DOMAIN", "TABLE", "SEQUENCE", "FUNCTION", "PROCEDURE", "VIEW", "MATERIALIZED VIEW", sql.DEFINER_PHASE, "SCHEMA", "DATABASE"))
+    server = FakeServer()
+    failures = _probe_owner_reads(server)
+    _apply(server, tmp_path / "j.json")
+    assert failures == [(DEFINER, "42501")]
+    assert _revert(server, tmp_path / "j.json")
+    assert failures == [(DEFINER, "42501")] * 2
 
 
 def test_the_pre_s3_order_breaks_those_reads_for_the_whole_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

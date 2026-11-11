@@ -31,11 +31,17 @@ SECURITY DEFINER routine read with their OWNER's privileges. Under L-A the
 legacy role inherits the target's privileges, but the target holds none on
 what the legacy role still owns, so tables and standalone sequences move
 first (a column's own sequence moves with its table), then invoker routines,
-then views and materialized views, then SECURITY DEFINER routines (after the
-tables they read), then the schema and the database. Moving views before
-tables made every App read through a view fail with 42501 for as long as the
-handover ran (spike S3, R1-R3). A view that calls a SECURITY DEFINER routine
-would still fail for that routine's window; the schema has neither today.
+then views and materialized views, then the schema, then SECURITY DEFINER
+routines, then the database. Moving views before tables made every App read
+through a view fail with 42501 for as long as the handover ran (spike S3,
+R1-R3). A SECURITY DEFINER routine also resolves the names in its body as its
+owner, which needs USAGE on ``mip_app``: L-A gives the target only CREATE
+there, so a definer routine moved before the schema failed 42501 "permission
+denied for schema mip_app" until the schema followed, in both directions
+(PostgreSQL 16.15, review of PR #336); after the schema, a legacy-owned definer
+resolves through the target's ownership, which the legacy role inherits. A
+view that calls a SECURITY DEFINER routine would still fail for that
+routine's window; the schema has neither today.
 """
 
 from __future__ import annotations
@@ -61,7 +67,7 @@ KINDS = ("TYPE", "DOMAIN", "TABLE", "SEQUENCE", "FUNCTION", "PROCEDURE", "VIEW",
 # with its owner's privileges (module docstring). A SECURITY DEFINER routine's
 # phase is DEFINER_PHASE; every other object's phase is its kind.
 DEFINER_PHASE = "SECURITY DEFINER"
-ORDER = ("TYPE", "DOMAIN", "TABLE", "SEQUENCE", "FUNCTION", "PROCEDURE", "VIEW", "MATERIALIZED VIEW", DEFINER_PHASE, "SCHEMA", "DATABASE")
+ORDER = ("TYPE", "DOMAIN", "TABLE", "SEQUENCE", "FUNCTION", "PROCEDURE", "VIEW", "MATERIALIZED VIEW", "SCHEMA", DEFINER_PHASE, "DATABASE")
 _RELKINDS = {"r": "TABLE", "p": "TABLE", "v": "VIEW", "m": "MATERIALIZED VIEW", "S": "SEQUENCE", "c": "TYPE", "f": "FOREIGN TABLE"}
 _PROKINDS = {"f": "FUNCTION", "p": "PROCEDURE"}
 _TYPTYPES = {"e": "TYPE", "r": "TYPE", "d": "DOMAIN"}

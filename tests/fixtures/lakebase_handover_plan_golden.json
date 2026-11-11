@@ -81,16 +81,6 @@
       "statement": "ALTER VIEW \"mip_app\".\"campaign_summary\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
     },
     {
-      "key": "FUNCTION:mip_app.approval_count()",
-      "kind": "FUNCTION",
-      "new_owner": "00000000-0000-4000-8000-000000000001",
-      "phase": "SECURITY DEFINER",
-      "prior_owner": "legacy-owner@example.com",
-      "revert_grants": [],
-      "revert_statement": "ALTER FUNCTION \"mip_app\".\"approval_count\"() OWNER TO \"legacy-owner@example.com\"",
-      "statement": "ALTER FUNCTION \"mip_app\".\"approval_count\"() OWNER TO \"00000000-0000-4000-8000-000000000001\""
-    },
-    {
       "key": "SCHEMA:mip_app",
       "kind": "SCHEMA",
       "new_owner": "00000000-0000-4000-8000-000000000001",
@@ -101,6 +91,16 @@
       ],
       "revert_statement": "ALTER SCHEMA \"mip_app\" OWNER TO \"legacy-owner@example.com\"",
       "statement": "ALTER SCHEMA \"mip_app\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "FUNCTION:mip_app.approval_count()",
+      "kind": "FUNCTION",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "phase": "SECURITY DEFINER",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_grants": [],
+      "revert_statement": "ALTER FUNCTION \"mip_app\".\"approval_count\"() OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER FUNCTION \"mip_app\".\"approval_count\"() OWNER TO \"00000000-0000-4000-8000-000000000001\""
     },
     {
       "key": "DATABASE:mip_app_state",
@@ -117,7 +117,7 @@
     "other_owner": 1
   },
   "legacy_role": "legacy-owner@example.com",
-  "plan_sha256": "66d27fd9834cc05d1216f0a7c91856e4b07b6098fcb78342cfdae25b701db3b4",
+  "plan_sha256": "a33230422d9bc0b9d1c256e3564c830218534ae496ee8990f37dcd9c1590fdd2",
   "schema": "mip.lakebase-ownership-handover.plan.v1",
   "target_role": "00000000-0000-4000-8000-000000000001"
 }
