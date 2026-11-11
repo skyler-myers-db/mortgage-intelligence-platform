@@ -12,11 +12,28 @@ main) certifies code that is runtime-equivalent to the release commit:
   shopped around.
 - R must be green, at most ``max_age_days`` old (exactly 14.0 days passes),
   and its three release jobs must each have concluded ``success``. nightly.yml
-  runs ``verify_deployed_app_contract --git-sha`` twice, so a green run really
-  certifies the deployed commit it names.
+  runs ``python -m tools.clients.validation_session app-sha`` twice (the
+  deployed App's authenticated health must name the run's sha), so a green
+  run really certifies the deployed commit it names. It checks the git sha
+  only, not the Gateway binding, the deployment lease or the signed
+  last-good contract (scripts/deploy.sh verifies the binding and the lease
+  at deploy time).
 - "Runtime" is deny-by-default: every path is runtime except the explicit
   NON_RUNTIME list below. genie/sample_questions.md is read at runtime, so
   ``**/*.md`` is deliberately NOT in the list; only repo-root ``*.md`` is.
+- Evidence is per client (M1-PR8). nightly.yml names each run
+  ``nightly client=<key> sha=<sha>``. A run counts only when its run-name
+  parses and names its own head sha: a run-name naming another sha
+  (cross-sha) or none (a run from before M1-PR8) is refused. With
+  ``--client <key>`` a run of another client is refused too (cross-client),
+  so another install's green run never certifies this one. Without
+  ``--client`` any client's run counts, and the verdict says so ("client:
+  any"). The refused runs are counted in the verdict, never chosen.
+- A green run on a ``prod`` App skipped the browser job's App API mutation
+  suites (their step's ``if:``, nightly.yml's install-class). The verdict
+  records that step's conclusion from the same jobs payload
+  (``app_api_mutation``: success, skipped, absent), so the skip is evidence
+  that tools/release_readiness.py repeats, not a silent pass.
 
 Exit codes: 0 PASS, 1 FAIL, 2 API error (every caller treats 2 as FAIL).
 Output carries only URLs, shas, ages, job conclusions, the reason and paths.
@@ -29,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -54,6 +72,12 @@ PARITY_JOB = "SQL<->Python + Lakebase + Genie live"
 PLAYWRIGHT_JOB = "Playwright (real-UC golden path)"
 DRILL_JOB = "Credential-kill drill (simulated targets)"
 REQUIRED_JOBS = (PARITY_JOB, PLAYWRIGHT_JOB, DRILL_JOB)
+# The Playwright job's App API mutation step (nightly.yml; pinned by
+# tests/unit/test_nightly_workflow_writes.py): a prod App skips it.
+APP_API_MUTATION_STEP = "App API workflow contracts"
+# nightly.yml's run-name (pinned by tests/unit/test_nightly_workflow_contract.py).
+RUN_NAME = re.compile(r"nightly client=(?P<client>[a-z][a-z0-9-]{1,30}) sha=(?P<sha>[0-9a-f]{40})")
+CLIENT_KEY = re.compile(r"[a-z][a-z0-9-]{1,30}")
 
 GREEN = frozenset({"success"})
 RED = frozenset({"failure", "timed_out", "startup_failure"})
@@ -71,6 +95,8 @@ NON_RUNTIME_PREFIXES = (
 NON_RUNTIME_SUFFIXES = (".test.ts", ".test.tsx")
 
 FIX_HINT = "dispatch deploy-dev.yml on {sha}, then nightly.yml on the same sha"
+ANY_CLIENT = "any (cross-client evidence accepted; pass --client for per-client evidence)"
+CLIENT_FIX_HINT = "dispatch deploy-dev.yml (client={client}) on {sha}, then nightly.yml (client={client}) on the same sha"
 
 
 class GateApiError(RuntimeError):
@@ -84,10 +110,17 @@ class Run:
     conclusion: str
     updated_at: datetime
     html_url: str
+    title: str = ""
 
     @property
     def green(self) -> bool:
         return self.conclusion in GREEN
+
+    def evidence(self) -> tuple[str, str] | None:
+        """(client, sha) the run-name names, or None when it is not nightly.yml's per-client shape."""
+
+        match = RUN_NAME.fullmatch(self.title.strip())
+        return (match["client"], match["sha"]) if match else None
 
 
 @dataclass
@@ -101,6 +134,9 @@ class Verdict:
     jobs: dict[str, str] = field(default_factory=dict)
     paths: list[str] = field(default_factory=list)
     fix: str | None = None
+    client: str | None = None
+    refused: dict[str, int] = field(default_factory=dict)
+    app_api_mutation: str | None = None  # the chosen run's APP_API_MUTATION_STEP conclusion
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -183,7 +219,14 @@ def parse_runs(payload: object) -> list[Run]:
             if conclusion not in GREEN | RED:
                 continue
             runs.append(
-                Run(int(item["id"]), str(item["head_sha"]), conclusion, _parse_time(item["updated_at"]), str(item["html_url"]))
+                Run(
+                    int(item["id"]),
+                    str(item["head_sha"]),
+                    conclusion,
+                    _parse_time(item["updated_at"]),
+                    str(item["html_url"]),
+                    str(item.get("display_title") or ""),
+                )
             )
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise GateApiError(f"malformed run entry: {type(exc).__name__}") from exc
@@ -200,6 +243,35 @@ def parse_jobs(payload: object) -> dict[str, str]:
         except (KeyError, TypeError) as exc:
             raise GateApiError(f"malformed job entry: {type(exc).__name__}") from exc
     return jobs
+
+
+def parse_step_conclusion(payload: object, job: str, step: str) -> str:
+    """The conclusion of ``step`` in ``job`` from a run's jobs payload; 'absent' when either is missing."""
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+        raise GateApiError("jobs payload has no jobs list")
+    for item in payload["jobs"]:
+        if isinstance(item, dict) and item.get("name") == job:
+            for each in item.get("steps") or []:
+                if isinstance(each, dict) and each.get("name") == step:
+                    return str(each.get("conclusion") or each.get("status") or "unknown")
+    return "absent"
+
+
+def app_api_mutation_note(conclusion: str | None) -> str | None:
+    """How a report states the App API mutation suites of the certifying run."""
+
+    if conclusion is None:
+        return None
+    if conclusion == "skipped":
+        return 'App API mutation suites: skipped (a prod App; docs/deployment.md, "Live validation per client", gaps)'
+    if conclusion == "absent":
+        return "App API mutation suites: not reported by this run"
+    return f"App API mutation suites: {conclusion}"
+
+
+def client_note(client: str | None) -> str:
+    return f"client: {client}" if client else f"client: {ANY_CLIENT}"
 
 
 Fetch = Callable[[str], object]
@@ -224,6 +296,30 @@ def list_runs(fetch: Fetch, now: datetime) -> list[Run]:
     return runs
 
 
+def select_runs(runs: Sequence[Run], client: str | None) -> tuple[list[Run], dict[str, int]]:
+    """The runs that are evidence for ``client`` (any client when None), and the refused counts.
+
+    A run-name that is not ``nightly client=<key> sha=<sha>`` is refused as
+    ``untitled``; one naming another sha than the run's head as
+    ``cross_sha``; with a client, one naming another client as
+    ``cross_client``.
+    """
+
+    kept: list[Run] = []
+    refused = {"untitled": 0, "cross_sha": 0, "cross_client": 0}
+    for run in runs:
+        named = run.evidence()
+        if named is None:
+            refused["untitled"] += 1
+        elif named[1] != run.head_sha:
+            refused["cross_sha"] += 1
+        elif client is not None and named[0] != client:
+            refused["cross_client"] += 1
+        else:
+            kept.append(run)
+    return kept, {reason: count for reason, count in refused.items() if count}
+
+
 def verdict(
     runs: Sequence[Run],
     release_sha: str,
@@ -231,6 +327,21 @@ def verdict(
     max_age_days: float = DEFAULT_MAX_AGE_DAYS,
     diff: Callable[[str, str], list[str] | None] = runtime_changed_paths,
     jobs: Callable[[int], dict[str, str]] | None = None,
+    client: str | None = None,
+) -> Verdict:
+    result = _verdict(runs, release_sha, now, max_age_days, diff, jobs, client)
+    result.client = client
+    return result
+
+
+def _verdict(
+    runs: Sequence[Run],
+    release_sha: str,
+    now: datetime,
+    max_age_days: float,
+    diff: Callable[[str, str], list[str] | None],
+    jobs: Callable[[int], dict[str, str]] | None,
+    client: str | None,
 ) -> Verdict:
     ordered = sorted(runs, key=lambda run: run.updated_at, reverse=True)
     diffs: dict[str, list[str] | None] = {}
@@ -240,7 +351,7 @@ def verdict(
             diffs[sha] = diff(sha, release_sha)
         return diffs[sha]
 
-    fix = FIX_HINT.format(sha=release_sha)
+    fix = CLIENT_FIX_HINT.format(sha=release_sha, client=client) if client else FIX_HINT.format(sha=release_sha)
     chosen = next((run for run in ordered if changed(run.head_sha) == []), None)
     if chosen is None:
         green = next((run for run in ordered if run.green), None)
@@ -337,32 +448,43 @@ def evaluate(
     fetch: Fetch | None = None,
     now: datetime | None = None,
     diff: Callable[[str, str], list[str] | None] = runtime_changed_paths,
+    client: str | None = None,
 ) -> Verdict:
     """The gate's verdict; an HTTP, auth or parse failure is API_ERROR, never PASS."""
 
+    if client is not None and CLIENT_KEY.fullmatch(client) is None:
+        return Verdict("API_ERROR", "api_error", release_sha, fix="--client must be a client key", client=client)
     fetch = fetch or github_fetch()
     now = now or datetime.now(UTC)
+    payloads: list[object] = []
+
+    def jobs_of(run_id: int) -> dict[str, str]:
+        payloads.append(fetch(f"actions/runs/{run_id}/jobs?per_page=100"))
+        return parse_jobs(payloads[-1])
+
     try:
-        runs = list_runs(fetch, now)
-        return verdict(
-            runs,
-            release_sha,
-            now,
-            max_age_days,
-            diff=diff,
-            jobs=lambda run_id: parse_jobs(fetch(f"actions/runs/{run_id}/jobs?per_page=100")),
-        )
+        runs, refused = select_runs(list_runs(fetch, now), client)
+        result = verdict(runs, release_sha, now, max_age_days, diff=diff, jobs=jobs_of, client=client)
+        result.refused = refused
+        if payloads:
+            result.app_api_mutation = parse_step_conclusion(payloads[-1], PLAYWRIGHT_JOB, APP_API_MUTATION_STEP)
+        return result
     except GateApiError as exc:
-        return Verdict("API_ERROR", "api_error", release_sha, fix=f"{exc}; re-run once the GitHub API answers")
+        return Verdict("API_ERROR", "api_error", release_sha, fix=f"{exc}; re-run once the GitHub API answers", client=client)
 
 
 def render(result: Verdict) -> str:
     lines = [f"live-validation gate: {result.status}" + (f" ({result.reason})" if result.reason else "")]
     lines.append(f"  release sha: {result.release_sha}")
+    lines.append(f"  {client_note(result.client)}")
+    for reason, count in result.refused.items():
+        lines.append(f"  refused evidence: {count} {reason.replace('_', '-')} run(s)")
     if result.run_url:
         lines.append(f"  run: {result.run_url} on {result.run_sha}, {result.age_days} days old")
     for name, conclusion in result.jobs.items():
         lines.append(f"  job {name}: {conclusion}")
+    if note := app_api_mutation_note(result.app_api_mutation):
+        lines.append(f"  {note}")
     for path in result.paths:
         lines.append(f"  runtime path changed: {path}")
     if result.fix:
@@ -374,9 +496,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--release-sha", required=True, help="the release commit (a sha or HEAD)")
     parser.add_argument("--max-age-days", type=float, default=DEFAULT_MAX_AGE_DAYS)
+    parser.add_argument("--client", default=None, help="only this client's runs are evidence (nightly.yml's run-name)")
     parser.add_argument("--json", dest="json_out", default=None, help="also write the verdict as JSON here")
     args = parser.parse_args(argv)
-    result = evaluate(resolve_sha(args.release_sha), args.max_age_days)
+    result = evaluate(resolve_sha(args.release_sha), args.max_age_days, client=args.client)
     print(render(result))
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(result.as_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
