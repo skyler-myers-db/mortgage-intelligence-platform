@@ -34,7 +34,7 @@ Usage
     export DATABRICKS_CLIENT_SECRET=<your-m2m-client-secret>
     python tools/oauth_m2m_mint.py --output-file /tmp/bearer.txt
     curl -H "Authorization: Bearer $(cat /tmp/bearer.txt)" \\
-        https://mip-app-2543889327043640.aws.databricksapps.com/api/health
+        https://<app-host>/api/health
 """
 
 from __future__ import annotations

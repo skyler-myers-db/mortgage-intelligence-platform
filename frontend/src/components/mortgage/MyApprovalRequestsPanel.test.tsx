@@ -17,7 +17,7 @@ import type { ApprovalRequestBatchView, ApprovalRequestWithdrawn } from '../../t
 import type { LeadTableApprovalRequests } from './LeadTable.types';
 import { MyApprovalRequestsPanel, REQUEST_ROW_STATE_LABELS } from './MyApprovalRequestsPanel';
 
-const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const BATCH = '5eed00a1-0000-4000-8000-0000000000a1';
 const MINE: ApprovalRequestBatchView = {
   batch_id: BATCH,
   requested_by_display: 'Alice Analyst',

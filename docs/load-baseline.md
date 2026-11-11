@@ -9,8 +9,8 @@ baseline lives in `tools/load_test/baseline.json`.
 | Field | Value |
 |---|---|
 | Date | 2026-05-18 |
-| Target | `https://mip-app-2543889327043640.aws.databricksapps.com` |
-| Active deployment | `01f152e659dd1f42aab69164a47db116` |
+| Target | `https://<app-host>` |
+| Active deployment | `<deployment-id>` |
 | API prefix | `/api/v1` |
 | Auth | Databricks workspace Bearer token |
 | Host | macOS Darwin 25.5.0, Apple silicon |
@@ -29,7 +29,7 @@ start.
 Command:
 
 ```bash
-MIP_API_URL=https://mip-app-2543889327043640.aws.databricksapps.com \
+MIP_API_URL=https://<app-host> \
 MIP_BEARER_TOKEN=<workspace token> \
 MIP_USERS=20 MIP_SPAWN_RATE=5 MIP_RUN_TIME=2m \
 MIP_LOAD_TEST_FAIL_ON_BASELINE_REGRESSION=1 \
@@ -61,7 +61,7 @@ an approved production drill window.
 Command:
 
 ```bash
-MIP_API_URL=https://mip-app-2543889327043640.aws.databricksapps.com \
+MIP_API_URL=https://<app-host> \
 MIP_BEARER_TOKEN=<workspace token> \
 MIP_LOAD_TEST_WRITE=1 \
 MIP_USERS=5 MIP_SPAWN_RATE=2 MIP_RUN_TIME=1m \

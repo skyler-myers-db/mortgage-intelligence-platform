@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of the test surface: inventory, coverage map vs the 51-endpoint API, mock discipline + never-mock invariant, golden-fixture quality, brittleness/flakiness smells, parallel-safety posture, and live execution of the architecture + supply-chain regression gates.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15185868d1fa285ea9a3a4c94afd4` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Inventoried 95 Python test files + 33 frontend vitest files + 9 Playwright specs. Mapped 51 API endpoints against test coverage (router-by-router). Verified the never-mock invariant by static grep across `backend/`. Audited `tests/conftest.py` (698 LOC) dependency-override pattern. Counted brittleness primitives (`time.sleep`, hardcoded datetimes, `os.environ[...]= ` mutations, missing monkeypatch). Read the 4 golden JSON fixtures + the `test_sql_python_parity.py` cross-check. Executed `test_architecture_boundaries.py` (8 tests) and `test_supply_chain_licenses.py` (4 tests) live against the worktree.
 
 ---
@@ -259,7 +259,7 @@ The test surface is production-ready. The findings are about elevating the meta-
 - `frontend/vite.config.ts` — Vitest config with explicit Playwright exclusion
 - `frontend/tests/e2e/accessibility_procurement.spec.ts` — 7 a11y tests
 - `frontend/tests/e2e/cross_browser_matrix.spec.ts` — 4 cross-browser tests × 6 device projects
-- Live deployment: `01f15185868d1fa285ea9a3a4c94afd4`
+- Live deployment: `<deployment-id>`
 
 ---
 

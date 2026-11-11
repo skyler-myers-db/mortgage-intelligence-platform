@@ -5,10 +5,10 @@
 > *In-character audit. I am "Pat," Head of Growth at Summit Mortgage. It is Monday morning; the CEO and CMO want a 15-minute top-of-funnel recap at 11am. Below is what I actually did in the app, what I noticed, and where the experience helped me or fought me.*
 
 **Auditor:** Claude (Cowork) acting as Pat, Head of Growth
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14d00b90b15bba16e412e31a8edbd`
-**Method:** Read-only Chrome screenshots + live `/api/*` calls with my workspace OAuth token + direct UC SQL on warehouse `81d08d4fa2d799e9`. Borrower IDs are synthetic; no real PII touched.
+**App:** `https://<app-host>`, deployment `<deployment-id>`
+**Method:** Read-only Chrome screenshots + live `/api/*` calls with my workspace OAuth token + direct UC SQL on warehouse `<warehouse-id>`. Borrower IDs are synthetic; no real PII touched.
 
-## Post-remediation independent re-validation (Claude, 2026-05-11 02:40 UTC, deployment `01f14d00b90b15bba16e412e31a8edbd`)
+## Post-remediation independent re-validation (Claude, 2026-05-11 02:40 UTC, deployment `<deployment-id>`)
 
 Every claimed fix below was independently re-exercised against the live deployment after the remediation pass. All pass.
 
@@ -28,7 +28,7 @@ Every claimed fix below was independently re-exercised against the live deployme
 **False positive I corrected myself:** my original P1-G4 wrote that the lead queue accepts `?states=IL,WA` as comma-separated; the canonical field on `/api/portfolio/preview` is actually a JSON array `states: ["CA","WA"]`. The fix landed cleanly on the array path and the legacy `geography_states` alias is correctly rejected.
 
 **Engineering remediation message I was given that I also confirmed:**
-- Deployment ID = `01f14d00b90b15bba16e412e31a8edbd`, `status=SUCCEEDED`, `app_status=RUNNING`, `compute_status=ACTIVE` (verified via `databricks api get /api/2.0/apps/mip-app`).
+- Deployment ID = `<deployment-id>`, `status=SUCCEEDED`, `app_status=RUNNING`, `compute_status=ACTIVE` (verified via `databricks api get /api/2.0/apps/mip-app`).
 - The engineering caveat about Cotality MLS/Listings + Building Permits feeds still being on `roadmap` is correctly disclosed on the data-estate panel (`Listings overlay → roadmap`, `Permit overlay → roadmap`) and the lane summary ("7 live · 2 roadmap").
 - The platform-edge `gap-auth` + `x-databricks-internal-pod-ip` headers from the earlier audit pass are unchanged on this deployment — still the right gating decision for public release.
 
@@ -68,7 +68,7 @@ Every claimed fix below was independently re-exercised against the live deployme
 
 Pat-impact: "I open the bookmark, I'm screen-sharing, the four headline numbers are blank for four seconds." On a Monday-morning rehearsal that's the moment a junior exec on the call thinks "is the system broken?"
 
-Repro: cold-load `https://mip-app-2543889327043640.aws.databricksapps.com/`. Screenshots at t=0s show all four KPI cards rendering "—". The same load shows the geography chip on the map reading **"50 states · click to drill"** (the loading-state fallback) before it switches to "6 counties · click to drill" once `footprint.dataScope.county_count` hydrates.
+Repro: cold-load `https://<app-host>/`. Screenshots at t=0s show all four KPI cards rendering "—". The same load shows the geography chip on the map reading **"50 states · click to drill"** (the loading-state fallback) before it switches to "6 counties · click to drill" once `footprint.dataScope.county_count` hydrates.
 
 Code refs:
 - KPI chip uses fallback to `Object.keys(supportedCountyStates).length` until `footprint.dataScope?.county_count` is set — `frontend/src/components/mortgage/USChoroplethMap.tsx:1102-1105`

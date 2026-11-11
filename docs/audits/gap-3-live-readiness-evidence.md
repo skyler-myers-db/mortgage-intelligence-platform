@@ -6,8 +6,8 @@
 
 Date: 2026-06-05
 Commit: `f9763f4b6abdfd6ceb026e66a3529ae1e30b175f`
-App: `https://mip-app-2543889327043640.aws.databricksapps.com`
-Deployment: `01f161360bf61de6a7b8cbf00f9f1127`
+App: `https://<app-host>`
+Deployment: `<deployment-id>`
 CI: `27045308620`
 
 ## Proofs Passed

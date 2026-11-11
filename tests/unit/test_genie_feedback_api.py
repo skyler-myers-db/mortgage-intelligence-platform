@@ -16,7 +16,7 @@ from backend.services.lakebase import get_lakebase_client
 
 client = TestClient(app)
 ACTOR_HEADERS = {"X-Forwarded-Email": "lo@example.com"}
-_OWNED_CONVERSATION = "01f13d4968af1b249dc388fd5b18b195"
+_OWNED_CONVERSATION = "01f1c0de000000000000000000000001"
 _MESSAGE_ID = "msg-feedback-1"
 _REQUEST_ID = "11111111-1111-4111-8111-111111111111"
 

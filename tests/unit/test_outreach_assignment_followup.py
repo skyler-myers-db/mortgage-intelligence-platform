@@ -84,7 +84,7 @@ def test_assigned_to_email_outside_staff_domain_is_422() -> None:
     # Email-shaped but not an approved internal staff domain.
     response = TestClient(app).post(
         "/api/outreach/approve",
-        json=_approve_payload(assigned_to_email="jane@gmail.com"),
+        json=_approve_payload(assigned_to_email="jane@personal-mail.example"),
     )
     assert response.status_code == 422, response.text
 

@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_URL="${MIP_APP_URL:-https://mip-app-2543889327043640.aws.databricksapps.com}"
+# The deployed App's URL is a required input, never a default: an App URL
+# names one client's workspace (M1-PR4). `databricks apps get <app-name>`
+# prints it as url.
+APP_URL="${MIP_APP_URL:-}"
+if [[ -z "$APP_URL" ]]; then
+  echo "MIP_APP_URL is required: the deployed App's URL (https://<app-host>), which \`databricks apps get <app-name>\` prints as url" >&2
+  exit 2
+fi
 API_URL="${MIP_API_URL:-$APP_URL}"
 DATABRICKS_PROFILE="${DATABRICKS_PROFILE:-DEFAULT}"
 groups=(

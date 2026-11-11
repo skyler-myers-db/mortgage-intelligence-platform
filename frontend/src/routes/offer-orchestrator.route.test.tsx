@@ -434,7 +434,7 @@ describe('OfferOrchestrator route behavior', () => {
   }, 12_000);
 
   it('keeps saved campaign provenance attached through draft and approval', async () => {
-    const campaignId = '7e373ef5-d4b6-4fea-b555-0cb925987a72';
+    const campaignId = '5eed00a4-0000-4000-8000-0000000000a4';
     const variantName = 'Supervisor B';
     mount(
       `/offer-orchestrator/${BORROWER_ID}?campaign_id=${campaignId}`
@@ -444,7 +444,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(reviewCopyCurrent);
     const provenance = container.querySelector('[data-testid="offer-campaign-provenance"]');
     expect(provenance?.textContent).toContain('Campaign-bound draft');
-    expect(provenance?.textContent).toContain('campaign 7e373ef5-d4b');
+    expect(provenance?.textContent).toContain('campaign 5eed00a4-000');
     expect(provenance?.textContent).toContain(`variant ${variantName}`);
     expect(provenance?.textContent).toContain('Mortgage Growth Supervisor');
     expect(provenance?.textContent).toContain('draft proof aaaaaaaaaaaa');
@@ -484,7 +484,7 @@ describe('OfferOrchestrator route behavior', () => {
   });
 
   it('keeps saved campaign provenance attached through rejection', async () => {
-    const campaignId = '7e373ef5-d4b6-4fea-b555-0cb925987a72';
+    const campaignId = '5eed00a4-0000-4000-8000-0000000000a4';
     const variantName = 'Supervisor A';
     mount(
       `/offer-orchestrator/${BORROWER_ID}?campaign_id=${campaignId}`

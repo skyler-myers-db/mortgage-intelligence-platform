@@ -12,15 +12,15 @@
 ## Environment / auth note
 
 The task asked to try Option B first (personal Databricks Bearer against
-`https://mip-app-2543889327043640.aws.databricksapps.com`). That failed:
+`https://<app-host>`). That failed:
 
 ```
-databricks auth token --host https://dbc-3aa503a9-6d57.cloud.databricks.com
+databricks auth token --host https://<workspace-host>
 Error: cache: databricks OAuth is not configured for this host.
 ```
 
 The CLI host is not configured on this machine (DNS also fails:
-`lookup dbc-3aa503a9-6d57.cloud.databricks.com: no such host`). Fell back to
+`lookup <workspace-host>: no such host`). Fell back to
 Option A — walked the app against `http://localhost:5173` with the same source
 code, bypassing the Databricks Apps OAuth proxy.
 
@@ -115,7 +115,7 @@ already known to the team from `accessibility.spec.ts`.
 
 - **Primary CTAs per prototype:** `Build outreach draft`, evidence chips, `Open Genie`.
 - **Default (no-ID) landing render:** **pass after remediation**. The route now renders an explicit empty-state page, or returns to the last borrower selected in the current browser session. It no longer defaults to a fixture borrower or renders a dossier after a 404.
-- **Parametrized (real-ID) render:** pass. Navigated to `/borrower-360/B-0STSZHO4O5J04` and the API returned the real borrower "Owner d1a3a065, CHICAGO, IL" — CLIP 4707924298, Owner Link 1100000134187756, AVM $299,480, LTV 21%, score 68 — all live from the warehouse.
+- **Parametrized (real-ID) render:** pass. Navigated to `/borrower-360/B-0STSZHO4O5J04` and the API returned the real borrower "Owner d1a3a065, CHICAGO, IL" — CLIP 4707924298, Owner Link `<owner-link-id>`, AVM $299,480, LTV 21%, score 68 — all live from the warehouse.
 - **Console errors on `/borrower-360`:** none expected on the no-ID empty-state route.
 - **Screenshots:** `borrower-360.png` (empty-state view) and `borrower-360-real-id.png` (live data).
 - **axe:** 1 critical (`label` on Genie input).

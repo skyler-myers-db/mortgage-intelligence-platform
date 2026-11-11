@@ -21,7 +21,7 @@ python tools/genie_eval.py --base http://localhost:8000
 
 # deployed app (Databricks Apps OAuth gate)
 python tools/genie_eval.py \
-  --base https://mip-app-2543889327043640.aws.databricksapps.com \
+  --base https://<app-host> \
   --token "$(databricks auth token --host $DATABRICKS_HOST | jq -r .access_token)"
 
 # deployed app stress pack

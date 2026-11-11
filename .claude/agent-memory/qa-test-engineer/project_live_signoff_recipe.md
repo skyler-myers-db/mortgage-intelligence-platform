@@ -24,11 +24,11 @@ settle after `waitForSelector('.app-shell')` for react-query to resolve.
 
 Run live signoffs at the API layer too -- it binds the same contract the UI uses.
 
-**Why:** repeated live audits against https://mip-app-2543889327043640.aws.databricksapps.com
+**Why:** repeated live audits against `https://<app-host>`
 need the same auth mint + the same non-obvious contract facts each time.
 
 **How to apply:**
-- Auth mint (verified): `TOK=$(databricks auth token --host https://dbc-3aa503a9-4fa8.cloud.databricks.com | .venv/bin/python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")`. Send `Authorization: Bearer $TOK`. Always REDACT the token in output.
+- Auth mint (verified): `TOK=$(databricks auth token --host https://<workspace-host> | .venv/bin/python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")`. Send `Authorization: Bearer $TOK`. Always REDACT the token in output.
 - API prefix is `/api/v1` (frontend `apiPath()` rewrites `/api/*`→`/api/v1/*`). Hit `/api/v1/...` directly.
 - Genie space rate limit ~5 questions/min. Only `POST /api/v1/genie/message` costs a model turn; `/genie/start` (Lakebase read) does NOT. Budget <=4 message turns; put a hard counter in the harness.
 - **Genie enhancement contract** ([[project_genie_regression_contract]]): the LIVE-Genie narrative path (`source=="genie"`) populates `follow_up_questions`, `reasoning_trace` ([{kind,content}], kinds are `THOUGHT_TYPE_*`), `native_visualization` (only when a viz attachment lands this turn), `genie_status` (e.g. `COMPLETED`). The deterministic `source=="trusted_sql"` canonical-overlay path leaves ALL FOUR empty/None (no fabrication). Chartable "...in each state?" → live genie; canonical equity/count questions → trusted_sql. This split is enforced in `backend/services/repositories/databricks_genie.py` (narrative build ~L417 vs `_canonical_genie_answer` ~L451+).

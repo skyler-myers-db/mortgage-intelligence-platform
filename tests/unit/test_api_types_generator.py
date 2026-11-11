@@ -427,7 +427,7 @@ def test_2xx_without_content_raises() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "Contact a@b.com for access.",
+        "Contact a@b.invalid for access.",  # not .example, which the screen allows
         "Example borrower B-ABCDEFGHJKLMN.",
         "Call 555-867-5309.",
         "See https://x for details.",

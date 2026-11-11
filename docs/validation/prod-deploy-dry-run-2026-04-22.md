@@ -4,7 +4,7 @@
 
 **Target:** `prod` (mode: production)
 **Command run:** `databricks bundle validate -t prod`
-**Operator:** skyler@entrada.ai
+**Operator:** `<operator-email>`
 **Verdict:** **BLOCKED** — one validation error + two dev-default footguns that will misfire in prod.
 
 ## Summary
@@ -71,7 +71,7 @@ Impact in prod: intentional. Production still defaults to explicit/on-demand ref
 prod:
   mode: production
   workspace:
-    host: https://dbc-3aa503a9-4fa8.cloud.databricks.com   # same host as dev
+    host: https://<workspace-host>   # same host as dev
 ```
 
 `var.uc_catalog` defaults to `mip` in both targets; no per-target override. That means a `databricks bundle deploy -t prod` would write to the *same* Unity Catalog objects and the *same* Lakebase instance that the dev target writes to. The only separation is the bundle root path (`/Workspace/Users/<user>/...` under prod, `~/.bundle/...` under dev) — which isolates the job + pipeline definitions, but not the data they read and write.

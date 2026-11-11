@@ -323,7 +323,7 @@ All four gates would catch a regression of their respective contract. They are t
 
 ### Live map experience — does it look amazing?
 
-This is the part the user specifically asked me to verify. I drove the deployed app (`01f150e19b301b7db1850cf67e716569`, RUNNING/ACTIVE) and captured map renders on every surface that uses the choropleth.
+This is the part the user specifically asked me to verify. I drove the deployed app (`<deployment-id>`, RUNNING/ACTIVE) and captured map renders on every surface that uses the choropleth.
 
 **Segment Intelligence (`/segment-intelligence`).** Captured at 1440×900. The map carries the full lower-48 plus Alaska (compact inset, lower-left) and Hawaii (compact inset, mid-lower) under the **Albers USA projection** — which is the cartographic standard for U.S. choropleths and a substantial visual upgrade over the simpler Mercator-style outline that `@svg-maps/usa` shipped. State boundaries are crisp at this zoom, no jagged simplification artifacts, no missing geometry. Five footprint states (Washington, California, Illinois, Texas, Florida) sit in lighter blue against the dark-navy out-of-footprint base — clear visual separation of the live coverage versus the rest of the country.
 

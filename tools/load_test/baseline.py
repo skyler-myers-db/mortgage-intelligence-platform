@@ -10,6 +10,21 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+# The committed baseline's target is a label, never compared. Its host would
+# name one client's App (M1-PR4), so only the placeholder is ever written.
+TARGET_HOST_PLACEHOLDER = "<app-host>"
+
+
+def target_label(target: str) -> str:
+    """``target`` with its host, userinfo, query and fragment replaced by the placeholder."""
+
+    text = target.strip()
+    if text in ("", "unknown"):
+        return "unknown"
+    parts = urlsplit(text if "://" in text else f"https://{text}")
+    return f"{parts.scheme or 'https'}://{TARGET_HOST_PLACEHOLDER}{parts.path}"
 
 
 def _float(row: dict[str, str], *keys: str) -> float:
@@ -146,7 +161,7 @@ def write_baseline(
     payload = {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
-        "target": target,
+        "target": target_label(target),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),

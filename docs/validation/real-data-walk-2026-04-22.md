@@ -12,14 +12,14 @@ after the Slice-13 exhaustive validation work landed.
 - Host: macOS Darwin 25.5.0 / Apple silicon (operator laptop).
 - Backend: `uvicorn backend.main:app` on `127.0.0.1:8000`, booted with a
   `.env.local`-derived env + a workspace-user Bearer minted via
-  `databricks auth token --host https://dbc-3aa503a9-4fa8.cloud.databricks.com`.
+  `databricks auth token --host https://<workspace-host>`.
   `MIP_DEFAULT_CATALOG` overridden to `mip` at boot (the operator's
   `.env.local` still carries the pre-scrub `mip_demo` name).
 - Frontend: `npm --prefix frontend run dev` on `127.0.0.1:5173`.
 - Dependency state at boot — `GET /api/health`:
   ```
-  warehouse: up (serverless-xl, id da02d15a9490650b)
-  genie: up (space 01f13d4968af1b249dc388fd5b18b195)
+  warehouse: up (serverless-xl, id <warehouse-id>)
+  genie: up (space <genie-space-id>)
   lakebase: down (laptop Postgres not running)
   ```
 - Governance: `MIP_MOCK_MODE=false` — the fallback env var has been
@@ -75,7 +75,7 @@ Screenshots live in
 
 ### 5. Borrower 360 (`/borrower-360/B-0STSZHO4O5J04`) — **pass**
 
-- Customer 360: CLIP 4707924298, Owner Link 1100000134187756, AVM
+- Customer 360: CLIP 4707924298, Owner Link `<owner-link-id>`, AVM
   $299,480, current lien $62,280 at 8.76%, LTV 21% / equity $237,200,
   2 related properties via Owner Link.
 - Segments: "In the Money", "Investor / Multi-Property", "Home
@@ -127,7 +127,7 @@ A real regression was found and fixed during this walk:
   POST /api/genie/message {"question":"How many in-the-money borrowers are in Illinois?"}
   HTTP 200
   source: "genie"
-  conversation_id: "01f13e0e0e111122aef0bc7629413818"   ← real Databricks conv id
+  conversation_id: "<conversation-id>"   ← real Databricks conv id
   ```
 - Secondary finding (NOT in scope to fix here): the Genie space
   currently responds with "There are no tables available in the

@@ -255,7 +255,7 @@ mip.gold.lead_population         -- filtered ranked top-N for demo surface
 
 ## 9. Appendix — probe queries used for this analysis
 
-Run against warehouse `cfa0e10eed4f00a5` (sidewinder) on profile `DEFAULT`, Apr 21 2026.
+Run against warehouse `<warehouse-id>` (sidewinder) on profile `DEFAULT`, Apr 21 2026.
 
 Row counts, geographic coverage, cohort distribution, signal-completeness, Owner Link cardinality, distress/refi event volumes — all reproducible from the SQL files at `/tmp/*.sql` in the investigation transcript. Summary:
 

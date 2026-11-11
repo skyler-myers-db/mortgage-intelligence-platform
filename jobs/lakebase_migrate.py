@@ -230,6 +230,7 @@ from jobs.lakebase_migration_schema_hooks import (
 from jobs.lakebase_migration_schema_hooks import (
     _schema_hook_function_calls as _schema_hook_function_calls,
 )
+from jobs.lakebase_migration_seed import SEED_OPERATOR_EMAIL_ENV
 from jobs.lakebase_migration_seed import (  # noqa: E402
     _preflight_seed_schema_parity as _preflight_seed_schema_parity,
 )
@@ -237,6 +238,7 @@ from jobs.lakebase_migration_seed import _sql_literal as _sql_literal
 from jobs.lakebase_migration_seed import (
     _tenant_disclosure_seed_sql as _tenant_disclosure_seed_sql,
 )
+from jobs.lakebase_migration_seed import render_seed_sql as _render_seed_sql
 from jobs.lakebase_migration_transaction import (  # noqa: E402
     _run_transaction as _run_transaction_impl,
 )
@@ -391,6 +393,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--lender-identity-sha256",
         default=os.environ.get("MIP_LENDER_IDENTITY_SHA256", ""),
     )
+    # The demo seed's operator (lakebase/seed_campaigns.sql's token): the
+    # profile's demo-only MIP_SEED_OPERATOR_EMAIL; empty seeds the synthetic one.
+    parser.add_argument(
+        "--seed-operator-email",
+        default=os.environ.get(SEED_OPERATOR_EMAIL_ENV, ""),
+    )
     parser.add_argument(
         "--ai-gateway-verifier-client-id",
         default=os.environ.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", ""),
@@ -435,6 +443,7 @@ def main(
     tenant_id: str = "",
     lender_identity_json: str = "",
     lender_identity_sha256: str = "",
+    seed_operator_email: str = "",
     ai_gateway_verifier_client_id: str | None = None,
     require_ai_gateway_verifier: bool = False,
     mode: str = "apply",
@@ -486,6 +495,7 @@ def main(
                     tenant_id=tenant_id,
                     lender_identity_json=lender_identity_json,
                     lender_identity_sha256=lender_identity_sha256,
+                    seed_operator_email=seed_operator_email,
                 ),
                 **({"jobs_reader_role": jobs_reader_role} if jobs_reader_role is not None else {}),
             )
@@ -510,8 +520,11 @@ def main(
     app_role = resolved_roles[0]
     repo_root = _repo_root()
     schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
-    seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
     try:
+        seed_sql = _render_seed_sql(
+            (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8"),
+            seed_operator_email=seed_operator_email,
+        )
         _preflight_seed_schema_parity(schema_sql, seed_sql)
     except Exception as exc:  # noqa: BLE001 -- static repo-authored diagnostic; no secrets
         print(f"[lakebase-migrate] {exc}", file=sys.stderr)
@@ -580,6 +593,7 @@ if __name__ == "__main__":
         tenant_id=_args.tenant_id,
         lender_identity_json=_args.lender_identity_json,
         lender_identity_sha256=_args.lender_identity_sha256,
+        seed_operator_email=_args.seed_operator_email,
         ai_gateway_verifier_client_id=_args.ai_gateway_verifier_client_id,
         require_ai_gateway_verifier=_args.require_ai_gateway_verifier,
         mode=_args.mode,

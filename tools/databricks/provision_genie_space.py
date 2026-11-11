@@ -789,7 +789,7 @@ def run(args: argparse.Namespace) -> int:
         verified = _verify_round_trip(client, space_id)
         # 2026-05-04 hardening: assert the space's bound warehouse matches
         # what we asked for. Earlier the live space was bound to a workspace
-        # default (da02d15a9490650b) the app SP didn't have CAN_USE on,
+        # default warehouse the app SP didn't have CAN_USE on,
         # producing PERMISSION_DENIED on every Genie call. The provisioner
         # passes warehouse_id on update but the SDK does not always honour
         # warehouse changes silently — we now fail loudly on drift so the

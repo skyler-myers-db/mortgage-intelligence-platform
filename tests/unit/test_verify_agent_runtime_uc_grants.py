@@ -849,7 +849,7 @@ def _binding_denied_proof() -> ControlPlaneForeignCatalogProof:
                 isolation_mode="ISOLATED",
                 bindings=(
                     (
-                        "2478181912221244",
+                        "1000000000000001",
                         "BINDING_TYPE_READ_WRITE",
                     ),
                 ),

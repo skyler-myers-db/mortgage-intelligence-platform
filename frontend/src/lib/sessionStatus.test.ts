@@ -21,7 +21,7 @@ describe('session status: what the dialog says was not recorded', () => {
   it('classifies an approval request and its withdraw as a change, never the list (flow-02)', () => {
     expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests')).toBe('change');
     expect(unrecordedWriteFor('POST', '/api/outreach/approval-requests')).toBe('change');
-    expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests/0f8fad5b-d9cb-469f-a165-70867728950e/withdraw'))
+    expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests/5eed00a1-0000-4000-8000-0000000000a1/withdraw'))
       .toBe('change');
     expect(unrecordedWriteFor('GET', '/api/v1/outreach/approval-requests?scope=mine')).toBeNull();
     expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests/x/other')).toBeNull();

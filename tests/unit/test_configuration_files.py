@@ -156,7 +156,8 @@ def test_databricks_yml_names_no_genie_space_id():
     """Neither the retired staging pin nor the live space's id is committed to the bundle any more."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
-    assert "01f18188d7a41311abe3d99932b5aa9a" not in content, "the retired staging-workspace pin"
+    # No 32-hex id at all (the retired staging-workspace pin was one).
+    assert re.search(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", content) is None
     assert re.search(r"genie_space_id: (?!00000000PLACEHOLDER)[0-9a-f]{32}", content) is None
     assert re.search(r"genie_space_id: (?!00000000PLACEHOLDER)[0-9a-f]{32}", "genie_space_id: " + "a" * 32)
 
