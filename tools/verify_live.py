@@ -77,17 +77,17 @@ def default_report() -> Path:
     return Path(tempfile.mkdtemp(prefix=REPORT_DIR_PREFIX)) / REPORT_NAME
 
 
-def report_path_refusal(out: Path) -> str | None:
-    """Why ``out`` may not hold the report, or None.
+def _unignored_in_checkout(path: Path) -> bool:
+    """Whether ``path`` is in the checkout and git does not ignore it (or cannot answer).
 
     Outside the checkout any path will do; inside it only a path git ignores,
     since a tracked or untracked-but-unignored file is one ``git add`` from a
     commit. When git cannot answer, an inside path is refused.
     """
 
-    resolved = out.expanduser().resolve()
+    resolved = path.expanduser().resolve()
     if not resolved.is_relative_to(_REPO_ROOT):
-        return None
+        return False
     try:
         ignored = (
             subprocess.run(
@@ -101,11 +101,29 @@ def report_path_refusal(out: Path) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         ignored = False
-    if ignored:
+    return not ignored
+
+
+def report_path_refusal(out: Path) -> str | None:
+    """Why ``--out`` may not hold the report, or None."""
+
+    if not _unignored_in_checkout(out):
         return None
     return (
         f"--out {out} is in the checkout and not git-ignored, and the report names the App URL; "
         f"write it outside the tree (the default is {DEFAULT_REPORT_HELP})"
+    )
+
+
+def default_report_refusal(report: Path) -> str | None:
+    """Why the default report may not go to ``report``, a path in the system temp directory, or None."""
+
+    if not _unignored_in_checkout(report):
+        return None
+    return (
+        f"the system temp directory {report.parent.parent} is inside the checkout and git does not ignore "
+        f"the report it would hold ({report}), which names the App URL; set TMPDIR to a directory outside "
+        "the checkout, or pass a git-ignored --out"
     )
 
 
@@ -794,10 +812,13 @@ def main() -> int:
             f"--base-url (or {BASE_URL_ENV}) is required: the deployed App's URL, which "
             "`databricks apps get <app-name>` prints as url"
         )
-    # The default's private directory is made only when the report is written;
-    # the temp root it goes under is checked here, before any token mint.
-    checked = Path(tempfile.gettempdir()) / REPORT_NAME if args.out is None else args.out
-    refusal = report_path_refusal(checked)
+    # The default's private directory is made only when the report is written,
+    # so before any token mint a path of its shape under the same temp root is
+    # checked, and the one mkdtemp picks is checked again before it is opened.
+    if args.out is None:
+        refusal = default_report_refusal(Path(tempfile.gettempdir()) / f"{REPORT_DIR_PREFIX}xxxxxxxx" / REPORT_NAME)
+    else:
+        refusal = report_path_refusal(args.out)
     if refusal is not None:
         ap.error(refusal)
     if args.max_source_age_days is not None and args.max_source_age_days < 1:
@@ -825,6 +846,10 @@ def main() -> int:
         threshold_basis=threshold.basis,
     )
     out = default_report() if args.out is None else args.out
+    if args.out is None and (refusal := default_report_refusal(out)) is not None:
+        out.parent.rmdir()
+        print(refusal, file=sys.stderr)
+        return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(report)
