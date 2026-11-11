@@ -277,6 +277,13 @@ test.describe('restored age (delivery-05)', () => {
     await page.clock.runFor(1_500);
     await expect.poll(() => page.evaluate((key) => window.sessionStorage.getItem(key) !== null, QUERY_CACHE_KEY)).toBe(true);
     await page.clock.fastForward('03:00:00');
+    // Freeze Date on a minute boundary (timers keep running; the reload replays
+    // it), the harness's own fixtureNow posture, so the "3h ago" and "now"
+    // checks never depend on the run's real seconds. With the flowing clock a
+    // slow runner read "Fetched in 1m" here: Timestamp's minute clock trailed
+    // the real time. That bug is fixed in Timestamp.tsx and pinned by its unit
+    // tests (and FetchedAt's), not by this freeze.
+    await page.clock.setFixedTime(new Date('2026-07-20T15:00:00Z'));
   }
 
   async function holdExecutiveReads(page: Page): Promise<{ release: () => void }> {
