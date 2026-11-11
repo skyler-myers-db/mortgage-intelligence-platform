@@ -153,34 +153,46 @@ fi
 # install's state binds none until the step-4 apply: the operator's value is
 # the bootstrap warehouse until then, and the deploy switches to the bundle's
 # right after. With neither, it refuses. A dry run reads no state.
+# The adopt phases run no SQL (B1): every step they run, from here to their
+# exit before step 0a, reads no warehouse (scripts/lib/
+# deploy_adopt_phase_lifecycle.sh; tests/unit/test_adopt_phases_read_no_warehouse.py).
+# They read no bundle state here and leave DATABRICKS_WAREHOUSE_ID unset, so no
+# child sees an ambient value; a step that ever needed one would meet step 0a's
+# empty-warehouse refusal or its tool's own. Every other phase is unchanged.
 _OPERATOR_WAREHOUSE_ID="$(deployment_control_value DATABRICKS_WAREHOUSE_ID)"
 BUNDLE_STATE_WAREHOUSE_ID=""
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  echo "${DIM}\$ $PYTHON -m tools.databricks.bundle_state warehouse-id${RST}"
-  if ! BUNDLE_STATE_WAREHOUSE_ID="$("$PYTHON" -m tools.databricks.bundle_state warehouse-id)"; then
-    echo "${RED}[deploy] this deployer's bundle state could not be read; nothing was changed.${RST}" >&2
-    exit 2
-  fi
-fi
-if [[ -n "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
-  if [[ -n "$_OPERATOR_WAREHOUSE_ID" && "$_OPERATOR_WAREHOUSE_ID" != "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
-    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than this deployer's bundle state binds; unset it (the bundle's own warehouse is used).${RST}" >&2
-    exit 2
-  fi
-  _GRANTS_WAREHOUSE_ID="$BUNDLE_STATE_WAREHOUSE_ID"
-  WAREHOUSE_SOURCE="bundle-state"
-elif [[ "$DRY_RUN" -eq 1 ]]; then
-  _GRANTS_WAREHOUSE_ID="${_OPERATOR_WAREHOUSE_ID:-dry-run-bundle-warehouse}"
-  WAREHOUSE_SOURCE="dry-run (bundle state unread)"
-elif [[ -n "$_OPERATOR_WAREHOUSE_ID" ]]; then
-  _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID"
-  WAREHOUSE_SOURCE="first-install-bootstrap"
+if [[ "${DEPLOY_PHASE:-}" == "adopt" || "${DEPLOY_PHASE:-}" == "unadopt" ]]; then
+  _GRANTS_WAREHOUSE_ID=""
+  WAREHOUSE_SOURCE="none (--phase ${DEPLOY_PHASE} runs no SQL)"
+  unset DATABRICKS_WAREHOUSE_ID
 else
-  echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID to a warehouse the deployer can use for the steps before the bundle creates its own.${RST}" >&2
-  exit 2
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    echo "${DIM}\$ $PYTHON -m tools.databricks.bundle_state warehouse-id${RST}"
+    if ! BUNDLE_STATE_WAREHOUSE_ID="$("$PYTHON" -m tools.databricks.bundle_state warehouse-id)"; then
+      echo "${RED}[deploy] this deployer's bundle state could not be read; nothing was changed.${RST}" >&2
+      exit 2
+    fi
+  fi
+  if [[ -n "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
+    if [[ -n "$_OPERATOR_WAREHOUSE_ID" && "$_OPERATOR_WAREHOUSE_ID" != "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
+      echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than this deployer's bundle state binds; unset it (the bundle's own warehouse is used).${RST}" >&2
+      exit 2
+    fi
+    _GRANTS_WAREHOUSE_ID="$BUNDLE_STATE_WAREHOUSE_ID"
+    WAREHOUSE_SOURCE="bundle-state"
+  elif [[ "$DRY_RUN" -eq 1 ]]; then
+    _GRANTS_WAREHOUSE_ID="${_OPERATOR_WAREHOUSE_ID:-dry-run-bundle-warehouse}"
+    WAREHOUSE_SOURCE="dry-run (bundle state unread)"
+  elif [[ -n "$_OPERATOR_WAREHOUSE_ID" ]]; then
+    _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID"
+    WAREHOUSE_SOURCE="first-install-bootstrap"
+  else
+    echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID to a warehouse the deployer can use for the steps before the bundle creates its own.${RST}" >&2
+    exit 2
+  fi
+  DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
+  export DATABRICKS_WAREHOUSE_ID
 fi
-DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
-export DATABRICKS_WAREHOUSE_ID
 echo "  sql warehouse: ${WAREHOUSE_SOURCE}"
 unset _OPERATOR_WAREHOUSE_ID
 # <<< bundle warehouse <<<
