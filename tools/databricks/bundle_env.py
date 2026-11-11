@@ -69,6 +69,9 @@ Usage:
   # with no pin and no signed rollback record, and only for plan, the
   # placeholder binds.
   python tools/databricks/bundle_env.py plan -t client -o json --allow-unprovisioned-genie
+  # The adopt phases' own plan, summary, binds and unbinds (B4(c)) bind the one
+  # title match the shell's exact MIP_GENIE_PIN_ACK names, while nothing pins one:
+  python tools/databricks/bundle_env.py plan -t client -o json --adopt-acked-genie-pin
   # Mutable use is command-of-record internal only and requires one or more
   # exact, non-App selectors:
   python tools/databricks/bundle_env.py deploy -t client --select jobs.example
@@ -128,6 +131,7 @@ from tools.databricks import (  # noqa: E402
     scheduled_refresh_posture,
 )
 from tools.databricks.workspace_auth import (  # noqa: E402
+    deployer_profile_client,
     strip_app_facing_workspace_auth,
 )
 
@@ -401,7 +405,8 @@ def _genie_workspace_client(env: dict[str, str]) -> Any:
             raise ValueError("invalid deployer workspace auth binding")
         client = WorkspaceClient(host=bound_host, token=bound_token, auth_type="pat")
     elif bound_profile:
-        client = WorkspaceClient(profile=bound_profile)
+        # The provisioner's own builder: one identity for the pin plan's deployer.
+        client = deployer_profile_client(bound_profile)
     else:
         profile = str(env.get("DATABRICKS_CONFIG_PROFILE") or "").strip()
         host = str(env.get("DATABRICKS_HOST") or "").strip()
@@ -444,6 +449,12 @@ def _pinned_genie_space_id(env: dict[str, str], profile: ClientProfile) -> str |
     )
 
 
+def _acked_genie_space_id(env: dict[str, str], profile: ClientProfile) -> str:
+    """With nothing pinned: the one title match the shell's exact MIP_GENIE_PIN_ACK names (B4(c))."""
+
+    return bundle_env_adopt.acked_title_space_id(_genie_workspace_client(env), profile)
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(
@@ -477,6 +488,13 @@ def main() -> int:
             )
             return 2
         rest = [arg for arg in rest if arg != UNPROVISIONED_GENIE_FLAG]
+    # Wrapper-only too: the adopt phases' own calls bind an acked title match (B4(c)).
+    rest, adopt_acked_genie, genie_flag_error = bundle_env_adopt.split_genie_flag(
+        subcmd, rest, unprovisioned=allow_unprovisioned_genie
+    )
+    if genie_flag_error is not None:
+        print(f"[bundle_env] {genie_flag_error}", file=sys.stderr)
+        return 2
     if subcmd == "deploy":
         selector_error = _validate_non_app_deploy_selectors(rest)
         if selector_error is not None:
@@ -571,6 +589,8 @@ def main() -> int:
         rest, adopt_authority, flag_error = bundle_env_adopt.split_authority(rest)
         if flag_error is None and adopt_authority is not None and profile is None:
             flag_error = "an adopt plan's state edit needs the resolved client profile"
+        if flag_error is None and adopt_acked_genie and adopt_authority is None:
+            flag_error = f"{bundle_env_adopt.ADOPT_GENIE_FLAG} goes with an adopt plan's state edit only"
         if flag_error is not None:
             print(f"[bundle_env] {flag_error}", file=sys.stderr)
             return 2
@@ -604,12 +624,15 @@ def main() -> int:
     # mutates the App binding. The governed space is the one its pin names
     # (attack G12): the signed pin record or the App's signed rollback record,
     # proven to exist. A title match is never adopted here; only the
-    # provisioner adopts one, by an exact digest ack. With nothing pinned yet
-    # (a first install), only the pre-lease plan may bind the placeholder.
+    # provisioner adopts one, by an exact digest ack, and the adopt phases'
+    # own calls bind one the same way (B4(c), bundle_env_adopt). With nothing
+    # pinned yet (a first install), only the pre-lease plan may bind the placeholder.
     genie_unprovisioned = False
     if subcmd in {"plan", "summary", "deploy", "deployment"} and profile is not None:
         try:
             genie = _pinned_genie_space_id(env, profile)
+            if genie is None and adopt_acked_genie:
+                genie = _acked_genie_space_id(env, profile)
         except Exception as exc:  # noqa: BLE001 - the CLI boundary fails closed
             print(
                 "[bundle_env] governed Genie binding verification failed: "

@@ -455,6 +455,7 @@ def reviewed_bindings() -> list[dict[str, object]]:
         select_bindings,
     )
     from tools.databricks.app_rollback_resource_contract import reviewed_app_resource_contract
+    from tools.databricks.bundle_env_adopt import ADOPT_GENIE_FLAG
 
     private = ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY")
     env = {name: value for name, value in os.environ.items() if name not in private}
@@ -468,6 +469,9 @@ def reviewed_bindings() -> list[dict[str, object]]:
             "client",
             "-o",
             "json",
+            # After the binds, before adopt-live signs: nothing pins the space
+            # yet, so the summary binds the acked title match (B4(c)).
+            ADOPT_GENIE_FLAG,
         ],
         cwd=REPO,
         env=env,
