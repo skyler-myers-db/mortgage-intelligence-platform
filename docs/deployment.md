@@ -4574,10 +4574,24 @@ them, so the tests that write them are deselected (listed under gaps): the
 suite test
 `test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`
 (`--deselect`) and four browser tests (the real-UC step's `--grep-invert`).
-`tests/unit/test_nightly_workflow_writes.py` scans every pytest suite,
-Playwright spec and `tools` module nightly runs, with their imports and
-conftests, for those write paths, and fails on one that a running test can
-reach or that no single test holds.
+`tests/unit/test_nightly_workflow_writes.py` scans what nightly runs for
+those write paths. It reads every string in `nightly.yml` (inline
+`python - <<'PY'` scripts included) and splits each step's `run:` into
+commands, in the step's shell and `working-directory` and following `cd`.
+From those commands it reads each pytest suite with its imports,
+`pytest_plugins` and conftests; each Playwright spec with its relative
+imports; the `package.json` scripts an npm command runs; and each repo
+script or module a command runs (by path, with `-m`, sourced, or as inline
+`-c` or here-document code), with what those import, source or run in turn.
+It fails on a write that a running test can reach, that no single test
+holds, or that pytest runs by name. It also fails on what a step runs that
+it cannot read: a pytest or Playwright command that names no suite or spec
+file (a directory, a marker, `testpaths`), a script or import that resolves
+to no file, a program outside the repo or named by a variable, inline code
+it cannot parse, `make`, another package manager, or a shell other than
+bash, sh or python. It does not read a program that builds its own command
+line (`xargs`, `find -exec`), an installed tool's config file, or an
+environment one step writes to `$GITHUB_ENV` for a later one.
 
 **What left nightly, and its home.** Each runs under the deployer in
 `./scripts/deploy.sh`, at deploy time only: between deploys nothing re-runs

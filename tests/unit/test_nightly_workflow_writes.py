@@ -2,9 +2,9 @@
 
 The companion of tests/unit/test_nightly_workflow_contract.py:
 
-* no test nightly runs writes a lead outcome, disposition, snooze or
-  assignment (tests/fixtures/nightly_write_scan.py), and a ``prod`` App has a
-  path to a green run;
+* nothing nightly runs (a test, a script, an inline script) writes a lead
+  outcome, disposition, snooze or assignment (tests/fixtures/nightly_write_scan.py
+  and nightly_step_scan.py), and a ``prod`` App has a path to a green run;
 * the Genie semantic scorecard runs where the warehouse env it needs is
   exported;
 * the browser job mints only for the profile the validator jobs read, and
@@ -15,6 +15,7 @@ The companion of tests/unit/test_nightly_workflow_contract.py:
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.fixtures import nightly_step_scan as step_scan
 from tests.fixtures import nightly_write_scan as scan
 from tools import live_validation_gate as gate
 from tools.clients import validation_app
@@ -47,8 +49,12 @@ SPEC_WRITERS = {
 }
 
 
+def _workflow() -> dict[str, Any]:
+    return yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+
+
 def _jobs() -> dict[str, dict[str, Any]]:
-    return yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))["jobs"]
+    return _workflow()["jobs"]
 
 
 def _steps(job: str) -> list[dict[str, Any]]:
@@ -68,72 +74,170 @@ def _suites(run: str) -> set[str]:
     return set(re.findall(r"tests/integration/[a-z0-9_]+\.py", run))
 
 
-def _deselected(run: str) -> set[tuple[str, str]]:
-    return {(path, test) for path, test in re.findall(r"--deselect (tests/integration/[a-z0-9_]+\.py)::([a-z0-9_]+)", run)}
-
-
 # ---------------------------------------------------------------- what the tests nightly runs write
 
 
-def _quoted(flag: str, run: str) -> str | None:
-    match = re.search(rf"{flag}\s+(['\"])(.*?)\1", run)
-    return match[2] if match else None
+def _scanned(workflow: dict[str, Any] | None = None) -> list[tuple[str | None, step_scan.StepScan]]:
+    """(step name, what its ``run:`` runs, read in its shell and directory) for every step."""
 
-
-def _playwright_steps(jobs: dict[str, dict[str, Any]] | None = None) -> list[tuple[str, list[str], str | None, str | None]]:
-    """(step, specs, --grep, --grep-invert) for each step that runs ``npx playwright test``."""
-
+    workflow = workflow or _workflow()
     return [
-        (step["name"], re.findall(r"tests/e2e/[A-Za-z0-9_.-]+\.spec\.ts", step["run"]), _quoted("--grep", step["run"]), _quoted("--grep-invert", step["run"]))
-        for data in (jobs or _jobs()).values()
+        (step.get("name"), step_scan.step_findings(REPO, f"{job}: {step.get('name', step.get('uses'))}", step.get("run", ""), **step_scan.step_context(workflow, data, step)))
+        for job, data in workflow["jobs"].items()
         for step in data["steps"]
-        if "npx playwright test" in step.get("run", "")
     ]
 
 
-def _all_findings(jobs: dict[str, dict[str, Any]]) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]]]:
-    """(findings, suite writers, spec writers) over every pytest, Playwright and tools module nightly runs."""
+def _playwright_steps(workflow: dict[str, Any] | None = None) -> list[tuple[str | None, tuple[str, ...], str | None, str | None]]:
+    """(step, specs, --grep, --grep-invert) for each ``playwright test`` a step runs."""
 
-    findings: list[str] = []
+    return [(name, run.specs, run.grep, run.grep_invert) for name, step in _scanned(workflow) for run in step.playwright]
+
+
+def _run_findings(root: Path, step: step_scan.StepScan) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]]]:
+    """(findings, suite writers, spec writers) for one step: its own findings, each suite and spec it runs."""
+
+    findings = list(step.findings)
     suite_writers: set[tuple[str, str]] = set()
     spec_writers: set[tuple[str, str]] = set()
-    modules: set[str] = set()
-    for data in jobs.values():
-        for step in data["steps"]:
-            run = step.get("run", "")
-            modules.update(re.findall(r"python -m (tools(?:\.[a-z0-9_]+)+)", run))
-            if "pytest" in run:
-                deselected = _deselected(run)
-                for suite in sorted(_suites(run)):
-                    found, writers = scan.python_findings(REPO, suite, {test for path, test in deselected if path == suite})
-                    findings += found
-                    suite_writers.update((suite, test) for test in writers)
-    for _name, specs, grep, grep_invert in _playwright_steps(jobs):
-        for spec in specs:
-            found, writers = scan.spec_findings(FRONTEND, spec, grep, grep_invert)
+    for run in step.pytest:
+        for suite in run.suites:
+            found, writers = scan.python_findings(root, suite, {test for path, test in run.deselected if path == suite})
             findings += found
-            titles = {test.title for test in scan.spec_calls((FRONTEND / spec).read_text(encoding="utf-8")) if test.kind == "test"}
+            suite_writers.update((suite, test) for test in writers)
+    frontend = root / "frontend"
+    for run in step.playwright:
+        for spec in run.specs:
+            found, writers = scan.spec_findings(frontend, spec, run.grep, run.grep_invert)
+            findings += found
+            titles = {test.title for test in scan.spec_calls((frontend / spec).read_text(encoding="utf-8")) if test.kind == "test"}
             spec_writers.update((spec, title) for title in titles if any(writer.endswith(f" {title}") for writer in writers))
-    for module in sorted(modules):
-        path = scan._module_path(REPO, module)
-        assert path is not None, module
-        findings += scan.whole_module_findings(REPO, [path])
     return findings, suite_writers, spec_writers
 
 
+def _all_findings(workflow: dict[str, Any]) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]], list[Path]]:
+    """(findings, suite writers, spec writers, the files steps run) over everything nightly runs."""
+
+    findings = step_scan.workflow_string_findings(workflow)
+    suite_writers: set[tuple[str, str]] = set()
+    spec_writers: set[tuple[str, str]] = set()
+    files: list[Path] = []
+    for _name, step in _scanned(workflow):
+        found, suites, specs = _run_findings(REPO, step)
+        findings += found
+        suite_writers |= suites
+        spec_writers |= specs
+        files += step.files
+    findings += scan.whole_module_findings(REPO, files)
+    return findings, suite_writers, spec_writers, files
+
+
 def test_no_test_nightly_runs_writes_a_lead_outcome_disposition_snooze_or_assignment() -> None:
-    """Every pytest suite, Playwright spec and tools module a step runs, with their imports and conftests.
+    """Every pytest suite, Playwright spec, script, inline script and module a step runs, with what they load.
 
     None of these writes carries the run marker, and no cleanup undoes one (a
     funded-loan outcome reaches attribution, an application_submitted one the
     Sales ops KPIs), so the tests that make them are deselected on every install.
     """
 
-    findings, suite_writers, spec_writers = _all_findings(_jobs())
+    findings, suite_writers, spec_writers, _files = _all_findings(_workflow())
 
     assert suite_writers == SUITE_WRITERS, "positive control: the suite scan finds the outcome, disposition and assignment replay"
     assert spec_writers == SPEC_WRITERS, "positive control: the spec scan finds the four browser tests that write"
     assert findings == []
+
+
+def test_the_scan_reads_the_scripts_nightly_runs_by_path_and_what_they_run() -> None:
+    """``python tools/x.py``, ``bash tools/x.sh``, a script a script runs or sources, a tool a module runs as a child."""
+
+    loaded = {str(path.relative_to(REPO)) for path in scan.loaded_files(REPO, _all_findings(_workflow())[3])}
+
+    assert {
+        "tools/wait_app_ready.py",
+        "tools/genie_eval.py",
+        "tools/kill_drill/run_drill.sh",
+        "tools/kill_drill/lib_warehouse_on_demand.sh",
+        "tools/kill_drill/real_infra.py",
+        "tools/cleanup_live_campaign_fixtures.py",
+        "tools/clients/validation_session.py",
+        "tools/oauth_m2m_mint.py",
+    } <= loaded, loaded
+
+
+M2M_SMOKE = "Authenticated non-admin smoke (M2M)"
+GENIE_SCORECARD = "Genie semantic eval scorecard (deployed app)"
+ROUND_TRIP = "Lakebase post-activation read path"
+ROUND_TRIP_RUN = "pytest -q tests/integration/test_lakebase_round_trip.py"
+PROOF_CANARY = "Run mocked Genie proof layout canary"
+PROOF_CANARY_RUN = "npx playwright test \\\n  tests/e2e/genie_proof_layout.spec.ts \\\n"
+MOVEMENT_SPEC = "tests/e2e/movement_closed_loop_regressions.spec.ts"
+SUITE_WRITER = "tests/integration/test_lakebase_idempotency_live.py::test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip writes"
+PLANTED_POST = 'urllib.request.urlopen(urllib.request.Request(app_url + "/api/leads/B-0000000000000/outcome", method="POST", data=b"{}"))\n'
+
+
+def _edited(step: str, old: str, new: str, **keys: str) -> dict[str, Any]:
+    workflow = _workflow()
+    (target,) = [each for data in workflow["jobs"].values() for each in data["steps"] if each.get("name") == step]
+    assert target["run"].count(old) == 1, (step, old)
+    target["run"] = target["run"].replace(old, new)
+    target.update(keys)
+    return workflow
+
+
+@pytest.mark.parametrize(
+    ("step", "old", "new", "expected"),
+    [
+        (M2M_SMOKE, "if failed:\n", PLANTED_POST + "if failed:\n", M2M_SMOKE),
+        (GENIE_SCORECARD, "tools/wait_app_ready.py", "tools/wait_app_ready_moved.py", "tools/wait_app_ready_moved.py, which this scan cannot read"),
+        (GENIE_SCORECARD, "python tools/genie_eval.py", 'python "$RUNNER_TEMP/genie_eval.py"', "$RUNNER_TEMP/genie_eval.py, which this scan cannot read"),
+        # What a step selects by directory, marker, testpaths or an npm script, not by file.
+        (ROUND_TRIP, ROUND_TRIP_RUN, "pytest -q tests/integration/", "pytest selects tests/integration/, which is no suite file"),
+        (ROUND_TRIP, ROUND_TRIP_RUN, "python -m pytest -q tests/integration -k lakebase", "pytest selects tests/integration, which is no suite file"),
+        ("Run deep Genie fuzz", "pytest -m genie_fuzz_deep tests/integration/test_genie_fuzz.py -q", "pytest -m genie_fuzz_deep -q", "pytest names no suite file"),
+        (PROOF_CANARY, PROOF_CANARY_RUN, "npx playwright test \\\n", "playwright test names no spec"),
+        (PROOF_CANARY, "tests/e2e/genie_proof_layout.spec.ts", "tests/e2e/", "playwright test selects tests/e2e/, which is no spec filter"),
+        (PROOF_CANARY, PROOF_CANARY_RUN, f"npm run e2e:ci -- \\\n  {MOVEMENT_SPEC} \\\n", f"{MOVEMENT_SPEC}:"),
+        # A second command in the same step: its own --deselect and --grep-invert, not the first's.
+        (MUTATION_STEP, "_breaker_trip\n", "_breaker_trip\npytest -q tests/integration/test_lakebase_idempotency_live.py\n", SUITE_WRITER),
+        (REAL_UC_STEP, "--reporter=list --workers=1\n", f"--reporter=list --workers=1\nnpx playwright test {MOVEMENT_SPEC}\n", f"{MOVEMENT_SPEC}:"),
+    ],
+    ids=[
+        "heredoc-writes",
+        "path-form-tool-moved",
+        "script-outside-the-repo",
+        "pytest-by-directory",
+        "python-m-pytest-by-directory-and-k",
+        "pytest-by-marker-alone",
+        "playwright-every-spec",
+        "playwright-by-directory",
+        "playwright-through-an-npm-script",
+        "second-pytest-without-the-deselect",
+        "second-playwright-without-the-grep-invert",
+    ],
+)
+def test_the_nightly_scan_reports_a_write_or_an_unread_script_in_a_step(step: str, old: str, new: str, expected: str) -> None:
+    findings = _all_findings(_edited(step, old, new))[0]
+
+    assert findings and all(expected in finding for finding in findings), findings
+
+
+@pytest.mark.parametrize(
+    ("step", "old", "new"),
+    [
+        # A frontend step runs a repo tool the way frontend/package.json does (budget, gen:api).
+        (PROOF_CANARY, "--reporter=list --workers=1", "--reporter=list --workers=1\nnode ../tools/check_frontend_budgets.mjs --report-only"),
+        (PROOF_CANARY, "--reporter=list --workers=1", "--reporter=list --workers=1\npython3 ../tools/gen_api_types.py --check"),
+        (ROUND_TRIP, ROUND_TRIP_RUN, ROUND_TRIP_RUN + " tests/integration/test_genie_live.py"),
+        (ROUND_TRIP, ROUND_TRIP_RUN, "python --version\npython -m pip list --format=freeze | head -5\n" + ROUND_TRIP_RUN),
+        (ROUND_TRIP, ROUND_TRIP_RUN, ROUND_TRIP_RUN + '\npython -m json.tool "$RUNNER_TEMP/mip-validate-vars.json" > /dev/null'),
+        (PROOF_CANARY, PROOF_CANARY_RUN, "npm run e2e:ci -- \\\n  tests/e2e/genie_proof_layout.spec.ts \\\n"),
+    ],
+    ids=["node-a-repo-tool-from-frontend", "python-a-repo-tool-from-frontend", "a-read-only-suite", "diagnostics", "stdlib-json-tool", "playwright-through-an-npm-script"],
+)
+def test_the_nightly_scan_passes_an_edit_that_runs_nothing_that_writes(step: str, old: str, new: str) -> None:
+    findings, suite_writers, spec_writers, _files = _all_findings(_edited(step, old, new))
+
+    assert (findings, suite_writers, spec_writers) == ([], SUITE_WRITERS, SPEC_WRITERS)
 
 
 def test_the_real_uc_step_deselects_each_browser_writer_and_nothing_else() -> None:
@@ -170,6 +274,10 @@ def test_every_grep_of_a_playwright_step_selects_a_test() -> None:
 # ---------------------------------------------------------------- the scanners fail closed
 
 
+# The decorator opens its own literal: "\n@pytest" reads as an email address to the identifier ratchet.
+PLANTED_PLUGIN = "import pytest\n\n\n" '@pytest.fixture(autouse=True)\ndef _write():\n    post("/api/leads/B/outcome")\n'
+
+
 def _suite_tree(tmp_path: Path, suite: str, **modules: str) -> Path:
     for relative, text in {"tests/integration/test_planted_live.py": suite, **modules}.items():
         (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -189,8 +297,43 @@ def _suite_tree(tmp_path: Path, suite: str, **modules: str) -> Path:
         ('def _helper():\n    post("/api/sales/distribute")\n\n\ndef test_reads():\n    run(_helper)\n', {}),
         ('def _helper():\n    post("/api/loan-officers/assignments")\n\n\nALIAS = _helper\n', {}),
         ("def test_reads():\n    pass\n", {"tests/conftest.py": 'def pytest_sessionstart(session):\n    post("/api/leads/B/outcome")\n'}),
+        # pytest runs these by name, and nothing in the module references them.
+        ('def setup_module(module):\n    post("/api/leads/B/outcome")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def teardown_module(module):\n    post("/api/leads/B/outcome")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def setup_function(function):\n    post("/api/leads/B/snooze")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def teardown_function(function):\n    post("/api/leads/B/assign")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def pytest_generate_tests(metafunc):\n    post("/api/leads/B/disposition")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def __getattr__(name):\n    post("/api/leads/B/outcome")\n\n\ndef test_reads():\n    pass\n', {}),
+        ('def _helper():\n    post("/api/leads/B/outcome")\n\n\ndef _caller():\n    _helper()\n\n\ndef test_reads():\n    pass\n', {}),
+        ('pytest_plugins = ["tests.fixtures.planted_plugin"]\n\n\ndef test_reads():\n    pass\n', {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ('pytest_plugins = ("tests.fixtures.planted_plugin",)\n\n\ndef test_reads():\n    pass\n', {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ('pytest_plugins = "tests.fixtures.other,tests.fixtures.planted_plugin"\n\n\ndef test_reads():\n    pass\n', {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ("pytest_plugins = PLUGINS\n\n\ndef test_reads():\n    pass\n", {}),
+        ("def test_reads():\n    pass\n", {"tests/conftest.py": 'pytest_plugins = ["tests.fixtures.planted_plugin"]\n', "tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
     ],
-    ids=["module-constant", "imported-helper", "relative-import", "autouse-fixture", "class-method", "reached-helper", "helper-as-value", "aliased-helper", "conftest"],
+    ids=[
+        "module-constant",
+        "imported-helper",
+        "relative-import",
+        "autouse-fixture",
+        "class-method",
+        "reached-helper",
+        "helper-as-value",
+        "aliased-helper",
+        "conftest",
+        "xunit-setup-module",
+        "xunit-teardown-module",
+        "xunit-setup-function",
+        "xunit-teardown-function",
+        "generate-tests-hook",
+        "module-getattr",
+        "helper-no-test-reaches",
+        "pytest-plugins-list",
+        "pytest-plugins-tuple",
+        "pytest-plugins-comma-string",
+        "pytest-plugins-unreadable",
+        "conftest-pytest-plugins",
+    ],
 )
 def test_the_suite_scan_finds_a_write_in_every_shape_a_call_graph_misses(tmp_path: Path, suite: str, modules: dict[str, str]) -> None:
     root = _suite_tree(tmp_path, suite, **modules)
@@ -200,9 +343,21 @@ def test_the_suite_scan_finds_a_write_in_every_shape_a_call_graph_misses(tmp_pat
     assert findings
 
 
+def test_a_write_pytest_runs_by_name_is_a_finding_even_when_a_deselected_test_calls_it(tmp_path: Path) -> None:
+    """pytest runs ``setup_function`` around every test, the deselected one's call notwithstanding."""
+
+    suite = 'def setup_function(function):\n    post("/api/leads/B/outcome")\n\n\ndef test_deselected():\n    setup_function(None)\n\n\ndef test_reads():\n    pass\n'
+    root = _suite_tree(tmp_path, suite)
+
+    findings, writers = scan.python_findings(root, "tests/integration/test_planted_live.py", {"test_deselected"})
+
+    assert writers == ["test_deselected"] and len(findings) == 1 and "setup_function" in findings[0], findings
+
+
 def test_the_suite_scan_allows_a_write_only_a_deselected_test_reaches_and_ignores_reads(tmp_path: Path) -> None:
     suite = (
-        'def _helper():\n    post("/api/leads/B/outcome")\n\n\n'
+        'def _inner():\n    post("/api/leads/B/outcome")\n\n\n'
+        "def _helper():\n    _inner()\n\n\n"
         "def test_deselected():\n    _helper()\n\n\n"
         'def test_reads():\n    get("/api/sales/outcomes/summary")\n    get("/api/leads/B/assignment")\n    get("/api/geo/assignment-overlay")\n'
     )
@@ -215,26 +370,89 @@ def test_the_suite_scan_allows_a_write_only_a_deselected_test_reaches_and_ignore
 SPEC_HEAD = "import { test } from '@playwright/test';\nconst API = process.env.MIP_API_URL;\n"
 
 
+SPEC_WRITE = "export async function write(request) { await request.post('/api/leads/B/snooze'); }\n"
+SPEC_READS = "test('reads', async ({ request }) => { await write(request); });\n"
+
+
 @pytest.mark.parametrize(
-    ("spec", "helpers"),
+    ("spec", "files"),
     [
-        ("async function write(request) {\n  await request.post(`${API}/api/leads/${id}/outcome`);\n}\ntest('reads', async ({ request }) => { await write(request); });\n", None),
-        ("test.beforeEach(async ({ request }) => { await request.post('/api/leads/B/disposition'); });\ntest('reads', async () => {});\n", None),
-        ("test('writes', async ({ request }) => { await request.post('/api/leads/B/assign'); });\n", None),
-        ("import { write } from './planted_helpers';\ntest('reads', async ({ request }) => { await write(request); });\n", "export async function write(request) { await request.post('/api/leads/B/snooze'); }\n"),
-        ("for (const kind of ['a', 'b']) {\n  test(`writes ${kind}`, async ({ request }) => { await request.post('/api/leads/B/outcome'); });\n}\n", None),
+        ("async function write(request) {\n  await request.post(`${API}/api/leads/${id}/outcome`);\n}\ntest('reads', async ({ request }) => { await write(request); });\n", {}),
+        ("test.beforeEach(async ({ request }) => { await request.post('/api/leads/B/disposition'); });\ntest('reads', async () => {});\n", {}),
+        ("test('writes', async ({ request }) => { await request.post('/api/leads/B/assign'); });\n", {}),
+        ("import { write } from './planted_helpers';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("for (const kind of ['a', 'b']) {\n  test(`writes ${kind}`, async ({ request }) => { await request.post('/api/leads/B/outcome'); });\n}\n", {}),
+        # real_data.spec.ts imports '../../src/routes/analytics.lib': the file is analytics.lib.ts, beside analytics.tsx.
+        ("import { write } from '../../src/routes/planted.lib';\n" + SPEC_READS, {"src/routes/planted.lib.ts": SPEC_WRITE, "src/routes/planted.tsx": "export const Route = 1;\n"}),
+        ("import { write } from './planted_dir';\n" + SPEC_READS, {"tests/e2e/planted_dir/index.tsx": SPEC_WRITE}),
+        ("import { write } from './planted_helpers.js';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("const { write } = require('./planted_helpers');\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("import { write } from './planted_helpers_moved';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("import { write } from './planted_helpers';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": "export { write } from './planted_missing';\n"}),
+        ("const kind = 'helpers';\nconst { write } = await import(`./planted_${kind}`);\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
     ],
-    ids=["module-helper", "hook", "running-test", "imported-helper", "generated-title"],
+    ids=[
+        "module-helper",
+        "hook",
+        "running-test",
+        "imported-helper",
+        "generated-title",
+        "dotted-module-import",
+        "directory-index-tsx",
+        "js-specifier",
+        "require-import",
+        "unresolved-import",
+        "unresolved-import-in-a-helper",
+        "import-built-at-run-time",
+    ],
 )
-def test_the_spec_scan_finds_a_write_no_deselected_test_holds(tmp_path: Path, spec: str, helpers: str | None) -> None:
-    (tmp_path / "tests" / "e2e").mkdir(parents=True)
-    (tmp_path / "tests" / "e2e" / "planted.spec.ts").write_text(SPEC_HEAD + spec, encoding="utf-8")
-    if helpers is not None:
-        (tmp_path / "tests" / "e2e" / "planted_helpers.ts").write_text(helpers, encoding="utf-8")
+def test_the_spec_scan_finds_a_write_no_deselected_test_holds(tmp_path: Path, spec: str, files: dict[str, str]) -> None:
+    for relative, text in {"tests/e2e/planted.spec.ts": SPEC_HEAD + spec, **files}.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
 
     findings, _writers = scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, "a title no test has")
 
     assert findings
+
+
+def test_the_spec_scan_reads_imports_from_code_and_not_from_comments_or_strings(tmp_path: Path) -> None:
+    """A comment naming a retired helper, a doc comment's import example, an import in a string, ``Array.from``."""
+
+    stale = (
+        "// openEvidenceDrawer moved here from './evidenceHelpers', which is retired.\n"
+        "/**\n *   import { expect, test } from './test';\n */\n"
+        "const example = \"import { gone } from './nowhere'\";\n"
+        "const parts = Array.from('./nowhere');\n"
+    )
+    files = {
+        "tests/e2e/planted.spec.ts": SPEC_HEAD + "import { label } from './planted_helpers';\n" + stale + "test('reads', async () => { label(); });\n",
+        "tests/e2e/planted_helpers.ts": stale + "export const label = () => 'reads';\n",
+    }
+    for relative, text in files.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
+
+    assert scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, None) == ([], [])
+    assert scan._relative_imports(tmp_path / "tests/e2e/planted.spec.ts", files["tests/e2e/planted.spec.ts"]) == ([tmp_path / "tests/e2e/planted_helpers.ts"], []), (
+        "positive control: the real import still resolves"
+    )
+
+
+def test_the_spec_scan_reads_the_file_a_dotted_import_names_and_not_its_sibling(tmp_path: Path) -> None:
+    """``planted.lib`` is planted.lib.ts: a write in planted.tsx, which no spec imports, is no finding."""
+
+    spec = SPEC_HEAD + "import { label } from '../../src/routes/planted.lib';\ntest('reads', async () => { label(); });\n"
+    files = {
+        "tests/e2e/planted.spec.ts": spec,
+        "src/routes/planted.lib.ts": "export const label = () => 'reads';\n",
+        "src/routes/planted.tsx": "export const write = (request) => request.post('/api/leads/B/outcome');\n",
+    }
+    for relative, text in files.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
+
+    assert scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, None) == ([], [])
 
 
 def test_the_spec_scan_attributes_a_write_to_the_one_test_that_holds_it(tmp_path: Path) -> None:
@@ -259,6 +477,187 @@ def test_the_spec_scan_attributes_a_write_to_the_one_test_that_holds_it(tmp_path
     findings, _writers = scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, "first reads")
     assert len(findings) == 1 and "outer second writes" in findings[0], findings
     assert scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", "first reads", None)[0] == [], "a --grep that leaves the writer out"
+
+
+TOOL_WRITE = 'import urllib.request\n\n\ndef main():\n    urllib.request.urlopen("http://app/api/leads/B/outcome", data=b"{}")\n'
+SHELL_WRITE = 'curl -X POST "$APP_URL/api/leads/B/disposition"\n'
+
+
+def _step_tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    for relative, text in files.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def _step_scan(root: Path, run: str, **context: str) -> list[str]:
+    step = step_scan.step_findings(root, "planted: step", run, **context)
+    return _run_findings(root, step)[0] + step_scan.workflow_string_findings({"run": run}) + scan.whole_module_findings(root, step.files)
+
+
+READ_SUITE = {"tests/integration/test_reads.py": "def test_reads():\n    pass\n"}
+JS_WRITE = "export const write = (request) => request.post('/api/leads/B/outcome');\n"
+WRITER_SPEC = {"frontend/tests/e2e/planted.spec.ts": SPEC_HEAD + "test('writes', async ({ request }) => { await request.post('/api/leads/B/assign'); });\n"}
+PLANTED = {"scripts/planted.py": TOOL_WRITE}
+PLANTED_TOOL = {"tools/planted.py": TOOL_WRITE}
+WRITER_SUITE = {"tests/integration/test_planted_live.py": 'def test_writes():\n    post("/api/leads/B/outcome")\n'}
+
+
+def _package(**scripts: str) -> dict[str, str]:
+    return {"frontend/package.json": json.dumps({"scripts": scripts})}
+
+
+def _case(run: str, files: dict[str, str], expected: str, id: str, **context: str) -> Any:  # noqa: A002 - pytest's own name
+    return pytest.param(run, files, expected, context, id=id)
+
+
+@pytest.mark.parametrize(
+    ("run", "files", "expected", "context"),
+    [
+        _case("python tools/planted.py \\\n  --base \"$MIP_APP_URL\"\n", PLANTED_TOOL, "tools/planted.py:5: /outcome", "path-form-python"),
+        _case("bash tools/planted.sh --target genie\n", {"tools/planted.sh": SHELL_WRITE}, "tools/planted.sh:1: /disposition", "path-form-bash"),
+        _case("bash tools/drill.sh\n", {"tools/drill.sh": '"$pybin" "$REPO_ROOT/tools/planted.py" stop\n', **PLANTED_TOOL}, "tools/planted.py:5", "bash-runs-a-tool-by-path"),
+        _case("bash tools/drill.sh\n", {"tools/drill.sh": '. "$REPO_ROOT/tools/lib.sh"\n', "tools/lib.sh": SHELL_WRITE}, "tools/lib.sh:1", "bash-sources-a-lib"),
+        _case("bash tools/drill.sh\n", {"tools/drill.sh": '"$pybin" -m tools.planted\n', **PLANTED_TOOL}, "tools/planted.py:5", "bash-runs-a-tools-module"),
+        _case("bash tools/drill.sh\n", {"tools/drill.sh": "\"$pybin\" - <<'PY'\nfrom tools.planted import main\nmain()\nPY\n", **PLANTED_TOOL}, "tools/planted.py:5", "bash-heredoc-imports-a-tool"),
+        _case("python -m tools.runner\n", {"tools/runner.py": 'MINT = REPO / "tools" / "planted.py"\n', **PLANTED_TOOL}, "tools/planted.py:5", "module-runs-a-tool-as-a-child"),
+        _case("python - <<'PY'\nimport urllib.request\napp_url = 'http://app'\n" + PLANTED_POST + "PY\n", {}, "/outcome in the workflow text", "heredoc-writes"),
+        _case("python - <<'PY'\nfrom tools.planted import main\nmain()\nPY\n", PLANTED_TOOL, "tools/planted.py:5", "heredoc-imports-a-tool"),
+        _case("python -c 'import urllib.request; urllib.request.urlopen(\"http://app/api/leads/B/snooze\")'\n", {}, "/snooze in the workflow text", "inline-c-writes"),
+        _case("pytest -p tests.fixtures.planted_plugin -q tests/integration/test_reads.py\n", {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN, **READ_SUITE}, "tests/fixtures/planted_plugin.py:", "pytest-p-plugin"),
+        _case("python scripts/planted.py\n", PLANTED, "scripts/planted.py:5", "repo-script-outside-tools"),
+        _case("timeout 60 python \"$GITHUB_WORKSPACE/scripts/planted.py\"\n", PLANTED, "scripts/planted.py:5", "workspace-prefixed-script"),
+        _case("python tools/missing.py\n", {}, "python runs tools/missing.py, which this scan cannot read", "tool-path-that-is-no-file"),
+        _case("python -m tools.missing\n", {}, "runs tools.missing, which is no module", "tools-module-that-is-no-module"),
+        _case('bash "$RUNNER_TEMP/planted.sh"\n', {}, "bash runs $RUNNER_TEMP/planted.sh, which this scan cannot read", "script-outside-the-repo"),
+        _case("python -m planted_package\n", {}, "runs a module this scan does not read", "module-this-scan-does-not-read"),
+        _case("python - <<'PY'\nthis is not ( python\nPY\n", {}, "inline Python this scan cannot parse", "python-heredoc-that-does-not-parse"),
+        # Other ways a step runs repo code: an interpreter's version, a wrapper, the file itself, inline code's imports.
+        _case("python3.11 scripts/planted.py\n", PLANTED, "scripts/planted.py:5", "versioned-interpreter"),
+        _case("coverage run --branch scripts/planted.py\n", PLANTED, "scripts/planted.py:5", "coverage-run-a-script"),
+        _case("coverage run --source=backend -m pytest tests/integration/test_planted_live.py\n", WRITER_SUITE, "test_planted_live.py::test_writes writes", "coverage-run-pytest"),
+        _case("uv run --with requests python scripts/planted.py\n", PLANTED, "scripts/planted.py:5", "uv-run"),
+        _case("env -u HOME MIP_X=1 python scripts/planted.py\n", PLANTED, "scripts/planted.py:5", "env-wrapper"),
+        _case("./scripts/planted.py --base \"$MIP_APP_URL\"\n", PLANTED, "scripts/planted.py:5", "the-file-run-by-path"),
+        _case("python -c 'from tools.planted import main; main()'\n", PLANTED_TOOL, "tools/planted.py:5", "inline-c-imports-a-tool"),
+        _case("python <<< 'from tools.planted import main'\n", PLANTED_TOOL, "tools/planted.py:5", "here-string-imports-a-tool"),
+        _case("python < scripts/planted.py\n", PLANTED, "scripts/planted.py:5", "python-reads-a-script-on-stdin"),
+        _case("cat <<'SH' | bash\npython scripts/planted.py\nSH\n", PLANTED, "scripts/planted.py:5", "here-document-piped-to-bash"),
+        _case("bash -c 'python scripts/planted.py'\n", PLANTED, "scripts/planted.py:5", "bash-c-runs-a-script"),
+        _case("bash <<'SH'\npython scripts/planted.py\nSH\n", PLANTED, "scripts/planted.py:5", "bash-here-document-runs-a-script"),
+        _case('eval "python scripts/planted.py"\n', PLANTED, "scripts/planted.py:5", "eval"),
+        _case("source scripts/planted.sh\n", {"scripts/planted.sh": SHELL_WRITE}, "scripts/planted.sh:1", "source"),
+        _case("python -m tools.runner operators -- python scripts/planted.py\n", {"tools/runner.py": "", **PLANTED}, "scripts/planted.py:5", "a-program-handed-on-after-dashes"),
+        _case("echo \"$(python scripts/planted.py)\"\n", PLANTED, "scripts/planted.py:5", "command-substitution"),
+        _case('"$PY" scripts/planted.py\n', PLANTED, "runs $PY, which this scan cannot resolve", "program-named-by-a-variable"),
+        _case("curl -s https://example.invalid/x.py | python -\n", {}, "python runs code from a pipe this scan cannot read", "code-from-a-pipe"),
+        _case("make deploy-dev\n", {}, "make runs recipes this scan does not read", "make"),
+        _case("echo 'unterminated\n", {}, "shell text this scan cannot split", "unsplittable-shell"),
+        _case("node -e 'fetch(1)'\n", {}, "node -e runs code this scan cannot read", "node-inline"),
+        _case("node scripts/planted.mjs\n", {"scripts/planted.mjs": "import { write } from './lib.mjs';\nwrite();\n", "scripts/lib.mjs": JS_WRITE}, "scripts/lib.mjs:1: /outcome", "node-script-imports-a-writer"),
+        _case("node scripts/planted.mjs\n", {"scripts/planted.mjs": "import { write } from './lib_moved.mjs';\n"}, "imports ./lib_moved.mjs, which resolves to no file", "node-script-import-that-is-no-file"),
+        _case("node --import ./scripts/planted.mjs scripts/reads.mjs\n", {"scripts/planted.mjs": JS_WRITE, "scripts/reads.mjs": ""}, "scripts/planted.mjs:1", "node-preload"),
+        # The step's shell, and its directory.
+        _case("from tools.planted import main\nmain()\n", PLANTED_TOOL, "tools/planted.py:5", "shell-python-imports-a-tool", shell="python"),
+        _case("this is not ( python\n", {}, "inline Python this scan cannot parse", "shell-python-that-does-not-parse", shell="python {0}"),
+        _case("Write-Output reads\n", {}, "runs under shell pwsh, which this scan cannot read", "another-shell", shell="pwsh"),
+        _case("node ../tools/planted.mjs\n", {"tools/planted.mjs": JS_WRITE}, "tools/planted.mjs:1", "a-frontend-step-runs-a-repo-tool", working_directory="frontend"),
+        _case("python3 ../../outside.py\n", {}, "python3 runs ../../outside.py, which this scan cannot read", "a-path-outside-the-repo", working_directory="frontend"),
+        _case("cd frontend && node ../tools/planted.mjs\n", {"tools/planted.mjs": JS_WRITE}, "tools/planted.mjs:1", "cd-then-a-repo-tool"),
+        _case("(cd frontend && python3 ../tools/reads.py)\n(python3 ../tools/reads.py)\n", {"tools/reads.py": ""}, "python3 runs ../tools/reads.py, which this scan cannot read", "cd-ends-with-its-subshell"),
+        _case('cd "$RUNNER_TEMP"\npython scripts/planted.py\n', PLANTED, "python runs scripts/planted.py, which this scan cannot read", "cd-somewhere-unknown"),
+        _case('(cd frontend && echo "$(node ../tools/planted.mjs)")\n', {"tools/planted.mjs": JS_WRITE}, "tools/planted.mjs:1", "cd-then-a-command-substitution"),
+        _case('"$VIRTUAL_ENV/bin/python" scripts/planted.py\n', PLANTED, "scripts/planted.py:5", "an-interpreter-in-a-variable-directory"),
+        _case("npx --yes playwright@1.50.0 test tests/e2e/planted.spec.ts\n", WRITER_SPEC, "/assign in a test the step runs", "npx-a-versioned-playwright", working_directory="frontend"),
+        _case("npx @playwright/test test tests/e2e/planted.spec.ts\n", WRITER_SPEC, "/assign in a test the step runs", "npx-the-playwright-package", working_directory="frontend"),
+        _case("yarn e2e\n", {}, "yarn runs package scripts or programs this scan does not read", "another-package-manager"),
+        # Playwright's --project is variadic: the filter after it is a project name, so every spec runs.
+        _case("npx playwright test --project chromium tests/e2e/reads.spec.ts\n", {"frontend/tests/e2e/reads.spec.ts": ""}, "playwright test names no spec", "playwright-project-swallows-the-filter", working_directory="frontend"),
+        # The package.json scripts an npm command runs, and npm's own pre/post and lifecycle scripts.
+        _case("npm --prefix frontend run probe\n", {**_package(probe="node ../scripts/planted.mjs"), "scripts/planted.mjs": JS_WRITE}, "scripts/planted.mjs:1", "npm-run"),
+        _case("npm run probe\n", {**_package(preprobe="python ../scripts/planted.py", probe="echo ok"), **PLANTED}, "scripts/planted.py:5", "npm-pre-script", working_directory="frontend"),
+        _case("npm --prefix frontend test --ignore-scripts\n", {**_package(test="python ../scripts/planted.py"), **PLANTED}, "scripts/planted.py:5", "npm-test-under-ignore-scripts"),
+        _case("npm --prefix frontend ci\n", {**_package(postinstall="python ../scripts/planted.py"), **PLANTED}, "scripts/planted.py:5", "npm-install-lifecycle"),
+        _case("npm run -w frontend probe\n", _package(probe="echo ok"), "npm -w runs scripts this scan does not follow", "npm-workspace"),
+        _case("npm run probe -- ../tools/reads.py\nnpm run probe -- ../scripts/planted.py\n", {**_package(probe="python"), "tools/reads.py": "", **PLANTED}, "scripts/planted.py:5", "npm-one-script-two-argument-lists", working_directory="frontend"),
+    ],
+)
+def test_the_step_scan_finds_a_write_or_an_unread_script_in_every_shape_a_step_runs(tmp_path: Path, run: str, files: dict[str, str], expected: str, context: dict[str, str]) -> None:
+    root = _step_tree(tmp_path, files)
+
+    findings = _step_scan(root, run, **context)
+
+    assert any(expected in finding for finding in findings), findings
+
+
+def test_the_step_scan_passes_a_step_that_only_reads(tmp_path: Path) -> None:
+    """Installs, a read-only tool by path or module, an inline script, a suite, a shell heredoc, plain shell, stale comments."""
+
+    run = (
+        "set -euo pipefail\n"
+        "# tools/retired_probe.py moved to tools/reads.py\n"
+        "# python -m tools.retired_module moved to tools.reads_module\n"
+        "python --version\n"
+        "python -m pip install --only-binary=:all: -r requirements.txt\n"
+        "python tools/reads.py --base \"$MIP_APP_URL\" && bash tools/reads.sh\n"
+        "python -m tools.reads_module\n"
+        "python -m json.tool \"$RUNNER_TEMP/vars.json\" > /dev/null\n"
+        "python - <<'PY'\nfrom tools.reads_module import main\nprint(main('/api/sales/outcomes/summary'))\nPY\n"
+        "cat <<EOF >> \"$GITHUB_STEP_SUMMARY\"\nbash and python, in prose (not code)\nEOF\n"
+        "pytest -q tests/integration/test_reads.py\n"
+        "npm --prefix frontend ci --ignore-scripts --no-audit --no-fund\n"
+        "if [ -n \"$X\" ]; then echo ok; fi\n"
+    )
+    root = _step_tree(
+        tmp_path,
+        {
+            "tools/reads.py": 'GET = "/api/leads/B/assignment"\n',
+            "tools/reads.sh": 'curl "$APP_URL/api/geo/assignment-overlay"\n',
+            "tools/reads_module.py": "def main(path):\n    return path\n",
+            **READ_SUITE,
+            **_package(postinstall="python ../scripts/planted.py"),
+            **PLANTED,
+        },
+    )
+
+    assert _step_scan(root, run) == []
+
+
+def test_the_step_scan_passes_a_frontend_step_that_only_reads(tmp_path: Path) -> None:
+    """From frontend: repo tools the way package.json runs them, a spec, and the npm scripts that run both."""
+
+    run = (
+        "node ../tools/reads.mjs --report-only\n"
+        "python3 ../tools/reads.py --check\n"
+        "npx playwright install --with-deps chromium\n"
+        "npx playwright test tests/e2e/reads.spec.ts --reporter=list --workers=1\n"
+        "npm run e2e:ci -- tests/e2e/reads.spec.ts\n"
+        "npm run build\n"
+    )
+    root = _step_tree(
+        tmp_path,
+        {
+            "tools/reads.mjs": "import { label } from './reads_lib.mjs';\n// import { gone } from './retired.mjs';\nlabel();\n",
+            "tools/reads_lib.mjs": "export const label = () => '/api/sales/outcomes/summary';\n",
+            "tools/reads.py": 'GET = "/api/leads/B/assignment"\n',
+            "frontend/tests/e2e/reads.spec.ts": SPEC_HEAD + "test('reads', async () => {});\n",
+            **_package(**{"e2e:ci": "playwright test --reporter=list --workers=1", "build": "tsc -b && vite build && node ../tools/reads.mjs"}),
+        },
+    )
+    step = step_scan.step_findings(root, "planted: step", run, working_directory="frontend")
+
+    assert _step_scan(root, run, working_directory="frontend") == []
+    assert [each.specs for each in step.playwright] == [("tests/e2e/reads.spec.ts",)] * 2, "positive control: both runs select the spec"
+    assert {path.relative_to(root).as_posix() for path in scan.loaded_files(root, step.files)} == {"tools/reads.mjs", "tools/reads_lib.mjs", "tools/reads.py"}
+
+
+def test_the_workflow_scan_reads_every_string_a_step_holds() -> None:
+    """A github-script body or an env value is code or data a step runs with, not only ``run:``."""
+
+    step = {"uses": "actions/github-script@v9", "with": {"script": "await github.request('POST /api/leads/B/outcome');"}}
+    assert step_scan.workflow_string_findings({"jobs": {"planted": {"steps": [step]}}}) == [".jobs.planted.steps[0].with.script: /outcome in the workflow text"]
+    assert step_scan.workflow_string_findings({"env": {"PROBE": "/api/sales/distribute"}}) == [".env.PROBE: /sales/distribute in the workflow text"]
+    assert step_scan.workflow_string_findings({"env": {"READ": "/api/sales/outcomes/summary"}}) == []
 
 
 def test_a_prod_app_has_a_path_to_a_green_run() -> None:
