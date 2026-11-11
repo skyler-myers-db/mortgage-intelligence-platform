@@ -2,35 +2,46 @@
 
 ## TL;DR
 
-> **Refused today (M1-PR2).** `./scripts/deploy.sh -t client` resolves the
-> client profile before any other step, and the profile refuses a
-> `MIP_DEFAULT_CATALOG` other than `mip` until the catalog-label slice lands
-> (`tools/clients/rules.py`, `catalog_refusals`): the SQL still names the
-> catalog literally in places. The render path below is kept for that slice.
+> **Refused today (M1-PR2).** A governed deploy resolves the client profile
+> before any other step, and the profile refuses a `MIP_DEFAULT_CATALOG` other
+> than `mip` until the catalog-label slice lands (`tools/clients/rules.py`,
+> `catalog_refusals`: "the SQL still names the catalog literally"). So there is
+> no operator path to a renamed catalog yet: setting the variable and
+> deploying refuses with exit 2 before anything changes. The per-client nightly
+> refuses one too (`tools/clients/validation_session.py` reads only `mip`).
 
-Module 0 defaults its UC catalog to `mip`. Customers who require a different catalog name (`mip_prod`, `lender_uc`, `cotality_mip`, …) set one variable and deploy. The Python API layer, Spark Python jobs, and SQL transformation layer are now multi-catalog safe — there is no manual preprocessing step.
+Module 0 defaults its UC catalog to `mip`. This page records how far the code
+already renders another name, for the slice that will lift the refusal: the
+Python API layer, the Spark Python jobs, the Genie space and the SQL
+transformation layer below all take the catalog from `MIP_DEFAULT_CATALOG`.
+What is still literal is what the refusal names.
 
-```bash
-# In .env.local on the SE's laptop:
-MIP_DEFAULT_CATALOG=summit_mortgage
+The Cotality **source** share is a different setting and is configurable
+today: `MIP_COTALITY_SOURCE_CATALOG`, `MIP_COTALITY_SOURCE_SCHEMA` and
+`MIP_COTALITY_SOURCE_TABLE_PREFIX` (docs/deployment.md, "Cotality source
+share"). Only the governed catalog the install writes is pinned to `mip`.
 
-# Then deploy:
-./scripts/deploy.sh -t client   # in CI; make deploy-dev prints the dispatch
-```
+When the rename lands it is still one profile field, deployed only through the
+command of record, the governed `deploy-dev.yml` dispatch, which runs
+`./scripts/deploy.sh -t client --phase <phase>` in CI
+([docs/clients/onboarding.md](clients/onboarding.md)). `scripts/deploy.sh`
+(step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"`
+before the bundle validate/deploy phase, which materializes `sql/_rendered/**`
+with the target catalog substituted into the governed catalog/schema DDL and
+three-part UC prefixes. The bundle's SQL tasks all read from
+`sql/_rendered/**`. The deploy maps `MIP_DEFAULT_CATALOG` to the bundle-side
+`uc_catalog` used by the pipeline and Spark jobs, and it performs the signed,
+minimal namespace bootstrap a pristine workspace needs. There is no bare
+bundle apply path: unrestricted bundle mutation is retired (`make
+bundle-deploy` and `make bundle-deploy-dev` fail closed).
 
-That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the governed catalog/schema DDL and three-part UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
-
-For the bundle-variable path (non-default workspace target), keep the two-var form:
-
-```bash
-MIP_DEFAULT_CATALOG=mip_prod \
-./scripts/deploy.sh -t client
-```
-
-The deploy script maps `MIP_DEFAULT_CATALOG` to the bundle-side `uc_catalog`
-used by the pipeline and Spark jobs, and it performs the signed, minimal
-namespace bootstrap required on a pristine workspace. Bare bundle apply is a
-lower-level recovery path only after that namespace exists.
+**Never transfer metastore ownership.** Neither a catalog rename nor any
+onboarding or cutover step needs it, and no tool here does it: the deploy
+judges the metastore's owner against the profile's `MIP_UC_METASTORE_OWNER`
+(read-only, `MetastoreOwnerPolicy`) and never changes it, the bootstrap never
+transfers metastore or object ownership ([docs/clients/bootstrap.md](clients/bootstrap.md)),
+and the ownership handover never touches the metastore. The metastore-transfer
+owner step that an earlier plan prepared was cancelled.
 
 ## Python layer — multi-catalog safe since hole-finder R2 #19
 
@@ -80,7 +91,7 @@ table DDL.
 
 Wiring:
 
-- **`Makefile` targets** `bundle-validate` and `bundle-validate-env` depend on `render-sql`; mutable `bundle-deploy*` aliases are retired. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies. Use `make deploy-dev` for every mutation.
+- **`Makefile` targets** `bundle-validate` and `bundle-validate-env` depend on `render-sql`; mutable `bundle-deploy*` aliases are retired. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies. Every mutation goes through the governed `deploy-dev.yml` dispatch; `make deploy-dev` only prints that command.
 - **`scripts/deploy.sh`** (step 1a) runs the renderer before the frontend build, so the rendered tree is present before the bundle is touched.
 - **`databricks.yml`** declares every `sql_task.file.path` under `sql/_rendered/...` rather than `sql/...`. The canonical sources under `sql/**/*.sql` stay committed; the rendered copies under `sql/_rendered/**` are gitignored.
 - **Identity when `--catalog mip`:** every substitution is a byte-identical rewrite on the default catalog, so customers who keep the default name pay nothing.
@@ -162,7 +173,8 @@ python tools/databricks/bundle_env.py validate -t client
 grep -n -- '--catalog=${var.uc_catalog}' databricks.yml
 grep -n -- '--table=${var.uc_catalog}.silver.market_rates_weekly' databricks.yml
 
-# Confirm admin /settings reports the right catalog at runtime:
+# Confirm admin /settings reports the right catalog at runtime (an App admin
+# request; the route refuses any other caller):
 curl -s http://localhost:8000/api/v1/admin/settings | jq .catalog
 ```
 

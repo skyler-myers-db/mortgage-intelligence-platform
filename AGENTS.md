@@ -38,6 +38,13 @@ Every subagent must answer these before returning:
 
 Any agent that edits CSS, components, routes, page copy, or anything visible to a user MUST read `design_files/index.html` first (and `design_files/Module 0 Prototype.html` for page composition). The interactive prototype is the design contract — not a reference. Class names match the prototype's BEM (`.surface__hdr`, `.kpi__value`, `.seg-card__count`, `.chip--success`, `.score--high`, `.tbl__expand`, `.drawer`, `.genie`, `.approval`). Token vocabulary matches the prototype (`--sp-4`, `--fs-22`, `--r-md`, `--seg-itm`). No inline hex colors, no inline pixel values. Geist + Geist Mono are the typefaces. See the "Design source of truth" section in `CLAUDE.md` for the full rule set.
 
+## Deploys: the command of record
+
+- The command of record is the governed dispatch of `deploy-dev.yml`, one client environment and one phase per run, plan first: `gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true`. It runs `./scripts/deploy.sh -t client --phase <phase>` in CI, behind the client environment's approval. `make deploy-dev` only prints that command.
+- A live phase, `plan` included, is CI-only: outside GitHub Actions `scripts/deploy.sh` refuses a `--phase` without `--dry-run`. Locally, use `./scripts/deploy.sh -t client --phase <phase> --dry-run` and `make bundle-validate`.
+- Onboarding and the first-client cutover are `docs/clients/onboarding.md` and `docs/clients/first-client-cutover.md`. Per-client values (client key, host, ids, emails, principal and catalog names) never go into a file, commit, issue or PR: they live in the operator's `.env.local` and the client's GitHub Environment.
+- The environment approval in `single_maintainer_audited` mode is an audited self-approval, not human-only review (`docs/clients/review-modes.md`).
+
 ## No-go handoffs
 
 Never hand off a task with:
