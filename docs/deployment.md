@@ -3671,7 +3671,9 @@ it in your terminal or the mode-0600 report, never in a shared log):
    empty); one that appears later fails the grants job closed.
 
 Run them in `psql` as the legacy owner and re-run `--preconditions` until it
-prints `-- Every precondition holds.`. Before the apply, check read-only that
+prints `-- Every precondition holds.`. Names in its comments are JSON strings,
+and a statement whose name holds a control character is not printed: it
+refuses `name_has_control_character`, and the owner grants that one by hand. Before the apply, check read-only that
 no App session holds a long transaction: one older than the per-object budget
 (10 attempts, about 120 s) exhausts it into the WR5 window or a revert
 (`SELECT state, now() - xact_start FROM pg_stat_activity WHERE datname =
@@ -3779,14 +3781,18 @@ retire-check` checks this half alone); and, from the App database, while the
 legacy Postgres role still owns an extension, owns a default-ACL row, owns any
 other object, holds a privilege, or granted another role a membership, on any
 database of the instance (`legacy_role_residue`, counts by category; names go
-only to `--report-out`). The handover leaves two of those by design (spike
+only to `--report-out`); and when no Postgres role has the identity's exact
+name (`legacy_role_not_found`: a typo, or a case variant, which the jobs half
+would still match, would otherwise read as no residue). The handover leaves two of those by design (spike
 S3): the extensions (`pgcrypto` stays the legacy owner's) and the legacy
 owner's own `pg_default_acl` row. Neither affects a deploy; both must be
 cleared before the role can be dropped. `--rehearse --rehearse-instance <throwaway> --rehearse-database
 <db>` is spike S3's mode (owner-run, refused on the install's own instance):
 it creates one schema and table on the throwaway, grants the deployer CREATE
 on that schema it owns when the deployer lacks it (and revokes exactly that
-grant at the end, also after a failure; a pass needs the revoke to land), holds a concurrent long transaction on
+grant at the end, also after a failure; a pass needs the revoke to land, and
+when a failure's revoke fails too it prints the `REVOKE` to run on the
+throwaway), holds a concurrent long transaction on
 it past `lock_timeout`, probes it, runs the handover's own lock-bounded change
 and its inverse, and passes only if the change needed a retry, the inverse
 restored the owner, at least one probe query arrived while the change waited

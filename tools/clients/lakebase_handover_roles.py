@@ -27,7 +27,9 @@ statement that is not a read.
 ``--retire-check`` adds the Lakebase half of the gate before the owner drops
 the legacy role: ``legacy_residue`` counts, by category and across every
 database on the instance, what PostgreSQL's DROP ROLE would refuse over
-(``pg_shdepend``) plus the memberships the legacy role granted. Spike S3
+(``pg_shdepend``) plus the memberships the legacy role granted, and refuses
+``legacy_role_not_found`` when no role has the identity's exact name (a typo
+or a case variant would otherwise read as no residue at all). Spike S3
 measured two the handover deliberately leaves: the ``pgcrypto`` extension
 (the inventory moves no extension) and the legacy owner's own
 ``pg_default_acl`` row.
@@ -58,6 +60,7 @@ from tools.clients.lakebase_handover_sql import (
 _PREFIX = "[mip-lakebase-handover]"
 # The deployer is a service principal: its Postgres role is its application id.
 _APPLICATION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 FACTS_SQL = """
 SELECT current_user::text,
        current_database()::text,
@@ -94,6 +97,15 @@ GROUP BY residue.category
 ORDER BY residue.category
 """
 RESIDUE_CATEGORIES = ("default_acl", "granted_membership", "holds_privilege", "other_dependency", "owns_extension", "owns_object")
+# Read-only: whether the legacy role exists, and how many roles differ from its name only in case.
+LEGACY_ROLE_SQL = """
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(legacy)s),
+       (SELECT count(*)::int FROM pg_roles WHERE lower(rolname) = lower(%(legacy)s) AND rolname <> %(legacy)s)
+"""
+
+
+class LegacyRoleNotFound(LakebaseHandoverRefused):
+    """No Postgres role has the legacy identity's name: zero residue would prove nothing."""
 
 
 def _literal(value: str) -> str:
@@ -102,6 +114,22 @@ def _literal(value: str) -> str:
 
 def _schema(name: str) -> PgObject:
     return PgObject("SCHEMA", "", name, "", "")
+
+
+def _printable(lines: list[str], refusals: list[str]) -> tuple[list[str], list[str]]:
+    """No line carries a control character: a newline in a name would end a comment and start a statement.
+
+    The header renders names as JSON strings; a statement whose quoted name
+    holds one is replaced by a refusal, and the owner grants that one by hand.
+    """
+
+    printable = []
+    for line in lines:
+        if _CONTROL.search(line):
+            line = "-- REFUSED name_has_control_character: a name in this step holds a control character; grant it by hand."
+            refusals = refusals if "name_has_control_character" in refusals else [*refusals, "name_has_control_character"]
+        printable.append(line)
+    return printable, refusals
 
 
 def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
@@ -119,11 +147,11 @@ def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
     schemas = schemas_without_usage(cursor, target=target, owns_database=database_owner in {legacy, target})
     refusals: list[str] = []
     lines = [
-        f"-- Lakebase handover preconditions (spike S3, L-A): run in this order as {legacy}, connected to {database}.",
+        f"-- Lakebase handover preconditions (spike S3, L-A): run in this order as {json.dumps(legacy)}, connected to {json.dumps(database)}.",
         "-- The statements name roles: keep them out of shared logs.",
     ]
     if target == legacy:
-        return lines, ["target_is_legacy"]
+        return _printable(lines, ["target_is_legacy"])
     if not target_exists:
         if not _APPLICATION_ID.fullmatch(target):
             refusals.append("target_identity_unreviewed")
@@ -158,7 +186,7 @@ def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
     if len(lines) == 2 and not refusals:
         lines.append("-- Every precondition holds.")
     lines.append("-- Then, read-only: python -m tools.clients.lakebase_handover --plan")
-    return lines, refusals
+    return _printable(lines, refusals)
 
 
 def _object_privileges(cursor: Any, lines: list[str], *, legacy: str, target: str) -> list[str]:
@@ -201,8 +229,17 @@ def run_preconditions(args: argparse.Namespace, current: Any) -> int:
 
 
 def legacy_residue(cursor: Any, *, legacy: str) -> dict[str, int]:
-    """Read-only: per category, what keeps PostgreSQL from dropping the legacy role (zero when nothing does)."""
+    """Read-only: per category, what keeps PostgreSQL from dropping the legacy role (zero when nothing does).
 
+    Raises ``LegacyRoleNotFound`` when no role has that exact name (a typo or a
+    case variant of ``--legacy-identity``), whose residue would read as zero.
+    """
+
+    cursor.execute(LEGACY_ROLE_SQL, {"legacy": legacy})
+    found, case_variants = cursor.fetchone() or (False, 0)
+    if not found:
+        variants = f"; {int(case_variants)} role(s) differ from it only in case" if case_variants else ""
+        raise LegacyRoleNotFound(f"no Postgres role on this instance has the legacy identity's exact name{variants}: check --legacy-identity")
     cursor.execute(RESIDUE_SQL, {"legacy": legacy})
     found = {category: 0 for category in RESIDUE_CATEGORIES}
     for category, count in cursor.fetchall():
@@ -218,18 +255,37 @@ def run_retire_check(args: argparse.Namespace, current: Any) -> int:
     workspace = current.workspace()
     legacy = args.legacy_identity or str(getattr(workspace.current_user.me(), "user_name", "") or "")
     blockers = retire_blockers(workspace, legacy_identity=legacy)
+    missing = ""
     with current.read_session() as cursor:
-        residue = legacy_residue(cursor, legacy=legacy)
+        try:
+            residue: dict[str, int] | None = legacy_residue(cursor, legacy=legacy)
+        except LegacyRoleNotFound as exc:
+            residue, missing = None, str(exc)
     if args.report_out is not None:
-        journals.write_private(args.report_out, {"runs_as_legacy": blockers, "lakebase_residue": residue})
+        journals.write_private(
+            args.report_out, {"runs_as_legacy": blockers, "lakebase_residue": residue, "legacy_role_found": residue is not None}
+        )
     print(f"{_PREFIX} retire-check: {len(blockers)} job(s) or pipeline(s) still run as the legacy identity")
-    print(f"{_PREFIX} retire-check: the legacy role's Lakebase residue {json.dumps(residue, sort_keys=True)}")
     if blockers:
         print(f"{_PREFIX} REFUSED legacy_identity_in_use: keep the legacy role until none does", file=sys.stderr)
+    if residue is None:
+        print(f"{_PREFIX} REFUSED legacy_role_not_found: {missing}", file=sys.stderr)
+        return 2
+    print(f"{_PREFIX} retire-check: the legacy role's Lakebase residue {json.dumps(residue, sort_keys=True)}")
     held = sorted(category for category, count in residue.items() if count)
     if held:
         print(f"{_PREFIX} REFUSED legacy_role_residue ({', '.join(held)}): PostgreSQL would refuse to remove the role; clear it first", file=sys.stderr)
     return 2 if blockers or held else 0
 
 
-__all__ = ["FACTS_SQL", "RESIDUE_CATEGORIES", "RESIDUE_SQL", "legacy_residue", "preconditions", "run_preconditions", "run_retire_check"]
+__all__ = [
+    "FACTS_SQL",
+    "LEGACY_ROLE_SQL",
+    "RESIDUE_CATEGORIES",
+    "RESIDUE_SQL",
+    "LegacyRoleNotFound",
+    "legacy_residue",
+    "preconditions",
+    "run_preconditions",
+    "run_retire_check",
+]

@@ -54,7 +54,7 @@ from tools.clients.lakebase_handover_rehearse import (
     REHEARSAL_SCHEMA,
     SETUP,
 )
-from tools.clients.lakebase_handover_roles import FACTS_SQL, RESIDUE_SQL
+from tools.clients.lakebase_handover_roles import FACTS_SQL, LEGACY_ROLE_SQL, RESIDUE_SQL
 from tools.clients.lakebase_handover_sql import AUTHORITY_SQL, INVENTORY_SQL, PgObject
 
 LEGACY = "legacy-owner@example.com"
@@ -447,6 +447,9 @@ class FakeCursor:
             database = server.database_key().partition(":")[2]
             exists = target in server.roles
             return [(server.caller, database, server.owner_of(server.database_key()), exists, exists and server.admin_edge, "databricks_auth" in server.extensions)]
+        if statement == LEGACY_ROLE_SQL:
+            legacy = params["legacy"]
+            return [(legacy in server.roles, sum(1 for role in server.roles if role.lower() == legacy.lower() and role != legacy))]
         if statement == RESIDUE_SQL:
             return server.residue(params["legacy"]) if params["legacy"] in server.roles else []
         if statement == INSTALL_SCHEMA_SQL:
@@ -518,7 +521,7 @@ class FakeCursor:
         if bound:
             self.txn["bounds"][bound.group("name")] = float(bound.group("seconds"))
             return
-        for pattern, granting in ((_GRANT, True), (_REVOKE, False)):
+        for pattern, granting in ((_GRANT, True), (_REVOKE, False)):  # fail_on: an object's REVOKE fails
             match = pattern.fullmatch(statement)
             if match is not None:
                 self._grant(match, granting=granting)
@@ -545,6 +548,8 @@ class FakeCursor:
     def _grant(self, match: re.Match[str], *, granting: bool) -> None:
         server = self.server
         item = server.granted_object(match.group("keyword"), match.group("object"))
+        if not granting and item.key in server.fail_on:
+            raise SyntaxProblem("injected failure")
         role = match.group("role").replace('""', '"')
         grantor = server.grantor_for(item.key)
         if grantor is None:

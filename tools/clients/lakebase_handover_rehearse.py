@@ -31,7 +31,9 @@ owns its schema, so the target's CREATE there (``target_needs_schema_create``)
 is the rehearsal's own to give: when the target lacks it, the rehearsal grants
 it after creating the schema and revokes exactly that grant at the end, also
 after a failure, and a pass needs the revoke to have landed (spike S3, answer
-6: the first run otherwise refused until the owner granted it by hand). The
+6: the first run otherwise refused until the owner granted it by hand). When a
+failure's take-back fails too, it says so on stderr with the REVOKE to run,
+because a later rehearsal that finds CREATE held leaves it alone. The
 L-B mechanism (``delete_database_instance_role`` with ``reassign_owned_to``)
 deletes a role, which no tool in this PR does; it is not rehearsed here.
 """
@@ -76,6 +78,8 @@ OWNER_SQL = (
 )
 # The rehearsal schema's CREATE, which the rehearsal grants the target and takes back.
 _SCHEMA_OBJECT = PgObject("SCHEMA", "", REHEARSAL_SCHEMA, "", "")
+# Printed in place of the deployer's role name, which stays out of stderr.
+DEPLOYER_PLACEHOLDER = "<the deployer's role>"
 LOCK_TIMEOUT_S = float(LOCK_TIMEOUT.removesuffix("s"))
 SCHEDULING_MARGIN_S = 1.0
 _PREFIX = "[mip-lakebase-rehearsal]"
@@ -232,8 +236,16 @@ def rehearse(
         report = _rehearse_on(
             connection, connect, granted, legacy=legacy, target=target, hold_s=hold_s, concurrent=concurrent, clock=clock, sleep=sleep, budget=budget
         )
-    except BaseException:
-        _take_back(connection, granted, target, quiet=True)
+    except BaseException as failure:
+        if not _take_back(connection, granted, target, quiet=True):
+            # The grant may remain, and a later rehearsal, finding CREATE held, neither grants nor revokes it.
+            note = (
+                f"{_PREFIX} WARNING: the rehearsal could not take back the CREATE it granted the deployer on its "
+                f"schema; on the throwaway, as the legacy owner, run: "
+                f"{revoke_statement(_SCHEMA_OBJECT, ('CREATE',), DEPLOYER_PLACEHOLDER)};"
+            )
+            print(note, file=sys.stderr)
+            failure.add_note(note)
         connection.close()
         raise
     revoked = _take_back(connection, granted, target, quiet=False)

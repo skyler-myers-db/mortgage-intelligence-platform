@@ -342,8 +342,8 @@ def test_retire_check_counts_what_the_legacy_role_still_owns_holds_or_granted() 
     with server.read_session() as cursor:
         before = roles.legacy_residue(cursor, legacy=LEGACY)
     assert before["owns_object"] == 11 + 1 and before["granted_membership"] == 2
-    with server.read_session() as cursor:
-        assert roles.legacy_residue(cursor, legacy="absent-role@example.com") == dict.fromkeys(roles.RESIDUE_CATEGORIES, 0)
+    with server.read_session() as cursor, pytest.raises(roles.LegacyRoleNotFound):
+        roles.legacy_residue(cursor, legacy="absent-role@example.com")  # never "no residue" (PR #336 review)
 
 
 # -- preconditions -------------------------------------------------------------
