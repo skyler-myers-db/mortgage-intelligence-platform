@@ -4603,7 +4603,12 @@ switched off (`if`, `continue-on-error`, `needs`), a step that writes
 `$GITHUB_ENV` or checks out another ref, a pytest command that deselects or
 swallows a failure, a trigger filter that skips the workflow, and a
 workflow-wide shell or variable that changes what the shell or pytest runs.
-The job is advisory until the owner makes it a required check.
+It reads the triggers as GitHub does: a push must trigger on `main` itself,
+and no negation that could match `main` may follow it. The shell's variables
+are matched by exact name. So a `run-name`, an explicit pull_request `types`
+list that keeps the three defaults, push `tags`, or an unrelated variable
+such as `ENVIRONMENT_LABEL` all pass. The job is advisory until the owner
+makes it a required check.
 
 ## Jobs identity and pinned job parameters (M2-PR5)
 
