@@ -65,6 +65,11 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
   let writeText: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    // The day after the 2026-07-14 as-of every source here carries; timers
+    // stay real. Unpinned, the as-of gains its year ("Jul 14, 2026") once it
+    // is 11 months old, from 2027-06-13.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'));
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
     appMocks.canAccessAdmin = false;
@@ -87,6 +92,7 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
     act(() => root.unmount());
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   async function render(source: DrawerSource, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
