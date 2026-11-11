@@ -457,6 +457,13 @@ def test_no_python_tool_on_the_adopt_path_names_a_warehouse_input() -> None:
             lines
         )
     assert [hit for hit in found if hit[0] not in REVIEWED_LINES] == []
+    # Positive control: the word-bounded alternative matches on its own (past the
+    # Genie tool's cut), which an -E word boundary on macOS would not.
+    assert [
+        line
+        for _, _, line in found
+        if not re.search(r"_GRANTS_WAREHOUSE_ID|DATABRICKS_WAREHOUSE_ID|--warehouse-id", line)
+    ]
     # Positive control: the same grep finds the signed blue proof's warehouse.
     assert _warehouse_inputs({"scripts/lib/deploy_step_signed_blue_proof.sh"})
 
