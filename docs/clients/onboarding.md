@@ -17,8 +17,8 @@ is not onboarded from nothing: it is **adopted**. Client #1 is that case, and
 | Stage | State on `main` |
 |---|---|
 | Profile, bootstrap, GitHub Environments | Built, and tested against fakes only (their guides record no live run yet). |
-| `phase=plan` dispatch | Built, CI only, but **blocked for any client whose deployer has never applied a bundle** (a new client, or one not yet adopted): the warehouse preflight runs in every live phase except the two adopt phases, not only on a first release. Until the deployer's bundle state binds a SQL warehouse, every live plan and release refuses `this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID ...` (exit 2, nothing changed). That name is no client profile field and `deploy-dev.yml` carries none: a profile field for it is a code follow-up (B1 in [first-client-cutover.md](first-client-cutover.md), "Blockers"). `phase=adopt` and `phase=unadopt` no longer refuse here: they run no SQL and read no warehouse (B1's adopt part, #344). An existing install that is not adopted yet refuses earlier, at the live checks (section 5). |
-| **First install through `deploy-dev.yml`** | **Blocked** by the same warehouse refusal. The first-install phase order is also open: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). The release's treatment-access converger reads the metastore's owner with a metastore-admin-only call, so a deployer that is not a metastore admin depends on spike S0(b), still owed. |
+| `phase=plan` dispatch | Built, CI only. A new client's deployer has no bundle state yet, so its live plan and release take their SQL warehouse from the profile's `MIP_BOOTSTRAP_WAREHOUSE_ID` (B1, section 4), checked read-only before anything else reads it, until the first release's bundle apply creates the bundle's own; after that, from the deployer's bundle state. Without the field, a live plan or release whose state binds no warehouse refuses `this deployer's bundle state binds no SQL warehouse yet (a first install): set the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID ...` (exit 2, nothing changed). `phase=adopt` and `phase=unadopt` read no warehouse at all: they run no SQL (#344). An existing install that is not adopted yet refuses earlier, at the live checks (section 5). |
+| **First install through `deploy-dev.yml`** | **No longer blocked by the warehouse** (B1 is fixed: the profile's `MIP_BOOTSTRAP_WAREHOUSE_ID`, section 4). Still open: the first-install phase order: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). The release's treatment-access converger reads the metastore's owner with a metastore-admin-only call, so a deployer that is not a metastore admin depends on spike S0(b), still owed. |
 | Adopting an existing install through `deploy-dev.yml` | **Blocked** by adopt-live's acks, which no dispatch input carries (B2), by the Genie pin and accepted-exposure acks the adopt phases read but cannot carry (B4), and by the unverified-frontend ack its first release needs (B3); spike S0(b) is owed ([first-client-cutover.md](first-client-cutover.md), "Blockers"). The warehouse refusal (B1) no longer applies: the adopt phases read no warehouse, and the plan and release after the bind take the adopted one from the deployer's bundle state. The deploy job's shallow checkout (B5) is fixed: the adopt phase checks out main's full history, so adopt-live resolves a live health sha that `main` holds, and still refuses one it does not (`health_sha_not_on_main`; the remedy is an emergency ship of a `main` commit). |
 | Data phase, per-client nightly | Built. The nightly validates only a client whose catalog is `mip`. |
 | Owner hardware-key attestation (plan M1-PR5) | **Deferred.** Not built. See "Deferred" below. |
@@ -26,7 +26,9 @@ is not onboarded from nothing: it is **adopted**. Client #1 is that case, and
 The second-client portability proof (`tests/unit/test_client_portability_proof.py`,
 docs/deployment.md "Second-client portability proof") proves the plan and
 release **dry runs** of a synthetic client need zero code edits. A dry run
-reads no bundle state, so it does not reach the warehouse refusal above.
+reads no bundle state and never checks the bootstrap warehouse; a fresh
+client's live `--phase release` on it runs offline in
+`tests/unit/test_bootstrap_warehouse_release_sandbox.py`.
 
 ## Placeholders, and where the real values live
 
@@ -179,12 +181,27 @@ exists, and names each one (docs/deployment.md, CI deploy owner step 3).
 
 ## 4. Plan (CI only)
 
-**Blocked today for a new client** (Status, above): until its deployer's
-bundle state binds a SQL warehouse, a live plan refuses at the warehouse
-preflight (exit 2, nothing changed), and nothing in the profile or the
-dispatch can supply the bootstrap warehouse yet. The dispatch below is the one
-`main` accepts; it plans once that follow-up lands. The local dry run works
-today.
+**A new client's bootstrap warehouse (B1).** Until its deployer's bundle
+state binds the bundle's own SQL warehouse (the first release's step-4 apply
+creates it), a live plan and release run their early SQL on the warehouse
+the profile names in `MIP_BOOTSTRAP_WAREHOUSE_ID`: the id (16 lowercase hex
+characters) of a pro or serverless warehouse the deployer can use, for
+example the workspace's serverless starter warehouse. Put it in `.env.local`
+and run `github_environment --plan`, then `--apply --ack-plan <sha256>`
+(section 3): the field is identifying, so it is stored as a `<client>`
+environment secret, and it changes the profile ack. The preflight checks it
+read-only (`python -m tools.databricks.bundle_state bootstrap-warehouse-id`:
+no bundle state binds a warehouse or the App, no App of the profile's name
+exists, and the warehouse is that id, not deleted and `PRO`) and the log
+says `sql warehouse: first-install-bootstrap`. The check proves the deployer
+can read the warehouse, not that it holds `CAN_USE`: a warehouse it cannot
+use fails at step 0a, after the lease, with no App created. After the first
+release the field is not read (`bootstrap warehouse: not read`); deleting it
+(`gh secret delete --env <client> MIP_BOOTSTRAP_WAREHOUSE_ID` and the
+`.env.local` line) is optional and changes the profile ack once. Never set it
+for an adopted install: the profile refuses it beside
+`MIP_LEGACY_BUNDLE_ROOT`. Without it, a live plan refuses at the warehouse
+preflight (exit 2, nothing changed). The local dry run never reads it.
 
 The command of record is the governed dispatch, one client and one phase per
 run:

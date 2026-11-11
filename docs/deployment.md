@@ -1032,11 +1032,36 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
      account admin role (read from account SCIM with its own credential).
    After the live checks, the preflight takes the SQL warehouse from this deployer's bundle
    state (`python -m tools.databricks.bundle_state warehouse-id`, the
-   warehouse the bundle created, M1-PR3): `DATABRICKS_WAREHOUSE_ID` is read
-   only as a first install's bootstrap warehouse, for the steps before the
-   bundle apply creates its own (the deploy switches to that one right after
-   the apply), and refuses when it names another warehouse than the state
-   binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
+   warehouse the bundle created, M1-PR3). The state's warehouse always wins:
+   an operator `DATABRICKS_WAREHOUSE_ID` that names another refuses. Until a
+   first install's step-4 apply creates the bundle's own (the deploy switches
+   to it right after the apply, and step 10 rebinds the Genie space to it),
+   its steps borrow a **bootstrap warehouse** (B1): the client profile's
+   optional identifying field `MIP_BOOTSTRAP_WAREHOUSE_ID` (16 lowercase hex
+   characters; a GitHub Environment secret in CI, which `deploy-dev.yml`
+   carries). The preflight admits it only when the state binds no warehouse,
+   in `--phase plan`, `--phase release` or a run with no phase, and only
+   after `python -m tools.databricks.bundle_state bootstrap-warehouse-id`
+   proves it read-only (one state download, one `apps.get`, one
+   `warehouses.get`): the state binds neither the warehouse nor
+   `apps.mip_app`, no App of the profile's name exists, the profile names no
+   `MIP_LEGACY_BUNDLE_ROOT` (the profile refuses the two together), and the
+   warehouse is that id, not deleted and `PRO` (pro or serverless: the first
+   install creates the governed Genie space on it). The shell then requires
+   the check's stdout to be exactly the id it read, and an operator
+   `DATABRICKS_WAREHOUSE_ID` naming another refuses; the log says
+   `sql warehouse: first-install-bootstrap`. `--phase data` refuses it (the
+   data phase runs on the bundle's own warehouse only); a dry run never
+   checks or prints it (`bootstrap warehouse: configured`); once the state
+   binds the bundle's warehouse it is not read (`bootstrap warehouse: not
+   read`), never refused, so a field left set after the first release is
+   harmless. With neither the field nor a state binding a live run refuses
+   `this deployer's bundle state binds no SQL warehouse yet (a first
+   install)`. A local operator's `DATABRICKS_WAREHOUSE_ID` still bootstraps
+   a local first install as before (no CI path carries it). The check proves
+   only that the deployer can read the warehouse, not `CAN_USE` on it: a
+   warehouse the deployer cannot use fails at step 0a, after the lease,
+   with no App created yet. `databricks.yml` declares no `sql_warehouse_id` variable: every
    resource uses the bundle's own warehouse. The adopt and unadopt phases
    run no SQL, so the preflight reads no warehouse for them (B1): no bundle
    state read, no warehouse resolved, `DATABRICKS_WAREHOUSE_ID` unset for
@@ -5391,7 +5416,7 @@ they apply, `DATABRICKS_ACCOUNT_HOST`, `MIP_GENIE_MANAGER_PRINCIPALS`,
 `MIP_AUDITOR_IDENTITIES`, `MIP_ADMIN_GROUP_NAME`, `MIP_APPROVER_GROUP_NAME`,
 `MIP_COTALITY_SHARE_PROVIDER`, `MIP_COTALITY_SHARE_NAME`,
 `MIP_UC_CATALOG_STORAGE_ROOT`, `MIP_DASHBOARD_PARENT_PATH`,
-`MIP_LEGACY_BUNDLE_ROOT`, `MIP_LENDER_IDENTITY_JSON`,
+`MIP_LEGACY_BUNDLE_ROOT`, `MIP_BOOTSTRAP_WAREHOUSE_ID`, `MIP_LENDER_IDENTITY_JSON`,
 `MIP_ACCEPTED_EXPOSURE_JSON`, `MIP_UC_INTERIM_OWNER_PAIRS_JSON` and
 `MIP_SEED_OPERATOR_EMAIL`. Secrets, the secret fields:
 `DATABRICKS_CLIENT_SECRET`, `DATABRICKS_OPERATOR2_CLIENT_SECRET`,
@@ -5404,9 +5429,10 @@ plus, in the agentic tier, `DATABRICKS_VERIFIER_CLIENT_SECRET`,
 organization-level secret or variable may carry any of these names (owner
 step 3). The per-client workflow carries no name outside the profile: the
 Genie action key ids, the refusal-capture switch, the proof-key rotation
-inputs, the foreign-catalog binding policy, the Salesforce connector settings
-and a first install's bootstrap warehouse are no profile field, so a client
-that needs one needs it in the schema first.
+inputs, the foreign-catalog binding policy and the Salesforce connector
+settings are no profile field, so a client that needs one needs it in the
+schema first. A first install's bootstrap warehouse is the profile field
+`MIP_BOOTSTRAP_WAREHOUSE_ID` (identifying, B1), which it carries.
 
 **The live install.** Until it is adopted, a dispatch of a mutating phase for
 the live install's environment ends in the client live checks, before the
@@ -5717,11 +5743,17 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    deployer never takes this role: the account plane stays on
    `DATABRICKS_ACCOUNT_*`.
 4. The SQL warehouse is the one the install's bundle state binds (M1-PR3).
-   A first install's bootstrap warehouse (`DATABRICKS_WAREHOUSE_ID`) is no
-   client profile field, so `deploy-dev.yml` carries none and a first install
-   through CI refuses at the preflight until that field exists (a follow-up).
-   Adopting an existing install needs none: the adopt phases read no
-   warehouse, and the plan and release after the bind take the adopted one
+   A new client's first install names its bootstrap warehouse in the profile
+   field `MIP_BOOTSTRAP_WAREHOUSE_ID` (B1): the id of a pro or serverless
+   warehouse the deployer can use, for example the workspace's serverless
+   starter warehouse. It is identifying, so `github_environment --apply`
+   stores it in the client's environment secrets with the rest of the
+   profile, and the profile ack covers it. After the first release it is not
+   read; deleting it (`gh secret delete --env <client>
+   MIP_BOOTSTRAP_WAREHOUSE_ID` and the `.env.local` line) is optional and
+   changes the profile ack once. Adopting an existing install needs none (the
+   profile refuses it beside `MIP_LEGACY_BUNDLE_ROOT`): the adopt phases read
+   no warehouse, and the plan and release after the bind take the adopted one
    from the deployer's bundle state.
    (`GENIE_SPACE_ID` is no deploy input since M1-PR3; since M1-PR8
    `nightly.yml` reads the App's Genie space from the App itself.)
