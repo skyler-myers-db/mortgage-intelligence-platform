@@ -275,6 +275,11 @@ def test_the_exit_trap_reaches_a_warehouse_only_through_compensations_the_adopt_
     )
     trap_body = functions["restore_rendered_sql_fail_closed"]
     assert TRAP_STOP in trap_body and trap_body.count(SECONDARY_QUIESCE) == 1
+    # ...and nothing else calls it, so skipping it below skips that one call.
+    assert [name for name, body in functions.items() if SECONDARY_QUIESCE in body] == [
+        "restore_rendered_sql_fail_closed"
+    ]
+    assert SECONDARY_QUIESCE not in code(FUNCTION.sub("", text))
     guarded = frozenset({*ARMED_BY, CAPTURED_RETIREMENT, SECONDARY_QUIESCE})
     assert _readers(functions, _reached(functions, roots, skip=guarded)) == []
     assert _readers(
