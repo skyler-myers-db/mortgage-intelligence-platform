@@ -15,7 +15,10 @@ run_as, so never the data-owner group). The handover plan counted one owned
 by anyone but the legacy owner as ``other_owner`` and asserted nothing about
 it. :func:`owner_codes` is that assertion, for ``handover_uc_ownership
 --verify``: each dataset's owner must be the same principal as its own
-pipeline's live ``run_as_user_name`` (tools/databricks/live_run_as.py). Paired
+pipeline's live ``run_as_user_name``, the field
+tools/databricks/live_run_as.py reads for the release postflight. The GET is
+made here, not through that helper, so the tools/clients SDK allowlist
+(tests/unit/test_bootstrap_account_safety.py) sees every call. Paired
 with the release postflight, which refuses unless the pipeline's live run_as
 is the jobs principal (tools/databricks/jobs_identity_acl.py), it proves the
 end state: every governed pipeline dataset is the jobs identity's.
@@ -40,7 +43,7 @@ from typing import Any
 
 from databricks.sdk.errors import NotFound
 
-from tools.databricks.live_run_as import pipeline_run_as, same_identity
+from tools.databricks.live_run_as import same_identity
 
 UNRESOLVED = "pipeline_unresolved"
 UNREADABLE = "pipeline_run_as_unreadable"
@@ -59,6 +62,16 @@ def _pipeline_id(workspace: Any, dataset: Mapping[str, str]) -> str:
     return str(getattr(table, "pipeline_id", "") or "").strip()
 
 
+def _run_as(workspace: Any, pipeline_id: str) -> str:
+    """The pipeline's effective ``run_as_user_name``; ``""`` when blank or the pipeline is gone."""
+
+    try:
+        pipeline = workspace.pipelines.get(pipeline_id=pipeline_id)
+    except NotFound:
+        return ""
+    return str(getattr(pipeline, "run_as_user_name", "") or "").strip()
+
+
 def owner_codes(workspace: Any, datasets: Iterable[Mapping[str, str]]) -> list[str]:
     """One value-free code per dataset not owned by its pipeline's live run_as; read-only."""
 
@@ -70,7 +83,7 @@ def owner_codes(workspace: Any, datasets: Iterable[Mapping[str, str]]) -> list[s
             codes.append(UNRESOLVED)
             continue
         if pipeline_id not in identities:
-            identities[pipeline_id] = pipeline_run_as(workspace, pipeline_id)
+            identities[pipeline_id] = _run_as(workspace, pipeline_id)
         identity = identities[pipeline_id]
         if not identity:
             codes.append(UNREADABLE)
