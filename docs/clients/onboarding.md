@@ -87,8 +87,8 @@ often refuse a first profile:
   identity"); `MIP_SEED_OPERATOR_EMAIL` is for demo installs only.
 
 Start a new client in the core tier (`MIP_AGENTIC_TIER=off`) with the weekly
-refresh off (`MIP_SCHEDULED_REFRESH=off`). Once PR #337 is on `main`, the
-profile also takes `MIP_SALESFORCE_BINDINGS` (`off` when unset): leave it
+refresh off (`MIP_SCHEDULED_REFRESH=off`). The profile also takes
+`MIP_SALESFORCE_BINDINGS` (`off` when unset): leave it
 unset unless the client's App binds the three Salesforce connector secrets
 (docs/deployment.md, "Optional Salesforce activation").
 

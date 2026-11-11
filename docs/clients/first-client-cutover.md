@@ -45,13 +45,13 @@ journals the tools write name resources: keep them in `<private-dir>`.
   deployment's source folder. Leave it stopped until step 10A.
 - **Step 3 is done** (the owner, 2026-11-06).
 - **Code on `main`:** waves 1-6 of the plan are merged, PR #334 (spike S7:
-  start proofs and the stopped-App blue) included, except PR #337 (spike S2:
-  binding updates and the `MIP_SALESFORCE_BINDINGS` switch), which merges
-  before this runbook is used. Steps 10 to 12 need it.
+  start proofs and the stopped-App blue) and PR #337 (spike S2: binding
+  updates and the `MIP_SALESFORCE_BINDINGS` switch) included. Steps 10 to 12
+  need both. The gaps below remain.
 
 ## Blockers on main (code follow-ups, not runbook steps)
 
-Read against `main` plus #334 and #337, five gaps stop the governed path, and
+Read against `main` (which holds #334 and #337), five gaps stop the governed path, and
 one owed spike may stop it too. Each gap is a code change; nothing in this
 runbook works around one. **Do not start step 7 until B1, B2, B4 and B5 have
 landed, B3 has landed or is about to land, and S0(b) is answered:** steps 7 to 12
@@ -637,8 +637,8 @@ emergency deploy of a current commit is the remedy for `closure_differs`).
 
 ### 10B. Adopt (CI): **blocked by B1, B2, B4 and B5; S0(b) owed**
 
-**Preconditions:** 10A; steps 7 and 8 done; #337 on `main`; B1, B2, B4 and
-B5 fixed on `main`, and S0(b) answered (Blockers, above).
+**Preconditions:** 10A; steps 7 and 8 done; B1, B2, B4 and B5 fixed on
+`main`, and S0(b) answered (Blockers, above).
 
 ```bash
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
