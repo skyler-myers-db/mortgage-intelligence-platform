@@ -2,7 +2,7 @@
 
 **Purpose.** The nightly `playwright-e2e-live` GitHub Actions job needs to
 reach the deployed Databricks App at
-`https://mip-app-2543889327043640.aws.databricksapps.com` through the
+`https://<app-host>` through the
 Databricks Apps OAuth proxy. A fresh browser hit to `/` 302-redirects to
 a consent page; the spec therefore attaches a workspace Bearer token
 (`Authorization: Bearer …`) to every request, and the Apps middleware
@@ -317,7 +317,7 @@ From the GitHub repo:
 | -------------------------- | ---------------------------------------------------------------- |
 | `DATABRICKS_CLIENT_ID`     | The `client_id` from step 2.                                     |
 | `DATABRICKS_CLIENT_SECRET` | The `client_secret` from step 2. (Redacted in all Actions logs.) |
-| `MIP_APP_URL`              | `https://mip-app-2543889327043640.aws.databricksapps.com`        |
+| `MIP_APP_URL`              | `https://<app-host>`        |
 
 The nightly workflow requires all three for deployed-app proof. If
 `DATABRICKS_CLIENT_ID` or `DATABRICKS_CLIENT_SECRET` is missing, the
@@ -345,7 +345,7 @@ export DATABRICKS_CLIENT_SECRET=<your-m2m-client-secret>
 # Expect: a JSON body from the deployed app (not a consent HTML page).
 curl -sSf \
     -H "Authorization: Bearer $(cat /tmp/bearer.txt)" \
-    https://mip-app-2543889327043640.aws.databricksapps.com/api/health \
+    https://<app-host>/api/health \
     | head -c 200
 ```
 

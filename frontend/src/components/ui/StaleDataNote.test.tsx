@@ -60,6 +60,16 @@ describe('StaleDataNote', () => {
     expect(note()?.querySelector('.chip__label')?.textContent).toBe('Refresh failed; counts from just now.');
   });
 
+  it('says "just now" for a read late in the minute the clock started in', () => {
+    // PR #338 review: the minute clock is the floor of the minute, so a read
+    // 50 s into it read "last read in 1 minute".
+    vi.setSystemTime(NOW + 50_000);
+    render(NOW + 50_000);
+    expect(note()?.textContent).toBe(
+      'Showing counts last read just now. The latest refresh failed; the counts update on a later refresh once the warehouse responds.',
+    );
+  });
+
   it('uses an absolute date and time past 24 hours, and accepts epoch ms', () => {
     render(Date.parse('2026-09-29T08:00:00Z'));
     const text = note()?.textContent ?? '';

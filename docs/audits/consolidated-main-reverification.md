@@ -8,8 +8,8 @@
 
 **Date:** 2026-05-22
 **Commit:** `main` @ `a85e730` (worktree clean; `bee6540` is an ancestor)
-**Deployment:** `mip-app` deployment `01f155c1f4fe1900a50b15f346fe3db6`, live at
-`https://mip-app-2543889327043640.aws.databricksapps.com`
+**Deployment:** `mip-app` deployment `<deployment-id>`, live at
+`https://<app-host>`
 **Method:** git topology + diff review → CI/gate inspection → live Chrome probes
 (API + UI), filters emphasis.
 

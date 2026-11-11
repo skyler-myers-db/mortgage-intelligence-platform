@@ -3,14 +3,14 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of the structured-logging seam, correlation-ID flow, dependency-call timing, PII discipline in log lines, health endpoint surface, OTLP exporter posture, backpressure and RUM telemetry observability, and whether an SRE can actually triage a real incident from the trail this app leaves.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f1501cca3811b0bbf224c8c0005ba9` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Code review of `backend/services/observability.py`, the correlation-ID middleware in `backend/main.py`, the `timed_dependency` context manager, the `BackpressureMiddleware` emit shape, the `/api/admin/health` surface, the audit_store / databricks_sql / lakebase emit call sites, the `RumBatch` schema validators; live curl probes for correlation-ID propagation; live probes against `/api/admin/health` counters; cross-reference against the audit ledger to see if traces can be linked.
 
 ---
 
 ## Remediation status — 2026-05-15
 
-**Deployment validated:** `01f150a9eb1b11c78956329bc138fa50` (RUNNING, ACTIVE).
+**Deployment validated:** `<deployment-id>` (RUNNING, ACTIVE).
 
 Closed:
 - **MEDIUM 1:** `mip_app.action_audit` now has nullable `correlation_id TEXT` plus `idx_action_audit_correlation`; all backend `INSERT INTO mip_app.action_audit` templates include the value, and `/api/audit/events` accepts an admin-gated `correlation_id` filter.
@@ -24,8 +24,8 @@ Live proof:
 - The same request with `X-Correlation-ID: 555-212-3333` returned `422` with a fresh generated id in both body and header.
 - `GET /api/health` with `X-Correlation-ID` values `trace123456789`, `trace1778869254`, `req_1778869254`, `abc555-212-3333xyz`, `abcB-102FL7THC6Q3Lxyz`, and `xCL-123456789y` returned `200` with fresh generated IDs, while `obs-live-alpha` was preserved.
 - `/api/audit/events?correlation_id=...` rejected those same six unsafe edge-case values with `422`.
-- `POST /api/audit/event` with `X-Correlation-ID: obs-central-5bee022d-0fa4-423f-a74b-875a836ef3d3` wrote `VIEW_CUSTOM`; `/api/audit/events?correlation_id=...` returned the row.
-- `PUT /api/workspace/leads/B-102FL7THC6Q3L` with `X-Correlation-ID: obs-workspace-5856e0c8-75cb-4316-88b5-2f844591826c` wrote direct-SQL `SAVE_LEAD`; `/api/audit/events?correlation_id=...` returned the row.
+- `POST /api/audit/event` with `X-Correlation-ID: obs-central-<correlation-id>` wrote `VIEW_CUSTOM`; `/api/audit/events?correlation_id=...` returned the row.
+- `PUT /api/workspace/leads/B-102FL7THC6Q3L` with `X-Correlation-ID: obs-workspace-<correlation-id>` wrote direct-SQL `SAVE_LEAD`; `/api/audit/events?correlation_id=...` returned the row.
 - Direct Lakebase verification returned `(has_correlation_column=True, has_correlation_index=True)` and found both rows by `correlation_id`.
 
 Still open:
@@ -97,11 +97,11 @@ This is genuinely strong PII hygiene. The combination of (a) call-site disciplin
 
 Reads inbound `X-Correlation-ID` header, sanitizes it against `^[A-Za-z0-9._-]{1,128}$`, mints a fresh UUID hex if absent/invalid, binds to the `ContextVar`, echoes on the response, emits one `http_request` log line per request with `method / path / status / duration_ms`. The `path` field is the **templated route** (`/api/borrowers/{borrower_id}`), never the raw URL with IDs.
 
-Live verification (probed at deployment `01f1501cca3811b0bbf224c8c0005ba9`):
+Live verification (probed at deployment `<deployment-id>`):
 
 | Probe | Sent | Echoed | Verdict |
 |---|---|---|---|
-| Valid UUID | `a5f465e4-8ffd-4eff-a9df-85feb9d6e54f` | `a5f465e4-8ffd-4eff-a9df-85feb9d6e54f` | ✅ preserved |
+| Valid UUID | `<correlation-id>` | `<correlation-id>` | ✅ preserved |
 | Valid friendly ID | `obs-audit-trace-001` | `obs-audit-trace-001` | ✅ preserved |
 | Control chars `bad;control;chars$%` | n/a | fresh UUID | ✅ sanitized |
 | 150-char (over 128 limit) | `aaaa…` × 150 | fresh UUID | ✅ length-limited |
@@ -132,10 +132,10 @@ Live probe returns:
   "status": "ok",
   "mode": "live",
   "app_env": "sandbox",
-  "warehouse_id": "81d08d4fa2d799e9",
+  "warehouse_id": "<warehouse-id>",
   "dependencies": {"warehouse": "up", "lakebase": "up", "genie": "up"},
   "circuit_breakers": {"warehouse": "closed", "lakebase": "closed", "genie": "closed"},
-  "actor_cache_key": "actor_e76d05a28908437c",
+  "actor_cache_key": "actor_<actor-key>",
   "breaker_state_changes_last_hour": 0,
   "recent_errors_count": 0,
   "counters_persistence": "process-local",
@@ -212,7 +212,7 @@ Step 3 is currently a manual join on `(actor_email, event_at)` because there's n
 ```
 $ curl -H "X-Correlation-ID: obs-trace-1778865774" $BASE/api/borrowers/B-...
 $ curl $BASE/api/audit/events?limit=3
-view_borrower_360 | actor=skyler@entrada.ai | created=2026-05-15T17:22:59 | request_id=None, subject_clip=clip_ref_f39cc7370860
+view_borrower_360 | actor=<operator-email> | created=2026-05-15T17:22:59 | request_id=None, subject_clip=clip_ref_f39cc7370860
 ```
 
 The audit row's `request_id=None` (because VIEW_BORROWER events don't carry idempotency keys), and there's no separate `correlation_id` field. The link from log → audit is by `(actor, timestamp)` only.
@@ -338,19 +338,19 @@ The product is **production-ready from an operability perspective** for the curr
 - `backend/api/health.py:278-374` — public + admin health bodies
 - `backend/services/audit_store.py:789-835` — resolve_actor with `extra` dict (LOW 3)
 - `lakebase/schema.sql:246-258` — action_audit DDL (missing correlation_id column)
-- Live deployment: `01f1501cca3811b0bbf224c8c0005ba9`
+- Live deployment: `<deployment-id>`
 
 ---
 
 ## Independent re-validation v2 — 2026-05-15 (post-fix)
 
-**Active deployment:** `01f15087e86e1e7ab828350db3545dc6` (RUNNING, ACTIVE, `update_time: 2026-05-15T18:05:22Z`). Matches the signoff's claimed deployment.
+**Active deployment:** `<deployment-id>` (RUNNING, ACTIVE, `update_time: 2026-05-15T18:05:22Z`). Matches the signoff's claimed deployment.
 
 ### Per-finding verdict
 
 | Finding | Status | Live evidence |
 |---|---|---|
-| **MEDIUM 1** — audit table `correlation_id` | ✅ Closed | Sent `X-Correlation-ID: obs-trace-f032078a-be68-4070-a50b-ba7c021f9c50` on `GET /api/borrowers/B-...`; queried `/api/audit/events?correlation_id=obs-trace-f032078a-...`; got exactly **1 row** with `action=view_borrower_360`, `corr=obs-trace-f032078a-...`, `actor=skyler@entrada.ai`. The column is populated and queryable. |
+| **MEDIUM 1** — audit table `correlation_id` | ✅ Closed | Sent `X-Correlation-ID: obs-trace-<correlation-id>` on `GET /api/borrowers/B-...`; queried `/api/audit/events?correlation_id=obs-trace-f032078a-...`; got exactly **1 row** with `action=view_borrower_360`, `corr=obs-trace-f032078a-...`, `actor=<operator-email>`. The column is populated and queryable. |
 | **MEDIUM 2** — 422 body includes `correlation_id` | ✅ Closed | `GET /api/leads?limit=99999` with `X-Correlation-ID: obs-error-1d105746-...` returned `{"detail":[...], "correlation_id":"obs-error-1d105746-..."}`. The header still carries it too. |
 | **LOW 3** — `identity_fallback` migrated to `emit()` | ✅ Closed | `backend/services/audit_store.py:827-834` now uses `emit(log, "identity_fallback", level=WARNING, default_actor=..., fallback_count=..., message=...)`. Structured fields will appear as searchable JSON keys in the log output. |
 | **LOW 4** — fallback regex matches alphanumeric IDs | ✅ Closed | `backend/main.py:224-226` updated regex to `r"/(?:B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)"`. Now catches `B-0OXOBYLW8MNCK`-style synthetic IDs in unrouted paths. |
@@ -365,14 +365,14 @@ Live probe results (8 patterns):
 
 | Sent CID | Echoed back | Verdict |
 |---|---|---|
-| `obs-trace-79ac1676-9e6d-43a5-a929-e0506199a9af` (UUID-suffixed) | `obs-trace-79ac1676-9e6d-43a5-a929-e0506199a9af` | ✅ preserved (UUID inside a friendly prefix is fine) |
+| `obs-trace-<correlation-id>` (UUID-suffixed) | `obs-trace-<correlation-id>` | ✅ preserved (UUID inside a friendly prefix is fine) |
 | `obs-trace-alpha-beta-gamma` (pure alphanumeric/dash) | preserved | ✅ |
-| `obs-trace-1778869254` (embedded 10-digit timestamp) | `9b262aed430042b3865bf4d33278a188` | ✅ rejected, fresh UUID minted |
-| `555-212-3333` (phone-shaped) | `4bf13d047e78422dabffdffea7b75585` | ✅ rejected |
-| `trace@example.com` (email-shaped) | `07f09a7ac90d45bbb2bc4dc51a68b310` | ✅ rejected |
-| `123-45-6789` (SSN-shaped) | `73d74b832b4746a086277418cf2bbad6` | ✅ rejected |
-| `B-0OXOBYLW8MNCK` (synthetic borrower-id-shaped) | `ff40594ae74049a1b1e5f9032c6db765` | ✅ rejected |
-| `CL-1234567890abcd` (CLIP-shaped) | `f35829a211f54d87bdb392fc6b218db5` | ✅ rejected |
+| `obs-trace-1778869254` (embedded 10-digit timestamp) | `<correlation-id>` | ✅ rejected, fresh UUID minted |
+| `555-212-3333` (phone-shaped) | `<correlation-id>` | ✅ rejected |
+| `trace@example.com` (email-shaped) | `<correlation-id>` | ✅ rejected |
+| `123-45-6789` (SSN-shaped) | `<correlation-id>` | ✅ rejected |
+| `B-0OXOBYLW8MNCK` (synthetic borrower-id-shaped) | `<correlation-id>` | ✅ rejected |
+| `CL-1234567890abcd` (CLIP-shaped) | `<correlation-id>` | ✅ rejected |
 
 All 6 PII-shape patterns correctly rejected. Two non-PII patterns correctly preserved. The sanitization is doing real work.
 
@@ -404,7 +404,7 @@ Updated row from the original triage table:
 
 ### Sign-off
 
-**All four findings from the original audit are closed in code AND verified live on deployment `01f15087e86e1e7ab828350db3545dc6`:**
+**All four findings from the original audit are closed in code AND verified live on deployment `<deployment-id>`:**
 
 - MEDIUM 1 — audit_table correlation_id column + queryable filter ✅
 - MEDIUM 2 — 422 body includes correlation_id ✅
@@ -474,8 +474,8 @@ Triggered two of the five paths without mutating the audit ledger destructively:
 
 | Pattern | Sent | Result |
 |---|---|---|
-| Pure UUID | `5e351bda-e4f6-420c-a802-9159294d7c1a` | ✅ preserved |
-| Friendly prefix + UUID | `obs-trace-998b97cc-0b1e-4c45-989c-8e70ef4dc1a9` | ✅ preserved |
+| Pure UUID | `<correlation-id>` | ✅ preserved |
+| Friendly prefix + UUID | `obs-trace-<correlation-id>` | ✅ preserved |
 | Pure alpha | `alphaonlytrace` | ✅ preserved |
 | 8-digit number (under 9-digit detector) | `trace12345678` | ✅ preserved |
 | Alpha + dots + underscores | `obs.v3.something_else` | ✅ preserved |
@@ -489,7 +489,7 @@ Triggered two of the five paths without mutating the audit ledger destructively:
 | Borrower id `B-0OXOBYLW8MNCK` | rejected | ✅ |
 | Borrower id short `B-123` | rejected | ✅ |
 | CLIP id `CL-1234567890abcd` | rejected | ✅ |
-| Embedded email `trace-foo@bar.com-bar` | rejected | ✅ |
+| Embedded email `trace-foo@bar.example-bar` | rejected | ✅ |
 | Embedded phone `abc555-212-3333xyz` | 🟡 **preserved** (no word boundary around digits) |
 | Embedded SSN `abc-123-45-6789-xyz` | rejected | ✅ (the dashes provide boundaries) |
 | Alpha with embedded 9-digit `trace999000111` | 🟡 **preserved** (same word-boundary edge) |
@@ -533,7 +533,7 @@ Home cold-load at 368 ms is the fastest reading from any of the 10+ measurements
 
 ### v3 sign-off
 
-**All four findings from the original observability audit are closed in code AND verified live on deployment `01f15087e86e1e7ab828350db3545dc6`:**
+**All four findings from the original observability audit are closed in code AND verified live on deployment `<deployment-id>`:**
 
 - MEDIUM 1 — audit_table correlation_id column + queryable filter ✅ (verified live twice across v2 + v3)
 - MEDIUM 2 — 422 body includes correlation_id ✅ (verified live twice)

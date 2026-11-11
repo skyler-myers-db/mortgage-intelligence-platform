@@ -183,7 +183,7 @@ class _LiveGenieStub:
 
 
 # Genie-issued (32-hex) ids, so the same blocked turn can be reported as is.
-_LIVE_CONVERSATION_ID = "01f13d4968af1b249dc388fd5b18b195"
+_LIVE_CONVERSATION_ID = "01f1c0de000000000000000000000001"
 _LIVE_MESSAGE_ID = "01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b"
 
 # The two live shapes that end in the repository's own output-policy block:

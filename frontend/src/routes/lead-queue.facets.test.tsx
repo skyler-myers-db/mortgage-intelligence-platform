@@ -132,7 +132,7 @@ describe('Lead Queue facet counts', () => {
   });
 
   it('never counts an approval-request scope (the server refuses it): labels only, nothing read', async () => {
-    await mountAt('?approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e&segment=itm');
+    await mountAt('?approval_request_batch=5eed00a1-0000-4000-8000-0000000000a1&segment=itm');
     await toggle('STATE');
     expect(listbox()).not.toBeNull();
     expect(facetCalls).toEqual([]);

@@ -6,14 +6,14 @@ from datetime import UTC, datetime
 from tools.databricks.otlp_customer_retention_gate import main, validate_evidence
 
 NOW = datetime(2026, 5, 15, 12, 30, tzinfo=UTC)
-CID = "c864cd1bbbf44779874fdb235ae7c6bf"
+CID = "c1dc0de00000000000000000000000c1"
 
 
 def _valid_evidence() -> dict[str, object]:
     return {
         "app": {
             "name": "mip-app",
-            "active_deployment_id": "01f14ff2c4cd10b99ebad8f8785c307f",
+            "active_deployment_id": "01f1d0000000000000000000000000d1",
             "otel_header_resource": "otel_headers",
             "otel_header_secret_ref": "databricks://secrets/mip/otel-headers",
         },

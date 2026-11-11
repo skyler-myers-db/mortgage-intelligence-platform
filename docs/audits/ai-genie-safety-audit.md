@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of the LLM-powered Ask Genie surface: trusted-asset enforcement, hallucination guards on numeric answers, prompt-injection resistance beyond the Q1 security audit, governed-action HMAC token discipline, fuzz coverage, and live adversarial probes against the deployed app.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15185868d1fa285ea9a3a4c94afd4` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Source-level audit of three router endpoints (`/api/genie/start`, `/api/genie/message`, `/api/genie/actions`), Genie services (`genie_actions`, `genie_answers`, `genie_client`, `genie_prompt_guardrails`, `genie_sales_ops`, `genie_trusted_assets`), Genie repository modules (`databricks_genie` + `_actions` / `_canonical` / `_numeric` / `_policy` / `_trust` / `_visualization` siblings), the Genie Space config in `genie/`, and the Hypothesis fuzz + regression suites. Live validation included curated Genie regression, 15-example/family standard fuzz, authenticated deployed-app adversarial probes, audit-feed checks, and the route-performance/walkthrough canary across all 8 routes.
 
 ---
@@ -148,9 +148,9 @@ An idempotency cache (`_lookup_existing_genie_action`) returns the prior result 
 
 Failure reporting writes the offending prompt + response head to `tests/integration/genie_fuzz_failures/<UTC-stamp>.jsonl` with a `latest.jsonl` symlink for triage.
 
-The standard 15-example/family fuzz job is now scheduled nightly in `.github/workflows/nightly.yml`; the 200-example/family deep fuzz job remains manual `workflow_dispatch`. The regression suite (`test_genie_regression.py`) drives curated sample questions from `genie/sample_questions.md` plus the adversarial catalog from `genie/regression_suite.md`. Grading: sample cohort must answer non-empty with trusted SQL over `mip.gold.*` or `mip.semantics.*`; adversarial cohort must refuse. On May 16, 2026, the live curated regression passed against Genie Space `01f13d4968af1b249dc388fd5b18b195`, and the standard 15-example/family live fuzz pass also completed cleanly.
+The standard 15-example/family fuzz job is now scheduled nightly in `.github/workflows/nightly.yml`; the 200-example/family deep fuzz job remains manual `workflow_dispatch`. The regression suite (`test_genie_regression.py`) drives curated sample questions from `genie/sample_questions.md` plus the adversarial catalog from `genie/regression_suite.md`. Grading: sample cohort must answer non-empty with trusted SQL over `mip.gold.*` or `mip.semantics.*`; adversarial cohort must refuse. On May 16, 2026, the live curated regression passed against Genie Space `<genie-space-id>`, and the standard 15-example/family live fuzz pass also completed cleanly.
 
-### 9. Live deployed-app probes (deployment `01f15185868d1fa285ea9a3a4c94afd4`)
+### 9. Live deployed-app probes (deployment `<deployment-id>`)
 
 Final authenticated probes against the deployed app returned:
 
@@ -233,7 +233,7 @@ Ask Genie is **production-ready as a customer-facing LLM surface for the Module 
 - `tests/integration/test_genie_regression.py` — 38 sample + 25 adversarial regression catalog
 - `tests/unit/test_provision_genie_space.py` — Genie Space/docs/backend trusted-asset alignment
 - `genie/instructions.md`, `genie/sample_questions.md`, `genie/regression_suite.md`, `genie/trusted_assets.md`, `genie/mortgage_lead_intelligence_space.yml`
-- Live probes, audit feed, and route walkthrough on deployment `01f15185868d1fa285ea9a3a4c94afd4`
+- Live probes, audit feed, and route walkthrough on deployment `<deployment-id>`
 
 ---
 
@@ -310,7 +310,7 @@ The Albers USA projection, the smooth state borders, the in-footprint highlighti
 
 **What I verified independently:** All source-level claims. The two new modules (`genie_prompt_guardrails.py`, `databricks_genie_numeric.py`) exist and contain the regexes/logic the signoff describes. The router wires the gates in the correct order with audit writes. The nightly workflow has both the scheduled standard fuzz and the `workflow_dispatch` deep fuzz. The 14-asset allowlist is consistent across the trusted-asset module, the trust repo, the Space YAML, the trust docs, and the provision test. The FICO copy is truthful and asset-cited. Zero regressions across all 8 prior audits.
 
-**What I trust from the engineering signoff:** The live Genie safety matrix and the route-performance canary were reported as 10/10 + 13/13 passing on deployment `01f15185868d1fa285ea9a3a4c94afd4`. My SSO session expired mid-audit and I could not re-authenticate to re-run live probes from the auditor seat. The prior-deployment live probes I executed in the same conversation (instruction-override / protected-class / DDL injection / cross-catalog enumeration) all behaved correctly against the prior gates, and the new gates are strict supersets — the older behavior is preserved. The signoff explicitly mentions reviewer-found PII/street-address bypass, transient Lakebase 503, and local-Playwright bootstrap issues were all closed before the final 13/13 pass.
+**What I trust from the engineering signoff:** The live Genie safety matrix and the route-performance canary were reported as 10/10 + 13/13 passing on deployment `<deployment-id>`. My SSO session expired mid-audit and I could not re-authenticate to re-run live probes from the auditor seat. The prior-deployment live probes I executed in the same conversation (instruction-override / protected-class / DDL injection / cross-catalog enumeration) all behaved correctly against the prior gates, and the new gates are strict supersets — the older behavior is preserved. The signoff explicitly mentions reviewer-found PII/street-address bypass, transient Lakebase 503, and local-Playwright bootstrap issues were all closed before the final 13/13 pass.
 
 ### v2 verdict
 

@@ -25,8 +25,8 @@ file is the contract.
 ## serialized_space schema (canonical)
 
 Confirmed via `get_space(..., include_serialized_space=True)` on five
-live spaces (DataPact, DBDemos Marketing, DBDemos Sales Pipeline,
-HLS Interop, Tishman Speyer) and a successful create+verify round-trip.
+live spaces other teams own in the workspace (names withheld: they are not
+this product's) and a successful create+verify round-trip.
 
 ```json
 {
@@ -42,7 +42,7 @@ HLS Interop, Tishman Speyer) and a successful create+verify round-trip.
   "config": {
     "sample_questions": [
       {
-        "id": "ff33f1b12213e021c2c4a888141953ba",
+        "id": "<object-id>",
         "question": ["How many borrowers are currently in-the-money?"]
       }
     ]
@@ -50,7 +50,7 @@ HLS Interop, Tishman Speyer) and a successful create+verify round-trip.
   "instructions": {
     "text_instructions": [
       {
-        "id": "9ce88802f07591e5ce0457ef51ece021",
+        "id": "<object-id>",
         "content": ["Cite the UC table on every answer."]
       }
     ],
@@ -118,7 +118,7 @@ remain visible from `list_spaces`.
 
 ## References
 
-- Workspace used: `https://dbc-3aa503a9-4fa8.cloud.databricks.com` (DEFAULT profile).
+- Workspace used: `https://<workspace-host>` (DEFAULT profile).
 - Provisioner: `tools/databricks/provision_genie_space.py`.
 - YAML spec: `genie/mortgage_lead_intelligence_space.yml`.
 - Test: `tests/unit/test_provision_genie_space.py`.

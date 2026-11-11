@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end measurement of the app's runtime performance: cold-load bundle weight, per-route render timing, API request waterfalls, large-list rendering behavior, concurrent-user resilience, and warehouse query patterns. Goal: surface where the user perceives slowness, identify quick wins (compression, caching), and pin SLI thermometers for future regression-watch.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14eda34d0190683452aad6555402a`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Direct HTTPS asset probes + curl timing benchmarks; Chrome MCP `performance.getEntriesByType('navigation' / 'resource')` for route-level metrics; parallel curl swarm for concurrency; codebase inspection of repository query patterns and frontend memoization.
 **Scope:** Vite-built `frontend/dist/` bundle; all 8 SPA routes; all hot API endpoints; warehouse `mip.gold.*` query shapes; React component memoization in `LeadTable.tsx`, `EvidenceDrawer.tsx`; cache settings in `backend/services/resilience.py` + `backend/config/settings.py`.
 
@@ -22,7 +22,7 @@ This audit document preserves the original findings below for traceability, but 
 
 ### Engineering re-validation addendum — 2026-05-13
 
-Engineering re-validation confirmed all three MEDIUM findings were real in the repo and remediated them. The remediated build was deployed and validated live as deployment `01f14f0eab05174883666f28bc800a1b`.
+Engineering re-validation confirmed all three MEDIUM findings were real in the repo and remediated them. The remediated build was deployed and validated live as deployment `<deployment-id>`.
 
 - **MEDIUM 1 fixed:** FastAPI now installs `GZipMiddleware(minimum_size=1024)`, so JS/CSS/API/HTML responses honor `Accept-Encoding: gzip`.
 - **MEDIUM 2 fixed:** `/api/config/options` and `/api/config/footprint` now use a short process-local `TTLCache` keyed to `settings.mip_cache_ttl_s`. Degraded/unavailable config payloads are not cached.
@@ -172,7 +172,7 @@ Response:
   content-encoding: gzip
   vary: Accept-Encoding
   cache-control: public, max-age=31536000, immutable
-  etag: "d672e2a2ccf745725ccf56c8028b5941"
+  etag: "<etag>"
 ```
 
 - ✅ `Content-Encoding: gzip` — present after remediation
@@ -219,7 +219,7 @@ Both endpoints run 1-2 SQL queries against `mip.ref.state_footprint`, `mip.gold.
 **Reproduction:**
 ```
 $ curl -sSI "$BASE/assets/index-VRjXTfb9.js" | grep -iE "cache-control|etag"
-etag: "d672e2a2ccf745725ccf56c8028b5941"
+etag: "<etag>"
 (no cache-control header)
 ```
 
@@ -355,7 +355,7 @@ The product is **performant enough for production demo** on the target 1440×900
 - `frontend/src/lib/api.ts:443-463` — raw fetch wrapper
 - Chrome MCP performance entries: navigation timing, resource timing per route
 - Live probes: `/tmp/perf_bundle.sh`, `/tmp/perf_bundle2.sh`, `/tmp/perf_footprint.sh`, `/tmp/perf_large_list.sh`, `/tmp/perf_cap.sh`, `/tmp/perf_concurrent.sh`
-- Deployment: `01f14eda34d0190683452aad6555402a` (RUNNING / ACTIVE)
+- Deployment: `<deployment-id>` (RUNNING / ACTIVE)
 
 ---
 
@@ -363,7 +363,7 @@ The product is **performant enough for production demo** on the target 1440×900
 
 After engineering shipped GZipMiddleware + immutable cache headers + config TTLCache + print stylesheet + font trim, re-ran the original probes plus a fresh cold-load measurement on the new deployment.
 
-**Active deployment:** `01f14f0eab05174883666f28bc800a1b`.
+**Active deployment:** `<deployment-id>`.
 
 ### Source-of-truth checks
 
@@ -384,7 +384,7 @@ accept-ranges: bytes
 cache-control: public, max-age=31536000, immutable      ← MEDIUM 3 fix
 content-encoding: gzip                                  ← MEDIUM 1 fix
 content-type: text/javascript; charset=utf-8
-etag: "8d4e4a2d0507d13a1d574f23f559c850"
+etag: "<etag>"
 vary: Accept-Encoding                                   ← MEDIUM 1 fix
 content-security-policy: ... script-src 'self' ...       (security audit headers preserved)
 strict-transport-security: max-age=31536000; includeSubDomains
@@ -475,7 +475,7 @@ This is the single biggest perf win of the entire remediation. The leads payload
 - **LOW 1 (Lead Queue virtualization) — superseded by follow-up below.** Default 500-row render worked at 1440×900 desktop; follow-up made the table scale-safe anyway.
 - **LOW 4 (TanStack Query / SWR) — superseded by follow-up below.** API-level cache handled staleness server-side; follow-up added QueryClient with audit-safe defaults anyway.
 
-The product is **production-ready and audit-clean on the performance dimension** on deployment `01f14f0eab05174883666f28bc800a1b`. All three MEDIUM quick wins shipped together cut cold-load wire weight ~72% and Home `loadEvent` 21%. The two remaining LOW deferrals are tracked production-onboarding decisions, not blockers.
+The product is **production-ready and audit-clean on the performance dimension** on deployment `<deployment-id>`. All three MEDIUM quick wins shipped together cut cold-load wire weight ~72% and Home `loadEvent` 21%. The two remaining LOW deferrals are tracked production-onboarding decisions, not blockers.
 
 ---
 
@@ -511,7 +511,7 @@ No Vite large-chunk warning remains. Initial decoded JS is now roughly half of t
 
 ### Live deployment
 
-Deployment `01f14f1e550a138ba0676205dd36e6fb` is active and `SUCCEEDED`.
+Deployment `<deployment-id>` is active and `SUCCEEDED`.
 
 Live asset probe:
 
@@ -563,7 +563,7 @@ The remaining thermometers are now true future items rather than known implement
 
 After engineering shipped all three of the deferred items in a single pass (TanStack Query, Lead Queue virtualization, route-level code splitting), re-ran the full probe battery plus new measurements unlocked by the changes.
 
-**Active deployment:** `01f14f1e550a138ba0676205dd36e6fb` (`SUCCEEDED`, `RUNNING`).
+**Active deployment:** `<deployment-id>` (`SUCCEEDED`, `RUNNING`).
 
 ### Source-of-truth checks
 
@@ -608,7 +608,7 @@ content-encoding: gzip                                    ← gzip active
 vary: Accept-Encoding                                     ← cache key correct
 cache-control: public, max-age=31536000, immutable        ← immutable cache
 content-type: text/javascript; charset=utf-8
-etag: "c8b98a2a10d5a92751eb560c37aba3ce"
+etag: "<etag>"
 content-security-policy: default-src 'self'; ...          ← security headers preserved
 strict-transport-security: max-age=31536000; includeSubDomains
 x-content-type-options: nosniff

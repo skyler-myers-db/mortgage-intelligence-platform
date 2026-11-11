@@ -148,7 +148,7 @@ describe('LeadQueueEmptyState', () => {
 
   // W5d lq deferral 9: an approval request whose borrowers are all decided.
   it('a request-scoped zero says the request is done, offers Clear the request and no Genie Ask', () => {
-    const onClearFilters = renderEmpty('approval_request_batch=0b6f0c56-1f0e-4d2a-9c11-3f2e6a7b8c9d');
+    const onClearFilters = renderEmpty('approval_request_batch=5eed00a5-0000-4000-8000-0000000000a5');
     expect(document.querySelector('.empty__title')?.textContent).toBe('No open borrowers left in this approval request.');
     expect(document.querySelector('.empty__copy')?.textContent).toBe('Each one was decided, withdrawn or has expired.');
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('.empty__actions button')];
@@ -162,7 +162,7 @@ describe('LeadQueueEmptyState', () => {
   // GET /api/leads intersects the request's open borrowers with every other
   // filter, so beside one the zero may be that filter's: the request is not
   // necessarily done, and the filtered state answers (still with no Ask).
-  const REQUEST = 'approval_request_batch=0b6f0c56-1f0e-4d2a-9c11-3f2e6a7b8c9d';
+  const REQUEST = 'approval_request_batch=5eed00a5-0000-4000-8000-0000000000a5';
   const expectFilteredRequestZero = () => {
     expect(document.body.textContent).not.toContain('No open borrowers left in this approval request.');
     expect(document.body.textContent).not.toContain('Each one was decided, withdrawn or has expired.');

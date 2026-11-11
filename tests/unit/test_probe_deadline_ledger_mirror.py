@@ -28,7 +28,7 @@ def test_mutable_ledger_paths_never_mirrored():
 
 def test_immutable_ledger_paths_are_mirrorable():
     root = probe_deadlines._LEASE_ROOT
-    generation = f"{root}/mip-app.json.2942d267-d1ab-4136-b103-8ba9f7396a57"
+    generation = f"{root}/mip-app.json.5eed00b6-0000-4000-8000-0000000000b6"
     assert probe_deadlines._mirror_immutable(generation)
     assert probe_deadlines._mirror_immutable(f"{generation}.next")
     assert probe_deadlines._mirror_immutable(

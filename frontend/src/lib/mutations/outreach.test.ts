@@ -445,7 +445,7 @@ describe('request bodies', () => {
   });
 
   it('carries the approval request a scoped decision answers, and null elsewhere (flow-02)', async () => {
-    const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const BATCH = '5eed00a1-0000-4000-8000-0000000000a1';
     const approve = mountHook(() => useApproveLead(client));
     const reject = mountHook(() => useRejectLead(client));
     await act(async () => {

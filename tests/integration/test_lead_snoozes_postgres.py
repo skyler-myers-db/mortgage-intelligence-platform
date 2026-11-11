@@ -35,6 +35,7 @@ from backend.services.repositories.databricks_borrower_contactability import (
 )
 from jobs import lakebase_migrate
 from jobs import sync_lifecycle_state as job
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
@@ -43,7 +44,7 @@ pytestmark = pytest.mark.integration
 LEAD_SNOOZES_VERSION = "2026_10_14_lead_snoozes"
 _MARKER = "-- Lead snoozes ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _IDS = itertools.count(1)
 NOW = datetime.now(UTC)
 

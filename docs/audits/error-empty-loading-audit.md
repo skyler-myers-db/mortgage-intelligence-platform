@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** Live behavioral pass against the deployed app, forcing every API surface into its three non-happy states: empty result, slow inflight, and explicit error.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14e554fcd12a9bfc8eab46332c320`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Claude-in-Chrome MCP at 1440×900, with two test tools — (1) deep-link URLs that force empty filter combinations or invalid parameters, and (2) JavaScript fetch interception to slow specific routes (`/api/leads` throttled to 8s).
 **Scope:** Lead Queue, Borrower 360, Ask Genie, Admin Audit Explorer, global topbar search. Plus inline state on the Sales-ops snapshot, KPI cards, and data-estate panel.
 
@@ -126,7 +126,7 @@ Both defects are 1–2 line fixes (branch error class on `status === 404`; parse
 
 ## Sources
 
-- Live deployment `01f14e554fcd12a9bfc8eab46332c320`
+- Live deployment `<deployment-id>`
 - Forced fetch throttling via `window.fetch` interception (`leads_fetch_throttled_8s`)
 - Deep-link URLs: `/lead-queue?states=NY`, `/borrower-360/B-DOES-NOT-EXIST`, `/lead-queue?approval_status=hold&aged_days=999`, search input `ZZZZZZZ`, audit-explorer ENTITY_ID `B-DOES-NOT-EXIST-EVER`
 - Cross-checked HTTP status codes via direct `curl` calls earlier in this audit run

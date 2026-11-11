@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** Vicious-mode re-validation of the latest "fix pass" against the four findings from the previous critical audit, plus a live walkthrough of every route to find any new regressions hiding under the framing.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f14ff2c4cd10b99ebad8f8785c307f` (RUNNING, `update_time: 2026-05-15T00:17:36Z`).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, `update_time: 2026-05-15T00:17:36Z`).
 **Method:** Code-level inspection of the claimed fixes; live curl probes against the deployed `/api/health` shape; Chrome MCP walkthrough of all 8 routes including hover behavior on Lead Queue; cross-audit regression sweep on security, data quality, compliance.
 
 ---
@@ -46,13 +46,13 @@ return {
 }
 ```
 
-**Live state** (deployment `01f14ff2c4cd10b99ebad8f8785c307f`, probed three different ways including fresh request, cache-busted timestamp param, and explicit `X-Forwarded-Email` header):
+**Live state** (deployment `<deployment-id>`, probed three different ways including fresh request, cache-busted timestamp param, and explicit `X-Forwarded-Email` header):
 ```json
 {
   "status": "ok",
   "mode": "live",
   "dependencies": {"warehouse": "up", "lakebase": "up", "genie": "up"},
-  "actor_cache_key": "actor_3bae31c9370a95a0"
+  "actor_cache_key": "actor_<actor-key>"
 }
 ```
 
@@ -202,13 +202,13 @@ Not in scope for this audit, but worth filing.
 
 ## Independent re-validation v3 — 2026-05-15 (post-redeploy)
 
-**Active deployment:** `01f1501cca3811b0bbf224c8c0005ba9` (RUNNING, ACTIVE, `update_time: 2026-05-15T05:18:26Z`). Matches the signoff's claimed deployment ID.
+**Active deployment:** `<deployment-id>` (RUNNING, ACTIVE, `update_time: 2026-05-15T05:18:26Z`). Matches the signoff's claimed deployment ID.
 
 ### Per-claim verdict
 
 | Claim | Verdict |
 |---|---|
-| Live deployment ID `01f1501cca3811b0bbf224c8c0005ba9` is RUNNING / ACTIVE | ✅ Confirmed |
+| Live deployment ID `<deployment-id>` is RUNNING / ACTIVE | ✅ Confirmed |
 | Authenticated `/api/health` returns `circuit_breakers` | ✅ Confirmed. Live response now includes `circuit_breakers: {warehouse: closed, lakebase: closed, genie: closed}`. |
 | Unauthenticated `/api/health` is still minimal | 🟡 Live deployment returns 401 (the Databricks Apps platform short-circuits before FastAPI sees the request). The R6-09 comment in health.py expects anonymous LB probes to receive a 200 `{status, mode}` minimal body — but the platform layer is more aggressive. The code path is correct; the LB-200 contract is effectively unreachable from outside. Documentation worth updating. |
 | `/api/admin/health` returns full diagnostic body | ✅ Confirmed. Returns app_env, warehouse_id, circuit_breakers, breaker_state_changes_last_hour, recent_errors_count, etc. |
@@ -227,7 +227,7 @@ What actually changed with the fix:
 - **Before fix**: `circuit_breakers` was absent from `/api/health`. The pill's `anyBreakerOpen` computation always returned false (empty `{}`), so the pill said "Live" even if a breaker were open. The tooltip showed dependency state but no breaker line. The `DegradedBanner.tsx:81-83` breaker-only degraded check never fired. The `AgentActivityLog` breaker display showed "unknown."
 - **After fix**: Tooltip now reads `System status · live\nwarehouse=up · lakebase=up · genie=up\nbreakers warehouse=closed / lakebase=closed / genie=closed`. The pill's `anyBreakerOpen` check correctly factors in breaker state. DegradedBanner correctly fires on breaker-only events.
 
-Verified live: hovering the Topbar pill at `01f1501cca3811b0bbf224c8c0005ba9` shows the new breaker line in the tooltip. The fix is real and user-visible (via tooltip), but the user-facing improvement is more subtle than "a new chip appeared." My v2 framing overstated the visual impact.
+Verified live: hovering the Topbar pill at `<deployment-id>` shows the new breaker line in the tooltip. The fix is real and user-visible (via tooltip), but the user-facing improvement is more subtle than "a new chip appeared." My v2 framing overstated the visual impact.
 
 ### 🟡 New finding (LOW) — undisclosed scope: backend repository split
 

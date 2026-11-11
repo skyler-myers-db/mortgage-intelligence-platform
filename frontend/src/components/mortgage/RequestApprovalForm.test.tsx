@@ -34,7 +34,7 @@ declare const process: { cwd(): string };
 
 const IDS = ['B-REQFORM000001', 'B-REQFORM000002', 'B-REQFORM000003'];
 const CREATED: ApprovalRequestCreated = {
-  batch_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+  batch_id: '5eed00a1-0000-4000-8000-0000000000a1',
   audit_event_id: 'audit-req-1',
   requested: [IDS[0], IDS[1]],
   skipped: [{ borrower_id: IDS[2], reason: 'already_requested' }],

@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of the API contract surface: response model discipline, URL versioning, breaking-change detection in CI, Pydantic field optionality, error envelope consistency, frontend ↔ backend type drift, and deprecation strategy.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15185868d1fa285ea9a3a4c94afd4` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Inventoried 38 `response_model=` declarations across 17 routers. Counted 387 Pydantic fields across 11 schema modules (2,211 LOC). Parsed every schema with `ast` to classify required vs defaulted vs nullable fields. Verified error-envelope consistency at the two registered exception handlers in `backend/main.py`. Diffed `frontend/src/types.ts` (540 LOC, 48 interfaces) against the backend Pydantic surface. Searched for `@deprecated` markers, `X-API-Version` headers, URL-segment versioning, and OpenAPI snapshot tests.
 
 ---
@@ -32,7 +32,7 @@ One audit statement was too strong: not every endpoint had an explicit `response
 
 ## Live deployment validation
 
-Validated against active Databricks App deployment `01f152397f461a64b508d3a0bb21081f` on 2026-05-17 after a full `./scripts/deploy.sh -t dev --no-confirm` run. The deploy path completed frontend build, bundle validate, bundle deploy, Databricks App snapshot promotion, FRED ingest, silver refresh, Lakebase migration, gold refresh, lifecycle sync, Genie space rebind, and `scripts/smoke_live.sh`.
+Validated against active Databricks App deployment `<deployment-id>` on 2026-05-17 after a full `./scripts/deploy.sh -t dev --no-confirm` run. The deploy path completed frontend build, bundle validate, bundle deploy, Databricks App snapshot promotion, FRED ingest, silver refresh, Lakebase migration, gold refresh, lifecycle sync, Genie space rebind, and `scripts/smoke_live.sh`.
 
 The first deploy pass surfaced a real orchestration gap: `.env.local` carried stale `MIP_DEFAULT_CATALOG=mip_demo`; `bundle_env.py` ignored that value correctly, but `provision_genie_space.py` loaded it before `deploy.sh` exported the normalized catalog. `scripts/deploy.sh` now exports `MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip}` before any helper runs, so the bundle, SQL renderer, Python jobs, and Genie table bindings share the same catalog.
 
@@ -40,7 +40,7 @@ Post-fix rerun evidence:
 
 | Gate | Result |
 |---|---|
-| Databricks App snapshot | `01f152397f461a64b508d3a0bb21081f`, `SUCCEEDED`, app `RUNNING` |
+| Databricks App snapshot | `<deployment-id>`, `SUCCEEDED`, app `RUNNING` |
 | Genie rebind | `tables=14`, `bound_in_payload=True` |
 | Built-in live smoke | PASS, including health, portfolio preview, ranked leads, borrower dossier, evidence, data estate, source readiness, geo rollups, outreach draft, outreach approval audit write, and Genie message |
 | `/api/v1/health` | `200`, `X-API-Version: v1`, dependencies all `up`, breakers all `closed` |
@@ -250,7 +250,7 @@ Module 0 can ship to its first customer with a versioned API contract and a PR-t
 - `tests/unit/test_openapi_contract.py` + `tests/fixtures/openapi_baseline.json` — API-wire compatibility gate
 - `tests/unit/test_api_boundaries.py` — `/api/v1` primary route, `/api` compatibility alias, `/openapi.json` gating tests
 - `tests/unit/test_architecture_boundaries.py` — versioned-route manifest + deprecated alias guard
-- Live deployment: `01f15185868d1fa285ea9a3a4c94afd4`
+- Live deployment: `<deployment-id>`
 
 ---
 
@@ -348,8 +348,8 @@ Engineering reported `pytest -q tests/unit` PASS on the full 3.11+ stack includi
 
 ### One doc inconsistency worth a 30-second reconciliation
 
-The audit doc (linter-applied) has a "Live deployment validation" section claiming validation against deployment `01f152397f461a64b508d3a0bb21081f` on 2026-05-17 with `26 checks, 0 failures`. The engineering signoff message says *"this worktree has not been deployed to Databricks yet, so the final live smoke should happen after deploy."* These are inconsistent. Either:
-- The audit-doc validation describes the *prior* deploy (multi-tenant tranche on `01f152397f461a64b508d3a0bb21081f`) and the message refers to the current API tranche specifically; or
+The audit doc (linter-applied) has a "Live deployment validation" section claiming validation against deployment `<deployment-id>` on 2026-05-17 with `26 checks, 0 failures`. The engineering signoff message says *"this worktree has not been deployed to Databricks yet, so the final live smoke should happen after deploy."* These are inconsistent. Either:
+- The audit-doc validation describes the *prior* deploy (multi-tenant tranche on `<deployment-id>`) and the message refers to the current API tranche specifically; or
 - One of the two is stale and should be reconciled.
 
 This doesn't change the substantive verdict — the source changes I verified independently are all correct — but the team should clarify which is the truth so a future reader doesn't get confused.

@@ -10,7 +10,7 @@
 
 **Date:** 2026-05-20
 **Worktree:** proof-layer tranche (uncommitted), no `.git/index.lock`.
-**Live deployment (unchanged this tranche):** `01f154a31e5b1db2aa46fbd9e4d1158f`
+**Live deployment (unchanged this tranche):** `<deployment-id>`
 (the v4 multi-select build).
 
 ## Headline result
@@ -182,7 +182,7 @@ that same pass.
 
 ## v2 independent verification — 2026-05-20 (deployed + polish tranche)
 
-The Proof Layer is now **deployed** (`01f154cbb2ae11adbdff153d3b776879`), so I
+The Proof Layer is now **deployed** (`<deployment-id>`), so I
 ran the live Chrome walkthrough that was impossible in v1, plus verified the
 audit-polish fixes and re-confirmed the analytics filters.
 

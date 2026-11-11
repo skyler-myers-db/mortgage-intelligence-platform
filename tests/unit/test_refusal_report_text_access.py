@@ -190,7 +190,7 @@ def _real_refusal(family: str, question: str) -> tuple[GenieMessageResponse, dic
     payload = GenieMessageRequest(question=question)
     if family == "output_policy":
         live = GenieMessageResponse(
-            conversation_id="01f13d4968af1b249dc388fd5b18b195",
+            conversation_id="01f1c0de000000000000000000000001",
             message_id="01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b",
             question=payload.question,
             answer="Unsafe generated text.",
@@ -676,7 +676,7 @@ def test_a_failing_sweep_never_fails_a_read(
 
 
 @pytest.mark.parametrize(
-    "path", [LIST_PATH, "/api/audit/refusal-reports/0d2c0f4e-6b6a-4b8e-9a51-3c0f7b1d2e4f/question"]
+    "path", [LIST_PATH, "/api/audit/refusal-reports/5eed00a3-0000-4000-8000-0000000000a3/question"]
 )
 def test_a_non_reader_gets_403_and_nothing_is_read(
     lakebase: RefusalReportLakebase, ledger_store: InMemoryAuditStore, path: str

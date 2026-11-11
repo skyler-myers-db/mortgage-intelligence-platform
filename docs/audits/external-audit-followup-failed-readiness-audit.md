@@ -6,8 +6,8 @@
 **Date:** 2026-05-21  
 **Branch:** `hardening/module0-release-readiness`  
 **Hardening commit:** `9bb5cf7 fix: harden module0 release readiness`  
-**Live app:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
-**Deployment ID:** `01f1553bcc5b1be4a6a4ee8804c93190`  
+**Live app:** `https://<app-host>`  
+**Deployment ID:** `<deployment-id>`  
 **Verdict:** fixes are committed and deployed, but readiness is **failed/blocked** by live Playwright failures and pending MLS/permit data shares.
 
 ## Headline
@@ -28,13 +28,13 @@ matrix failed 15 tests. This audit is a failed readiness record, not a signoff.
 Key deploy output:
 
 - Databricks App snapshot deployed and started successfully.
-- App deployment ID: `01f1553bcc5b1be4a6a4ee8804c93190`.
+- App deployment ID: `<deployment-id>`.
 - FRED refresh: succeeded, latest FRED observation `2026-05-18`.
 - Cotality silver refresh: succeeded.
 - Lakebase migration: succeeded.
 - Gold/scoring refresh: succeeded.
 - Lifecycle sync and daily funnel snapshot: succeeded.
-- Genie space rebound: `01f13d4968af1b249dc388fd5b18b195`.
+- Genie space rebound: `<genie-space-id>`.
 - `scripts/smoke_live.sh`: PASS against the deployed app.
 
 Smoke coverage included health, portfolio preview, ranked leads, borrower dossier,
@@ -86,8 +86,8 @@ The full deployed Chromium matrix was then run:
 
 ```bash
 E2E_LIVE=1 \
-MIP_APP_URL=https://mip-app-2543889327043640.aws.databricksapps.com \
-MIP_API_URL=https://mip-app-2543889327043640.aws.databricksapps.com \
+MIP_APP_URL=https://<app-host> \
+MIP_API_URL=https://<app-host> \
 npx playwright test \
   tests/e2e/real_data.spec.ts \
   tests/e2e/demo_visual.spec.ts \

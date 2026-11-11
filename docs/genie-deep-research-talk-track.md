@@ -54,7 +54,7 @@ ships whatever sections completed, disclosing the rest as gaps.
    the app was deployed from the UI button without the operator payload —
    redeploy with `tools/databricks/app_deploy_payload.py` (see the runbook
    in the deploy memory); every async Genie turn 500s in that state.
-2. The serverless warehouse `81d08d4fa2d799e9` is RUNNING. It auto-stops
+2. The serverless warehouse `<warehouse-id>` is RUNNING. It auto-stops
    after **10 idle minutes**, and while it is stopped the health probe
    reports warehouse and Genie down and the pill reads **Degraded** (seen
    2026-09-08, twenty minutes after the last probe). Running Beat 0 five

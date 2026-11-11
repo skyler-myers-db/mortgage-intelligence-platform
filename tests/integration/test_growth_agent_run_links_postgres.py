@@ -28,6 +28,7 @@ from psycopg import sql as psql
 
 from backend.services.growth_agent_run_watchlist import RUN_LINK_INSERT_SQL
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
@@ -36,7 +37,7 @@ pytestmark = pytest.mark.integration
 RUN_LINKS_VERSION = "2026_10_15_growth_watchlist_run_links"
 _MARKER = "-- Growth Agent watchlist run links (W5e) ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _ACTOR = "lo@summit.example"
 _OTHER = "other@summit.example"
 

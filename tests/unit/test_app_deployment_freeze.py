@@ -452,8 +452,13 @@ def _publish_argv(stage: Path, manifest: Path, release_id: str, *extra: str) -> 
 
 
 def test_freeze_blocks_the_emergency_publish_before_any_upload(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # main() passes the publisher no clock, so the judge reads time.time():
+    # pin it to the NOW the marker is written at. Against the real clock the
+    # marker (frozen until NOW + 3600, a fixed 2027 instant) reads as expired
+    # from 2027-01-15T09:00:00Z on, and the publish is no longer refused.
+    monkeypatch.setattr(freezer, "time", SimpleNamespace(time=lambda: NOW))
     client = FakeWorkspaceClient()
     marker = _freeze(client)
     stage, manifest, release_id = _stage(tmp_path)

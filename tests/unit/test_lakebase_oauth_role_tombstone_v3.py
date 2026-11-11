@@ -19,7 +19,7 @@ from tools.databricks import lakebase_oauth_role_tombstone as tombstone
 
 _BASE_EXTERNAL_ID = "mip:lb:b:v1:" + "a" * 48
 _APPLICATION_ID = "22222222-2222-4222-8222-222222222222"
-_PRINCIPAL_ID = "78879891843203"
+_PRINCIPAL_ID = "70000000000106"
 _SIGNING_KEY = base64.urlsafe_b64encode(b"v" * 32).decode().rstrip("=")
 _VERIFY_KEY = derive_gateway_proof_verify_key(_SIGNING_KEY)
 
@@ -112,7 +112,7 @@ def test_same_prefix_marker_for_another_target_fails_closed(
 
 @pytest.mark.parametrize(
     "principal_id",
-    ["", "0", "01", "-1", "78879891843203x", str(1 << 48)],
+    ["", "0", "01", "-1", "70000000000106x", str(1 << 48)],
 )
 def test_v3_rejects_noncanonical_or_unencodable_principal_ids(principal_id: str) -> None:
     with pytest.raises(RuntimeError, match="principal id is invalid"):
@@ -155,7 +155,7 @@ def test_tombstone_delete_retries_after_three_direct_misses_then_reappearance(
         principal_id=_PRINCIPAL_ID,
         signing_key=_SIGNING_KEY,
     )
-    tombstone_id = "78451793422042"
+    tombstone_id = "70000000000104"
     marker = (
         tombstone_id,
         _APPLICATION_ID,
@@ -241,7 +241,7 @@ def test_tombstone_final_absence_proof_gets_a_fresh_bounded_window(
         signing_key=_SIGNING_KEY,
     )
     marker = (
-        "78451793422042",
+        "70000000000104",
         _APPLICATION_ID,
         display_name,
         marker_application_id,
@@ -284,7 +284,7 @@ def test_tombstone_retirement_response_loss_retries_exact_identity(
         signing_key=_SIGNING_KEY,
     )
     marker = (
-        "78451793422042",
+        "70000000000104",
         _APPLICATION_ID,
         display_name,
         marker_application_id,

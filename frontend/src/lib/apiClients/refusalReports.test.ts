@@ -34,9 +34,9 @@ describe('refusalReportsApi', () => {
   });
 
   it('reads one question by its encoded report id', async () => {
-    await refusalReportsApi.question('0d2c0f4e-6b6a-4b8e-9a51-3c0f7b1d2e4f');
+    await refusalReportsApi.question('5eed00a3-0000-4000-8000-0000000000a3');
     expect(getJson).toHaveBeenCalledWith(
-      '/api/audit/refusal-reports/0d2c0f4e-6b6a-4b8e-9a51-3c0f7b1d2e4f/question',
+      '/api/audit/refusal-reports/5eed00a3-0000-4000-8000-0000000000a3/question',
       undefined,
     );
     await refusalReportsApi.question('a/b?c');

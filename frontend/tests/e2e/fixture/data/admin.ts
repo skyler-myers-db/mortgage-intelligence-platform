@@ -199,7 +199,7 @@ export const REFUSAL_REPORTS: RefusalReportListResponse = {
       reported_at: '2026-07-14T15:20:00Z',
       refusal_reason: 'unreviewed_criterion',
       reporter: 'lo.alpha@summit-mortgage.example',
-      conversation_id: '01f13d4968af1b249dc388fd5b18b195',
+      conversation_id: '01f1c0de000000000000000000000001',
       message_id: null,
       has_text: true,
       text_expires_at: '2026-10-12T15:20:00Z',

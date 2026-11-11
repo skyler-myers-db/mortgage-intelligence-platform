@@ -34,7 +34,7 @@ before serialisation — never the raw value.
 Sample line:
 
 ```json
-{"ts":"2026-04-22T19:18:41.332Z","level":"INFO","logger":"mip.databricks_sql","event":"warehouse_query_end","correlation_id":"a1b2c3d4e5f6789012345678abcdef01","dependency":"warehouse","duration_ms":142.73,"outcome":"ok","statement_hash":"4f8b2e1c9a7d3e55","rows_returned":127}
+{"ts":"2026-04-22T19:18:41.332Z","level":"INFO","logger":"mip.databricks_sql","event":"warehouse_query_end","correlation_id":"a1b2c3d4e5f6789012345678abcdef01","dependency":"warehouse","duration_ms":142.73,"outcome":"ok","statement_hash":"<sql-hash>","rows_returned":127}
 ```
 
 ### Actor binding refusals (D-identity-review-a4)
@@ -148,7 +148,7 @@ The Entrada dev Databricks App is bounded at stdout-only until a
 collector endpoint is supplied for a deployment:
 
 - `databricks apps get mip-app --profile DEFAULT -o json` reports active
-  deployment `01f14ff2c4cd10b99ebad8f8785c307f`, `SUCCEEDED`, with the
+  deployment `<deployment-id>`, `SUCCEEDED`, with the
   app `RUNNING` and only
   `sql_warehouse`, `genie_space`, `database`, and `lifecycle_sync_job`
   resources. No secret or collector resource is attached.
@@ -177,18 +177,18 @@ The transport path has been proven with a short-lived, headerless
 collector deployment and then restored to the normal stdout-only sandbox
 posture:
 
-- Proof deployment `01f14fe0164a1b6388f9d240679492db` included the base
+- Proof deployment `<deployment-id>` included the base
   app env/resource bindings plus `MIP_OTEL_ENDPOINT` pointing at a
   temporary collector. `/api/v1/admin/health` returned `log_export=otlp`,
   `warehouse/lakebase/genie=up`, and all breakers closed.
 - A sanitized `POST /api/v1/telemetry/rum` probe returned `202` with
-  correlation id `b07b2f0825a043188fda96e041a14d19`.
+  correlation id `<correlation-id>`.
 - The collector received an OTLP HTTP protobuf POST containing the same
   `http_request` log body and correlation id for
   `/api/v1/telemetry/rum`; collector request id
-  `f080e74e-2771-4db5-b895-4e9e186dca14`.
+  `<request-id>`.
 - The sandbox was then redeployed without OTLP env vars as deployment
-  `01f14fee2c4415e2b8e4eed4d192e950`; `/api/v1/admin/health` again reports
+  `<deployment-id>`; `/api/v1/admin/health` again reports
   `log_export=stdout-only`.
 
 This closes the app-side OTLP transport proof. A customer production
@@ -206,19 +206,19 @@ without committing or printing a header value:
 - The existing sandbox app was updated with an app secret resource named
   `otel_headers`, preserving the four existing app resources
   (`sql_warehouse`, `genie_space`, `database`, `lifecycle_sync_job`).
-- Temporary deployment `01f14ff1cb5513a9824b1e040701141d` used a full
+- Temporary deployment `<deployment-id>` used a full
   `env_vars` payload with `MIP_OTEL_HEADERS` set through
   `value_from=otel_headers`, not a plaintext value.
 - `/api/v1/admin/health` returned `log_export=otlp`,
   `warehouse/lakebase/genie=up`, and all breakers closed.
 - A sanitized `POST /api/v1/telemetry/rum` probe returned `202` with
-  correlation id `c864cd1bbbf44779874fdb235ae7c6bf`.
+  correlation id `<correlation-id>`.
 - The collector received OTLP request
-  `d64260ce-232a-498e-bb9a-4bf65306c090` with a matching
+  `<request-id>` with a matching
   `/api/v1/telemetry/rum` log body and inbound request header
   `x-mip-otel-proof=proof-20260515T000246Z`.
 - The sandbox was then redeployed without OTLP env vars as deployment
-  `01f14ff2c4cd10b99ebad8f8785c307f`; `/api/v1/admin/health` again reports
+  `<deployment-id>`; `/api/v1/admin/health` again reports
   `log_export=stdout-only`; the temporary app secret resource was removed;
   and the temporary Databricks Secret was deleted.
 

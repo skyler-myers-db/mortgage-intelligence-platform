@@ -70,7 +70,7 @@ databricks apps deploy mip-app --profile DEFAULT --mode SNAPSHOT --timeout 20m -
 
 Live deployment:
 
-- Deployment ID: `01f150c39e6a10ac95013a755a1ac29c`
+- Deployment ID: `<deployment-id>`
 - App status: `RUNNING / ACTIVE`
 - `/api/health`: `warehouse/lakebase/genie=up`, all circuit breakers `closed`
 - `/api/admin/health`: `recent_errors_count=0`,

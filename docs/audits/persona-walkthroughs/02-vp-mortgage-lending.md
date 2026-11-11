@@ -5,12 +5,12 @@
 > *In-character audit. I am "Vera," VP of Mortgage Lending at Summit Mortgage. My day is operational: queue management, threshold tuning, offer-mix discipline, retention/recapture economics, and credit-committee defensibility. I do not care about board talking points — I care about whether my LO team is working the right leads with the right pitch, and whether I can defend every decision in a compliance audit.*
 
 **Auditor:** Claude (Cowork) acting as Vera, VP Lending
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14d00b90b15bba16e412e31a8edbd`
-**Method:** Read-only Chrome screenshots, live `/api/*` calls with my workspace OAuth, direct UC SQL on warehouse `81d08d4fa2d799e9`, code inspection. Synthetic borrower IDs only.
+**App:** `https://<app-host>`, deployment `<deployment-id>`
+**Method:** Read-only Chrome screenshots, live `/api/*` calls with my workspace OAuth, direct UC SQL on warehouse `<warehouse-id>`, code inspection. Synthetic borrower IDs only.
 
 ## Remediation addendum — 2026-05-11
 
-**Current deployment validated:** `01f14d79bedf1e02838367fd7dad57dd`.
+**Current deployment validated:** `<deployment-id>`.
 
 The issues below are the original VP Lending audit findings. Engineering treated every P0/P1/P2 item as a remediation TODO and validated the deployed app after implementation.
 
@@ -41,7 +41,7 @@ The issues below are the original VP Lending audit findings. Engineering treated
 
 ### Independent re-validation (Claude, 2026-05-11 19:25–20:50 UTC)
 
-I re-exercised every claim above against the live deployment `01f14d79bedf1e02838367fd7dad57dd` (`SUCCEEDED / RUNNING / ACTIVE` per `databricks api get /api/2.0/apps/mip-app`), plus a no-regression sweep on every HoG fix. **Seventeen of eighteen V-findings verified; one was correctly deferred.**
+I re-exercised every claim above against the live deployment `<deployment-id>` (`SUCCEEDED / RUNNING / ACTIVE` per `databricks api get /api/2.0/apps/mip-app`), plus a no-regression sweep on every HoG fix. **Seventeen of eighteen V-findings verified; one was correctly deferred.**
 
 | Finding | Engineering claim | Independent re-validation |
 |---|---|---|
@@ -54,7 +54,7 @@ I re-exercised every claim above against the live deployment `01f14d79bedf1e0283
 | P1-V7 Relationship not visible in queue | Added sortable Relationship column | ✅ Verified. New "RELATIONSHIP" column shows `Competitor / Former / Current` pill in the live screenshot of `/lead-queue`. |
 | P1-V8 Retention product-policy ambiguity | Tone, not offer code | ✅ Verified for messaging (current-customer drafts are retention-tone). The product-policy disagreement (only 6,638 of 559K current customers route to the `retention` offer code via `fn_next_best_offer`) remains intentional per the team's decision tree. |
 | P1-V9 Borrower search missing | Global search with `/` and prefix lookup | ✅ Verified. Search input visible top-right of the AppShell ("Search borrower, ZIP, city"). `GET /api/borrowers/search?q=B-16E` returns 6 matching borrowers with full record. (Path is `/api/borrowers/search?q=…`, not `?q=…` on `/api/borrowers/`.) |
-| P1-V10 Audit filters missing | Server-side filters + Admin Audit Explorer | ✅ Verified. `?actor=skyler@entrada.ai`, `?entity_id=B-16EPJSX5CKA14`, `?event_type=OUTREACH_REJECT`, `?action=outreach.approve`, `?since=2026-05-11T19:00:00Z` all return correctly-filtered rows. New "Audit explorer" section visible on `/admin-config` with ENTITY ID / ACTION / EVENT TYPE inputs. |
+| P1-V10 Audit filters missing | Server-side filters + Admin Audit Explorer | ✅ Verified. `?actor=<operator-email>`, `?entity_id=B-16EPJSX5CKA14`, `?event_type=OUTREACH_REJECT`, `?action=outreach.approve`, `?since=2026-05-11T19:00:00Z` all return correctly-filtered rows. New "Audit explorer" section visible on `/admin-config` with ENTITY ID / ACTION / EVENT TYPE inputs. |
 | P2-V11 Queue count incomplete | Footer shows visible + total | ✅ Verified. Footer reads **"Showing 500 ranked borrowers of 282,867 total matching filters · capped at 500"**. |
 | P2-V12 Column sorting missing | Score/rate/equity/confidence/relationship sortable | ✅ Verified in source (`LeadTable.tsx:350-373, 830`). `sortKey` / `sortDir` state, `onClick` toggles, `aria-pressed` / `aria-sort` accessibility hooks. Couldn't manually drive a click in read-only Chrome, but the wiring is there. |
 | P2-V13 Approval `subject_clip` missing | Approve/reject write masked clip | ✅ Verified. New approve row I generated carries `subject_clip: "clip_ref_e6a9e4203a78"`; new reject row carries `subject_clip: "clip_ref_…"`. |
@@ -100,7 +100,7 @@ I re-exercised every claim above against the live deployment `01f14d79bedf1e0283
 
 ## What works well (Vera-perspective wins)
 
-- **Audit ledger is real.** Every approve / reject / draft / view writes a structured row to `mip_app.audit_events` with the right `actor=skyler@entrada.ai` (from the edge `X-Forwarded-Email`, not a client-supplied actor string). I verified the row contents post-action.
+- **Audit ledger is real.** Every approve / reject / draft / view writes a structured row to `mip_app.audit_events` with the right `actor=<operator-email>` (from the edge `X-Forwarded-Email`, not a client-supplied actor string). I verified the row contents post-action.
 - **Reject endpoint persists a rationale.** When I POSTed `/api/outreach/reject` with `rationale: "Borrower opted out per CRM Do-Not-Call list; defer to relationship manager"`, the rationale landed in `payload_json.rationale` on the audit row. The plumbing exists — see the UI finding below for the gap.
 - **Idempotent approvals across retries.** Re-using a `request_id` returns the same `approval_id` and skips the duplicate audit row. Cross-borrower reuse with the same `request_id` correctly 409s. Both verified.
 - **Borrower 360 evidence trail is committee-grade.** Every borrower drilldown returns 8+ evidence rows citing `mip.silver.*` tables, a "why now" rationale paragraph, the rule version (`min_spread_bps_applied`, `min_equity_pct_applied`), and a confidence score. I can hand this to compliance.

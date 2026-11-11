@@ -63,7 +63,7 @@ DRILL_BACKEND_PID=""
 EVIDENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/evidence"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 I_REALLY_MEAN_IT=0
-HEALTH_ACTOR_HEADER="X-Forwarded-Email: resilience-drill@databricks.local"
+HEALTH_ACTOR_HEADER="X-Forwarded-Email: resilience-drill@summit.example"
 # Recovery timeout for the warehouse-real / lakebase-real targets: how
 # long to poll for RUNNING/AVAILABLE after the drill restarts the
 # infrastructure. Configurable via --real-recovery-seconds (explicit)

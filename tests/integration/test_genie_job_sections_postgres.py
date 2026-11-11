@@ -29,11 +29,12 @@ from backend.services import genie_completion_record as record
 from backend.services import genie_completion_sections as sections
 from backend.services.genie_completion_stages import GenieJobFailureKind
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _HASH = "d" * 64
 
 

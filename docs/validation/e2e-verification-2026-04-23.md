@@ -2,8 +2,8 @@
 
 > **Internal validation artifact. Not public release collateral.**
 
-Base URL: `https://mip-app-2543889327043640.aws.databricksapps.com`  
-Auth: `databricks auth token -p DEFAULT` (OAuth bearer, skyler@entrada.ai)  
+Base URL: `https://<app-host>`  
+Auth: `databricks auth token -p DEFAULT` (OAuth bearer, `<operator-email>`)  
 Synthetic test-id prefix: `B-TEST-*`
 
 ## Endpoint results
@@ -54,7 +54,7 @@ Synthetic test-id prefix: `B-TEST-*`
     "lakebase": "closed",
     "genie": "closed"
   },
-  "actor_cache_key": "actor_01cd5c657e3bbfc5"
+  "actor_cache_key": "actor_<actor-key>"
 }
 ```
 ### config.options — `GET /api/config/options`
@@ -711,8 +711,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "approved": true,
-  "approval_id": "4602e7cc-f994-4f91-b2e4-a1ecad69c8b2",
-  "audit_event_id": "b1f79ac8-f79e-49c5-b903-f912aa3d4779",
+  "approval_id": "<approval-id>",
+  "audit_event_id": "<event-id>",
   "assigned_to_email": null,
   "follow_up_at": null
 }
@@ -722,16 +722,16 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "9d7605c0-9b5b-4c00-948b-cf263321b406",
-  "audit_event_id": "2b01f673-353e-417c-bafd-4043b948b240"
+  "approval_id": "<approval-id>",
+  "audit_event_id": "<event-id>"
 }
 ```
 ### audit.events — `GET /api/audit/events?limit=10`
 
 ```json
 {
-  "event_id": "4d0cc7bc-d60b-4d55-81c1-4b63aca55072",
-  "actor": "skyler@entrada.ai",
+  "event_id": "<event-id>",
+  "actor": "<operator-email>",
   "action": "draft_outreach",
   "entity_type": "outreach_draft",
   "entity_id": "B-0QFTCDS92FP00",
@@ -755,7 +755,7 @@ Synthetic test-id prefix: `B-TEST-*`
   "subject_clip": "clip_ref_05f0d03cdc07",
   "subject_segment": null,
   "request_id": null,
-  "correlation_id": "4260100a92874dfa85ed0976d3a721fc"
+  "correlation_id": "<correlation-id>"
 }
 ```
 ### genie.message — `POST /api/genie/message`
@@ -769,9 +769,9 @@ Synthetic test-id prefix: `B-TEST-*`
   "trusted_assets": [
     "mip.gold.borrower_360"
   ],
-  "message_id": "trusted-sql-ae293f4c7f08ec6c",
+  "message_id": "trusted-sql-<question-hash>",
   "elapsed_ms": 0,
-  "question_hash": "ae293f4c7f08ec6c",
+  "question_hash": "<question-hash>",
   "sql_query": "SELECT COUNT(*) AS in_the_money_borrowers\n     , MAX(refreshed_at) AS refreshed_at\nFROM mip.gold.borrower_360\nWHERE in_the_money = TRUE",
   "row_count": 1,
   "proof": {
@@ -795,7 +795,7 @@ Synthetic test-id prefix: `B-TEST-*`
     "reasoning_trace": [],
     "known_data_gaps": [],
     "conversation_id": "",
-    "message_id": "trusted-sql-ae293f4c7f08ec6c",
+    "message_id": "trusted-sql-<question-hash>",
     "elapsed_ms": 0,
     "generated_at": "2026-06-14T06:49:25.197079+00:00"
   },
@@ -823,7 +823,7 @@ Synthetic test-id prefix: `B-TEST-*`
         ],
         "visualization_kind": "metric",
         "row_count": 1,
-        "sql_hash": "aad8aa53a6a1ef48",
+        "sql_hash": "<sql-hash>",
         "result_filters": {
           "segment_codes": [
             "itm"
@@ -831,7 +831,7 @@ Synthetic test-id prefix: `B-TEST-*`
           "segment_mode": "any"
         }
       },
-      "request_id": "genie-action-ef8acd95-3347-4933-868d-573832c5d335",
+      "request_id": "genie-action-<request-id>",
       "confirmation_token": "eyJhY3Rpb25fdHlwZSI6Im9wZW5fY29ob3J0IiwiYWN0b3IiOiJza3lsZXJAZW50cmFkYS5haSIsImJvcnJvd2VyX2lkcyI6W10sImNvbnZlcnNhdGlvbl9pZCI6IiIsImNyaXRlcmlhX2hhc2giOiJlNmE2ZDA1MzE4NzUxYjA2IiwiZXhwIjoxNzgxNDI2OTY1LCJraWQiOiJwcm9jZXNzIiwibWVzc2FnZV9pZCI6InRydXN0ZWQtc3FsLWFlMjkzZjRjN2YwOGVjNmMiLCJub25jZSI6IjdaeUw2M015ZUYxdXk4VnciLCJxdWVzdGlvbl9oYXNoIjoiYWUyOTNmNGM3ZjA4ZWM2YyIsInJlcXVlc3RfaWQiOiJnZW5pZS1hY3Rpb24tZWY4YWNkOTUtMzM0Ny00OTMzLTg2OGQtNTczODMyYzVkMzM1Iiwicm91dGUiOiIvbGVhZC1xdWV1ZT9zZWdtZW50PWl0bSIsInRydXN0ZWRfYXNzZXRzIjpbIm1pcC5nb2xkLmJvcnJvd2VyXzM2MCJdLCJ2IjoxfQ.OR6DK1b8WCkkf0xBbx2BVn7gxUUz98ldUHNBTrRjTcM"
     },
     {
@@ -849,7 +849,7 @@ Synthetic test-id prefix: `B-TEST-*`
         ],
         "visualization_kind": "metric",
         "row_count": 1,
-        "sql_hash": "aad8aa53a6a1ef48",
+        "sql_hash": "<sql-hash>",
         "result_filters": {
           "segment_codes": [
             "itm"
@@ -857,7 +857,7 @@ Synthetic test-id prefix: `B-TEST-*`
           "segment_mode": "any"
         }
       },
-      "request_id": "genie-action-01e5ebd1-5e53-4fd7-ab36-ac220a62d9d4",
+      "request_id": "genie-action-<request-id>",
       "confirmation_token": "eyJhY3Rpb25fdHlwZSI6ImNyZWF0ZV9kcmFmdF9jYW1wYWlnbiIsImFjdG9yIjoic2t5bGVyQGVudHJhZGEuYWkiLCJib3Jyb3dlcl9pZHMiOltdLCJjb252ZXJzYXRpb25faWQiOiIiLCJjcml0ZXJpYV9oYXNoIjoiZTZhNmQwNTMxODc1MWIwNiIsImV4cCI6MTc4MTQyNjk2NSwia2lkIjoicHJvY2VzcyIsIm1lc3NhZ2VfaWQiOiJ0cnVzdGVkLXNxbC1hZTI5M2Y0YzdmMDhlYzZjIiwibm9uY2UiOiJnY1BDelJ4YkNYMWNveUVqIiwicXVlc3Rpb25faGFzaCI6ImFlMjkzZjRjN2YwOGVjNmMiLCJyZXF1ZXN0X2lkIjoiZ2VuaWUtYWN0aW9uLTAxZTVlYmQxLTVlNTMtNGZkNy1hYjM2LWFjMjIwYTYyZDlkNCIsInJvdXRlIjoiL2xlYWQtcXVldWU_c2VnbWVudD1pdG0iLCJ0cnVzdGVkX2Fzc2V0cyI6WyJtaXAuZ29sZC5ib3Jyb3dlcl8zNjAiXSwidiI6MX0.mcH6qToYikEd9dVS3dV15O6_sVfe5PxN2FaeAKPZwrM"
     }
   ],

@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of the Module 0 product's disaster-recovery posture: state-surface inventory, Lakebase backup + retention, UC gold-table rebuild path, schema migration rollback, audit-ledger archival, secret rotation, bundle-deploy rollback, and three concrete "what if" scenarios (warehouse destroyed, Lakebase corrupts, bad bundle deploy lands in production).
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15185868d1fa285ea9a3a4c94afd4` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Mapped 16 Lakebase tables + 15 gold CTAS source files + 1 Genie space + the secret resolution chain. Read the existing `docs/runbook.md` (664 LOC) and `docs/runbook-multi-catalog.md` (150 LOC) for DR coverage. Inspected `databricks.yml` resource declarations for retention/HA primitives. Verified `lakebase/schema.sql` migration patterns (forward-only `IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`). Audited the HMAC action token secret rotation surface. Mapped the `databricks bundle deploy` + `databricks apps deploy --mode SNAPSHOT` rollback affordances.
 
 ---
@@ -224,7 +224,7 @@ deployment.
 - `tools/databricks/export_action_audit.py` — append-only audit export helper
 - `docs/disaster-recovery.md` — executable DR runbook
 - `docs/runbook.md`, `docs/deployment.md` — linked DR operator paths
-- Live deployment: `01f15185868d1fa285ea9a3a4c94afd4`
+- Live deployment: `<deployment-id>`
 
 ---
 

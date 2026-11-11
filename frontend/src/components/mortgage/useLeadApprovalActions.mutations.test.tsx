@@ -294,7 +294,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
   });
 
   it('a request-scoped queue sends approval_request_batch_id on single, bulk approve, bulk reject and row reject (flow-02)', async () => {
-    const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const BATCH = '5eed00a1-0000-4000-8000-0000000000a1';
     const batchesOf = (calls: unknown[][]) => calls.map((call) => (call[1] as { approval_request_batch_id: unknown }).approval_request_batch_id);
     // Unscoped first: the field is null and the intents mint their own ids.
     mount();
@@ -333,7 +333,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
   });
 
   it('the request scope joins an intent only when set: unscoped request ids are unchanged', async () => {
-    const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const BATCH = '5eed00a1-0000-4000-8000-0000000000a1';
     apiMocks.approve.mockRejectedValue(new ApiError('Internal Server Error', { path: '/api/outreach/approve', status: 500 }));
     mount();
     const reviewed = draft('gen-review-scope');

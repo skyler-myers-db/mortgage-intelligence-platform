@@ -17,6 +17,40 @@ from backend.schemas.lender_identity_record import (
 _ACTIVE_REQUIRES_READY_CONSTRAINT = "campaigns_active_requires_ready_treatment_chk"
 _CAMPAIGN_SEED_INSERT_RE = re.compile(r"INSERT INTO mip_app\.campaigns\b.*?;", re.DOTALL)
 
+# lakebase/seed_campaigns.sql names its demo operator (the sales_team admin
+# row, the archived campaigns' owner and the sample approvals' actor) by this
+# token, never by an address: a committed address would name one install's
+# operator in every install (M1-PR4).
+SEED_OPERATOR_TOKEN = "{{mip_seed_operator_email}}"
+SEED_OPERATOR_EMAIL_ENV = "MIP_SEED_OPERATOR_EMAIL"
+# The operator a seed renders when the install configures none: a reserved
+# example domain (RFC 2606), so it names nobody.
+SYNTHETIC_SEED_OPERATOR = "operator@summit.example"
+# One address and nothing else; no quote, backslash or space can reach the
+# single-quoted literal the token sits in.
+_SEED_OPERATOR_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+
+def render_seed_sql(seed_sql: str, *, seed_operator_email: str = "") -> str:
+    """The seed with its operator token rendered: the install's operator, else the synthetic one.
+
+    The operator is the profile's ``MIP_SEED_OPERATOR_EMAIL``, a demo-only
+    field (tools/clients/rules.py refuses it for a customer install), which
+    the bundle passes to the migrate job as ``--seed-operator-email``. A
+    customer install, and a demo that sets none, seed the synthetic operator.
+    The rendered text is what apply executes and what the schema-input digest
+    covers, so an install renders the same seed, and the same digest, on
+    every run with the same value.
+    """
+
+    operator = seed_operator_email.strip() or SYNTHETIC_SEED_OPERATOR
+    if _SEED_OPERATOR_RE.fullmatch(operator) is None:
+        raise RuntimeError(f"{SEED_OPERATOR_EMAIL_ENV} must be exactly one email address")
+    rendered = seed_sql.replace(SEED_OPERATOR_TOKEN, operator)
+    if "{{" in rendered:
+        raise RuntimeError("lakebase/seed_campaigns.sql holds an unknown template token")
+    return rendered
+
 
 def _preflight_seed_schema_parity(schema_sql: str, seed_sql: str) -> None:
     """Reject schema/seed texts that cannot replay together, before any mutation.
