@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests.fixtures.client_profiles import IDENTITY_IDS, demo_profile, split_contexts
+from tests.fixtures.client_profiles import IDENTITY_IDS, app_id, demo_profile, split_contexts
 from tools.clients import dispatch_acks as acks
 from tools.clients import dispatch_protections as protections
 from tools.clients import validation_app as va
@@ -418,8 +418,16 @@ def test_an_operator_bearer_that_is_a_workspace_admin_or_another_identity_export
 
 @pytest.mark.parametrize(
     "digest",
-    [None, "", _validate_digest(DATABRICKS_HOST="https://dbc-other.cloud.databricks.com"), _validate_digest(MIP_APP_NAME="mip-other"), _validate_digest("other-run")],
-    ids=["missing", "empty", "other-host", "other-app", "other-run"],
+    [
+        None,
+        "",
+        _validate_digest(DATABRICKS_HOST="https://dbc-other.cloud.databricks.com"),
+        _validate_digest(MIP_APP_NAME="mip-other"),
+        _validate_digest(MIP_DEFAULT_CATALOG="lender_two"),
+        _validate_digest(MIP_IDENTITY_IDS_JSON=json.dumps({**IDENTITY_IDS, "operator2": app_id(12)})),
+        _validate_digest("other-run"),
+    ],
+    ids=["missing", "empty", "other-host", "other-app", "other-catalog", "other-identity-map", "other-run"],
 )
 def test_the_browser_job_mints_nothing_unless_client_holds_the_validate_profile(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], digest: str | None

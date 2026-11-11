@@ -27,10 +27,16 @@ run-name: nightly client=${{ inputs.client }} sha=${{ github.sha }}
 # (the Genie suites). Through the App API it writes campaigns under a per-run
 # marker, archived again at the end; outreach drafts and approvals of real
 # leads, with their audit rows, which stay (an approval is a decision
-# record: nothing is ever sent); and Genie turns. The App API mutation suites
-# run only on an App whose app_env is dev or sandbox (install-class); a prod
-# App skips them. Lead outcomes, call dispositions and loan-officer
-# assignments are never written. What needs more runs in scripts/deploy.sh at
+# record: nothing is ever sent); Genie turns; and the other App actions the
+# browser specs take (Genie feedback, Growth Agent runs and a watchlist with
+# its notification drafts, never sent), with their audit rows, which stay.
+# The App API mutation suites run only on an App whose app_env is dev or
+# sandbox (install-class); a prod App skips them, and the gate's verdict says
+# so. Lead outcomes, call dispositions, snoozes and loan-officer assignments
+# are never written: on every install the suite test and the browser tests
+# that write them are deselected (listed gaps), and
+# tests/unit/test_nightly_workflow_writes.py scans every test nightly runs for
+# those writes. What needs more runs in scripts/deploy.sh at
 # deploy time, with an operator, or is a listed gap (docs/deployment.md, "Live
 # validation per client"): the silver, gold and FRED refreshes (data phase);
 # the verifier boundary and the Growth Agent evaluation (release phase,
@@ -751,10 +757,13 @@ jobs:
         # this spec is live-validation-only; PR CI runs a --list parse check.
         # MIP_APP_URL is required for this deployed path, so the config's
         # webServer block is disabled and real_data.spec.ts attaches
-        # MIP_BEARER_TOKEN as an Authorization header.
+        # MIP_BEARER_TOKEN as an Authorization header. Deselected on every
+        # install (listed gaps): the four tests that write a lead outcome or a
+        # call disposition on a real lead, with no run marker and no cleanup.
         working-directory: frontend
         run: |
           npx playwright test \
+            --grep-invert "closed-loop outcome labels reject PII|duplicate disposition request ids replay|simultaneous outcome idempotency race|sales outcomes: live manual import writes" \
             tests/e2e/real_data.spec.ts \
             tests/e2e/live_hardening_regressions.spec.ts \
             tests/e2e/layout-stability.spec.ts \
@@ -800,14 +809,16 @@ jobs:
       - name: Run mocked economics scatter response-shape canary
         # The selected test route-fulfills only the dense points response to
         # exercise cluster pagination. It is deliberately separated from the
-        # real-UC step and must never be cited as live data proof.
+        # real-UC step and must never be cited as live data proof. Unanchored:
+        # Playwright greps "<project> <file> <describe> <title>", so a `^`
+        # before the test's own title matches no test.
         working-directory: frontend
         env:
           ECONOMICS_SCATTER_MOCKED: '1'
         run: |
           npx playwright test \
             tests/e2e/economics_scatter.spec.ts \
-            --grep '^mocked response-shape canary:' \
+            --grep 'mocked response-shape canary:' \
             --reporter=list --workers=1
       - name: Run procurement accessibility and browser/device matrix
         # Separate from the golden path so the standard live suite stays

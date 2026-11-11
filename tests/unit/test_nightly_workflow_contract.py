@@ -19,8 +19,10 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
+from tests.fixtures.workflow_expressions import expressions_in, references, scalars
 from tools import live_validation_gate as gate
 from tools.clients import validation_profile as vp
 from tools.clients import workflow_contexts as contexts
@@ -43,8 +45,6 @@ BROWSER_JOB = "playwright-e2e-live"
 VALIDATOR_JOBS = ("parity-live", "kill-drill-simulated", "genie-fuzz-standard", "genie-fuzz-deep")
 WORKSPACE_JOBS = (*VALIDATOR_JOBS, BROWSER_JOB)
 GUARD_JOBS = ("check-dispatch", "check-validate-environment")
-EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.S)
-CONTEXT_NAME = re.compile(r"\b(secrets|vars)\.([A-Z][A-Z0-9_]*)")
 # A status check function that lets a job run after a failed need.
 STATUS_FUNCTION = re.compile(r"\b(?:always|failure|cancelled)\s*\(")
 
@@ -98,14 +98,21 @@ def _strings(node: object) -> Iterator[str]:
             yield from _strings(item)
 
 
-def _context_names(node: object) -> set[tuple[str, str]]:
-    """Every (context, NAME) an expression under ``node`` reads, by value or by presence."""
+def _context_names(node: object) -> set[tuple[str, str | None]]:
+    """Every (context, NAME) an expression under ``node`` reads, by value or by presence.
 
-    found: set[tuple[str, str]] = set()
-    for text in _strings(node):
-        for expression in EXPRESSION.findall(text):
-            found.update(CONTEXT_NAME.findall(expression))
-    return found
+    Every form counts (tests/fixtures/workflow_expressions.py): ``secrets.X``
+    is (secrets, X); a bracket, a ``format()`` index, ``toJSON(secrets)`` or the
+    bare context is (secrets, None), which no allowed name set holds. An
+    ``if:`` value is an expression even without ``${{ }}``.
+    """
+
+    return {
+        reference
+        for path, value in scalars(node)
+        for expression in expressions_in(value, condition=bool(path) and path[-1] == "if")
+        for reference in references(expression)
+    }
 
 
 def _pytest_files() -> dict[str, set[str]]:
@@ -218,30 +225,81 @@ def test_no_job_authenticates_as_the_deployer_or_binds_a_deploy_only_name() -> N
                 assert variable not in (step.get("env") or {}), (name, step.get("name"), variable)
 
 
-def test_the_operator_secrets_reach_only_the_env_of_the_minting_steps() -> None:
-    """Every string of every job: job-level keys, each step's env, with, run and if.
-
-    An operator secret bound at job level would reach ``npm ci``, ``npx
-    playwright install`` and every Playwright step; one inline in a ``run:``
-    would print in the step's script. Only the env of a ``validation_session
-    operators`` step of the browser job may name one.
-    """
+def _operator_secret_violations(workflow: dict[str, Any]) -> tuple[list[str], int]:
+    """(each operator secret or whole/indexed context bound outside a minting step's env, the minting envs seen)."""
 
     operator_names = set(vp.OPERATOR_SECRETS.values())
+    violations = [f"workflow level: {reference}" for reference in _context_names({k: v for k, v in workflow.items() if k != "jobs"})]
     minting_envs = 0
-    for name, job in _jobs().items():
+    for name, job in workflow["jobs"].items():
         job_level = {key: value for key, value in job.items() if key != "steps"}
-        assert not {found for _c, found in _context_names(job_level)} & operator_names, (name, "job level")
+        violations += [f"{name} job level: {ref}" for ref in _context_names(job_level) if ref[1] is None or ref[1] in operator_names]
         for step in job["steps"]:
             minting = name == BROWSER_JOB and "validation_session operators" in step.get("run", "")
             for key, value in step.items():
-                found = {context_name for _c, context_name in _context_names(value)} & operator_names
+                where = (name, step.get("name", step.get("uses")), key)
+                references_here = _context_names({key: value})
+                violations += [f"{where}: {ref}" for ref in references_here if ref[1] is None]
+                found = {context_name for _c, context_name in references_here} & operator_names
                 if minting and key == "env":
-                    assert found == operator_names, step["name"]
+                    if found != operator_names:
+                        violations.append(f"{where}: binds {sorted(found)}")
                     minting_envs += 1
-                elif name != "check-dispatch":
-                    assert not found, (name, step.get("name", step.get("uses")), key, sorted(found))
+                elif name != "check-dispatch" and found:
+                    violations.append(f"{where}: {sorted(found)}")
+    return violations, minting_envs
+
+
+def test_the_operator_secrets_reach_only_the_env_of_the_minting_steps() -> None:
+    """Every string of the workflow: its top-level keys, each job's keys, each step's env, with, run and if.
+
+    An operator secret bound at workflow or job level would reach ``npm ci``,
+    ``npx playwright install`` and every Playwright step; one inline in a
+    ``run:`` would print in the step's script. Only the env of a
+    ``validation_session operators`` step of the browser job may name one, by
+    name: a bracket, ``format()`` or whole-context form is refused anywhere.
+    """
+
+    workflow = _workflow()
+    violations, minting_envs = _operator_secret_violations(workflow)
+
+    assert violations == []
     assert minting_envs == 4, "positive control: the walk reaches each minting step's env"
+    assert set(workflow["env"]) == {"PYTHON_VERSION", "NODE_VERSION"}
+
+
+@pytest.mark.parametrize(
+    ("where", "expression"),
+    [
+        ("workflow", "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"),
+        ("workflow", "${{ secrets['DATABRICKS_ADMIN_CLIENT_SECRET'] }}"),
+        ("job", "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"),
+        ("job", "${{ secrets['DATABRICKS_ADMIN_CLIENT_SECRET'] }}"),
+        ("job", "${{ secrets[format('{0}_CLIENT_SECRET', 'DATABRICKS_ADMIN')] }}"),
+        ("job", "${{ toJSON(secrets) }}"),
+        ("npm step", "${{ secrets['DATABRICKS_CLIENT_SECRET'] }}"),
+        ("npm step if", "secrets.DATABRICKS_CLIENT_SECRET != ''"),
+        ("minting step", "${{ secrets['DATABRICKS_OPERATOR2_CLIENT_SECRET'] }}"),
+    ],
+)
+def test_an_operator_secret_bound_anywhere_else_or_in_another_form_is_caught(where: str, expression: str) -> None:
+    """The dot form at job level only was caught before: the workflow env and the bracket form passed."""
+
+    workflow = _workflow()
+    npm = next(step for step in workflow["jobs"][BROWSER_JOB]["steps"] if step.get("run", "").startswith("npm "))
+    minting = next(step for step in workflow["jobs"][BROWSER_JOB]["steps"] if "validation_session operators" in step.get("run", ""))
+    target = {
+        "workflow": workflow["env"],
+        "job": workflow["jobs"][BROWSER_JOB]["env"],
+        "npm step": npm.setdefault("env", {}),
+        "minting step": minting["env"],
+    }
+    if where == "npm step if":
+        npm["if"] = expression
+    else:
+        target[where]["MIP_PLAYWRIGHT_ADMIN_SECRET"] = expression
+
+    assert _operator_secret_violations(workflow)[0], (where, expression)
 
 
 def test_each_collect_step_is_the_generated_validation_profile_block() -> None:
@@ -443,7 +501,7 @@ def test_simulated_drills_never_receive_static_lakebase_secrets() -> None:
     job = _jobs()["kill-drill-simulated"]
     export = _step("kill-drill-simulated", "Export simulated drill env")["run"]
 
-    assert not [ref for ref in _context_names(job) if ref[1].startswith("LAKEBASE")]
+    assert not [ref for ref in _context_names(job) if ref[1] is None or ref[1].startswith("LAKEBASE")]
     for line in ("LAKEBASE_HOST=invalid.host.example.com", "LAKEBASE_USER=mip-simulated-drill", "LAKEBASE_PASSWORD=drill-invalid-password"):
         assert line in export
     targets = re.findall(r"--target ([a-z-]+)", " ".join(run for _n, run in _runs("kill-drill-simulated")))
@@ -508,8 +566,9 @@ def test_the_header_states_the_corrected_authority() -> None:
         "metastore admin, account admin and MODIFY or MANAGE grants are kept out by the owner's grants",
         "nightly writes product rows only through the App API, and the validator, read-only, opens Genie conversations directly",
         "outreach drafts and approvals of real leads, with their audit rows, which stay",
-        "Lead outcomes, call dispositions and loan-officer assignments are never written",
-        "a prod App skips them",
+        "Lead outcomes, call dispositions, snoozes and loan-officer assignments are never written",
+        "the suite test and the browser tests that write them are deselected",
+        "a prod App skips them, and the gate's verdict says so",
         "tools/live_validation_gate.py --client <key>",
     ):
         assert claim in header, claim
@@ -589,7 +648,10 @@ def test_mocked_canaries_are_explicitly_separate_from_real_uc_proof() -> None:
 
     assert "env" not in real and scatter["env"] == {"ECONOMICS_SCATTER_MOCKED": "1"}
     assert layout["env"] == {"GENIE_PROOF_LAYOUT_MOCKED": "1"}
-    assert "--grep '^mocked response-shape canary:'" in scatter["run"]
+    # Unanchored: Playwright greps "<project> <file> <describe> <title>", so the
+    # `^mocked` this pinned matched no test and failed the job with "No tests
+    # found" (tests/unit/test_nightly_workflow_writes.py selects through it).
+    assert "--grep 'mocked response-shape canary:'" in scatter["run"]
     assert "test.skip(" in spec and "!MOCKED_POINTS_CANARY" in spec
 
 

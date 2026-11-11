@@ -501,3 +501,49 @@ def test_a_malformed_client_key_is_refused_before_any_api_call() -> None:
     result = gate.evaluate(RELEASE, fetch=fetch, now=NOW, client="Client One")
 
     assert (result.status, result.exit_code) == ("API_ERROR", 2)
+
+
+# ---------------------------------------------------------- a prod App's skipped App API suites
+
+
+def _with_steps(conclusion: str | None):
+    """A listing whose Playwright job reports the App API mutation step as ``conclusion`` (None: no steps)."""
+
+    def fetch(path: str) -> object:
+        if path.startswith("actions/runs/"):
+            jobs: list[dict[str, object]] = [{"name": name, "conclusion": "success"} for name in gate.REQUIRED_JOBS]
+            if conclusion is not None:
+                jobs[gate.REQUIRED_JOBS.index(gate.PLAYWRIGHT_JOB)]["steps"] = [
+                    {"name": "Read the install class the App reports", "conclusion": "success"},
+                    {"name": gate.APP_API_MUTATION_STEP, "conclusion": conclusion},
+                ]
+            return {"jobs": jobs}
+        return {"workflow_runs": [_raw(1, RELEASE, "success", 1)]}
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "recorded", "line"),
+    [
+        ("skipped", "skipped", "App API mutation suites: skipped (a prod App"),
+        ("success", "success", "App API mutation suites: success"),
+        (None, "absent", "App API mutation suites: not reported by this run"),
+    ],
+    ids=["prod-skip", "ran", "not-reported"],
+)
+def test_the_verdict_records_whether_the_app_api_mutation_suites_ran(conclusion: str | None, recorded: str, line: str) -> None:
+    """A prod App's green run passes, and says its App API mutation suites were skipped."""
+
+    result = gate.evaluate(RELEASE, fetch=_with_steps(conclusion), now=NOW, diff=same_code(), client=CLIENT)
+
+    assert (result.status, result.app_api_mutation) == ("PASS", recorded)
+    assert result.as_dict()["app_api_mutation"] == recorded
+    assert line in gate.render(result)
+
+
+def test_a_failed_selection_reads_no_jobs_and_records_no_mutation_step() -> None:
+    result = gate.evaluate(RELEASE, fetch=_with_steps("skipped"), now=NOW, diff=same_code(OTHER), client="client-two")
+
+    assert (result.status, result.app_api_mutation) == ("FAIL", None)
+    assert "App API mutation suites" not in gate.render(result)

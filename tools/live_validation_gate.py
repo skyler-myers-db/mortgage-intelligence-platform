@@ -29,6 +29,11 @@ main) certifies code that is runtime-equivalent to the release commit:
   so another install's green run never certifies this one. Without
   ``--client`` any client's run counts, and the verdict says so ("client:
   any"). The refused runs are counted in the verdict, never chosen.
+- A green run on a ``prod`` App skipped the browser job's App API mutation
+  suites (their step's ``if:``, nightly.yml's install-class). The verdict
+  records that step's conclusion from the same jobs payload
+  (``app_api_mutation``: success, skipped, absent), so the skip is evidence
+  that tools/release_readiness.py repeats, not a silent pass.
 
 Exit codes: 0 PASS, 1 FAIL, 2 API error (every caller treats 2 as FAIL).
 Output carries only URLs, shas, ages, job conclusions, the reason and paths.
@@ -67,6 +72,9 @@ PARITY_JOB = "SQL<->Python + Lakebase + Genie live"
 PLAYWRIGHT_JOB = "Playwright (real-UC golden path)"
 DRILL_JOB = "Credential-kill drill (simulated targets)"
 REQUIRED_JOBS = (PARITY_JOB, PLAYWRIGHT_JOB, DRILL_JOB)
+# The Playwright job's App API mutation step (nightly.yml; pinned by
+# tests/unit/test_nightly_workflow_writes.py): a prod App skips it.
+APP_API_MUTATION_STEP = "App API workflow contracts"
 # nightly.yml's run-name (pinned by tests/unit/test_nightly_workflow_contract.py).
 RUN_NAME = re.compile(r"nightly client=(?P<client>[a-z][a-z0-9-]{1,30}) sha=(?P<sha>[0-9a-f]{40})")
 CLIENT_KEY = re.compile(r"[a-z][a-z0-9-]{1,30}")
@@ -128,6 +136,7 @@ class Verdict:
     fix: str | None = None
     client: str | None = None
     refused: dict[str, int] = field(default_factory=dict)
+    app_api_mutation: str | None = None  # the chosen run's APP_API_MUTATION_STEP conclusion
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -234,6 +243,35 @@ def parse_jobs(payload: object) -> dict[str, str]:
         except (KeyError, TypeError) as exc:
             raise GateApiError(f"malformed job entry: {type(exc).__name__}") from exc
     return jobs
+
+
+def parse_step_conclusion(payload: object, job: str, step: str) -> str:
+    """The conclusion of ``step`` in ``job`` from a run's jobs payload; 'absent' when either is missing."""
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+        raise GateApiError("jobs payload has no jobs list")
+    for item in payload["jobs"]:
+        if isinstance(item, dict) and item.get("name") == job:
+            for each in item.get("steps") or []:
+                if isinstance(each, dict) and each.get("name") == step:
+                    return str(each.get("conclusion") or each.get("status") or "unknown")
+    return "absent"
+
+
+def app_api_mutation_note(conclusion: str | None) -> str | None:
+    """How a report states the App API mutation suites of the certifying run."""
+
+    if conclusion is None:
+        return None
+    if conclusion == "skipped":
+        return 'App API mutation suites: skipped (a prod App; docs/deployment.md, "Live validation per client", gaps)'
+    if conclusion == "absent":
+        return "App API mutation suites: not reported by this run"
+    return f"App API mutation suites: {conclusion}"
+
+
+def client_note(client: str | None) -> str:
+    return f"client: {client}" if client else f"client: {ANY_CLIENT}"
 
 
 Fetch = Callable[[str], object]
@@ -418,18 +456,18 @@ def evaluate(
         return Verdict("API_ERROR", "api_error", release_sha, fix="--client must be a client key", client=client)
     fetch = fetch or github_fetch()
     now = now or datetime.now(UTC)
+    payloads: list[object] = []
+
+    def jobs_of(run_id: int) -> dict[str, str]:
+        payloads.append(fetch(f"actions/runs/{run_id}/jobs?per_page=100"))
+        return parse_jobs(payloads[-1])
+
     try:
         runs, refused = select_runs(list_runs(fetch, now), client)
-        result = verdict(
-            runs,
-            release_sha,
-            now,
-            max_age_days,
-            diff=diff,
-            jobs=lambda run_id: parse_jobs(fetch(f"actions/runs/{run_id}/jobs?per_page=100")),
-            client=client,
-        )
+        result = verdict(runs, release_sha, now, max_age_days, diff=diff, jobs=jobs_of, client=client)
         result.refused = refused
+        if payloads:
+            result.app_api_mutation = parse_step_conclusion(payloads[-1], PLAYWRIGHT_JOB, APP_API_MUTATION_STEP)
         return result
     except GateApiError as exc:
         return Verdict("API_ERROR", "api_error", release_sha, fix=f"{exc}; re-run once the GitHub API answers", client=client)
@@ -438,13 +476,15 @@ def evaluate(
 def render(result: Verdict) -> str:
     lines = [f"live-validation gate: {result.status}" + (f" ({result.reason})" if result.reason else "")]
     lines.append(f"  release sha: {result.release_sha}")
-    lines.append(f"  client: {result.client}" if result.client else f"  client: {ANY_CLIENT}")
+    lines.append(f"  {client_note(result.client)}")
     for reason, count in result.refused.items():
         lines.append(f"  refused evidence: {count} {reason.replace('_', '-')} run(s)")
     if result.run_url:
         lines.append(f"  run: {result.run_url} on {result.run_sha}, {result.age_days} days old")
     for name, conclusion in result.jobs.items():
         lines.append(f"  job {name}: {conclusion}")
+    if note := app_api_mutation_note(result.app_api_mutation):
+        lines.append(f"  {note}")
     for path in result.paths:
         lines.append(f"  runtime path changed: {path}")
     if result.fix:

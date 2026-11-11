@@ -4215,12 +4215,13 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 - Live evidence is certified, never asserted. A customer release is the
   `scripts/package_source.sh` zip plus `dist/release-readiness.json`
   generated on the release sha (`python tools/release_readiness.py
-  --release-sha <sha>`) with an empty `cannot_claim`. Its six live checks
-  (SQL/Python parity, Lakebase round trip, Genie live, Playwright live,
-  the simulated resilience drill and the non-admin proof) reach `passed`
-  only from a green `live validation (on demand)` run certified by
-  `tools/live_validation_gate.py`: the newest completed run on `main` whose
-  code is runtime-equivalent to the release (deny-by-default: only docs,
+  --release-sha <sha> --client <client>`) with an empty `cannot_claim`.
+  Its six live checks (SQL/Python parity, Lakebase round trip, Genie live,
+  Playwright live, the simulated resilience drill and the non-admin proof)
+  reach `passed` only from a green `live validation (on demand)` run of that
+  client certified by `tools/live_validation_gate.py`: the newest completed
+  run on `main` whose code is runtime-equivalent to the release
+  (deny-by-default: only docs,
   repo-root `*.md`, tests and workflow files are non-runtime), 14 days old
   or newer, with its three release jobs green. An operator `passed` without
   such a run is recorded `unknown`. The `prod-readiness-gate` workflow
@@ -4271,9 +4272,10 @@ green run whose run-name names that client and the run's own head sha: a
 run of another client (cross-client) or naming another sha (cross-sha) is
 refused, and so is a run from before M1-PR8 (no such run-name).
 `deploy-prod.yml` passes its required `client` input as `--client`;
-`tools/release_readiness.py` takes `--client` too, and without it any
-client's titled run counts and the verdict says `client: any`. It is never
-scheduled.
+`tools/release_readiness.py` takes `--client` too. Without it any client's
+titled run counts, and the gate's verdict and every live check's evidence in
+`release-readiness.json` and `.md` say `client: any`; a customer release
+always passes the customer's `--client`. It is never scheduled.
 
 **Identities.** No job authenticates as the deployer or holds a workspace
 PAT, and every identity a job uses is proven, before any test, not to be in
@@ -4334,17 +4336,30 @@ drifted environment refuses whatever the ack.
   approvals, and approvals bound to those campaigns) with their audit rows,
   which stay: an approval is a governed decision record, nothing is ever
   sent, and the audit trail is append-only;
-- Genie turns and their audit rows (the browser specs, the scorecard).
+- Genie turns and their audit rows (the browser specs, the scorecard);
+- the other App actions the browser specs take, with their audit rows,
+  which stay: Genie answer feedback and open-cohort actions; Growth Agent
+  workflow runs, a saved watchlist and its Slack/Teams notification drafts
+  (drafted, never sent); and the App admin's force-degraded proof.
 
 The App API mutation suites (`App API workflow contracts`) run only when the
 App's `/api/v1/admin/health` reports `app_env` `dev` or `sandbox`
 (`validation_session install-class`): their own guard refuses any other App,
 so a `prod` App skips them and its run can still be green, and an unknown
-`app_env` refuses. Never written: lead outcomes, call dispositions and
-loan-officer assignments. The one suite test that writes them,
-`test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`,
-is deselected: it posts a funded-loan outcome on a real lead that no
-cleanup undoes.
+`app_env` refuses. The skip is evidence, not silence: the gate reads that
+step's conclusion and its verdict, like `tools/release_readiness.py`'s
+Playwright evidence, says `App API mutation suites: skipped`.
+
+Never written, on any install: lead outcomes, call dispositions, snoozes and
+loan-officer assignments. They carry no run marker and no cleanup undoes
+them, so the tests that write them are deselected (listed under gaps): the
+suite test
+`test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`
+(`--deselect`) and four browser tests (the real-UC step's `--grep-invert`).
+`tests/unit/test_nightly_workflow_writes.py` scans every pytest suite,
+Playwright spec and `tools` module nightly runs, with their imports and
+conftests, for those write paths, and fails on one that a running test can
+reach or that no single test holds.
 
 **What left nightly, and its home.** Each runs under the deployer in
 `./scripts/deploy.sh`, at deploy time only: between deploys nothing re-runs
@@ -4390,6 +4405,16 @@ install, never the live one:
 - `test_live_duplicate_outcome_and_disposition_replay_without_breaker_trip`
   (in `test_lakebase_idempotency_live.py`, deselected) writes an
   assignment, a funded-loan outcome and a disposition on a real lead;
+- four browser tests (deselected by `--grep-invert`) write on a real lead:
+  in `movement_closed_loop_regressions.spec.ts`, "closed-loop outcome labels
+  reject PII/raw names and summarize only governed aliases" (a
+  lost-to-competitor outcome; its three refusals write nothing), "duplicate
+  disposition request ids replay without opening the Lakebase breaker" (a
+  connected disposition) and "simultaneous outcome idempotency race produces
+  one durable outcome without a breaker cascade" (an application-submitted
+  outcome); in `real_data.spec.ts`, "sales outcomes: live manual import writes
+  Lakebase ledger and Lead Queue explains status" (an application-submitted
+  outcome, counted in the Sales ops KPIs);
 - on a `prod` App, the whole App API mutation suite (skipped there);
 - the real-infra kill drills, `tools/kill_drill/run_drill.sh` with
   `--target warehouse-real` and `--target lakebase-real`, stop and start the

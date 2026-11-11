@@ -99,6 +99,37 @@ def _github_live_verdict(release_sha: str, client: str | None = None) -> Any:
     return gate.evaluate(gate.resolve_sha(release_sha), client=client)
 
 
+# tools/live_validation_gate.py's ANY_CLIENT, client_note and app_api_mutation_note,
+# held equal by tests/unit/test_release_readiness.py (this module loads the gate
+# only to fetch a verdict).
+ANY_CLIENT = "any (cross-client evidence accepted; pass --client for per-client evidence)"
+PLAYWRIGHT_JOB = LIVE_CHECK_JOBS["playwright_live"]
+
+
+def client_note(client: str | None) -> str:
+    return f"client: {client}" if client else f"client: {ANY_CLIENT}"
+
+
+def app_api_mutation_note(conclusion: str | None) -> str | None:
+    if conclusion is None:
+        return None
+    if conclusion == "skipped":
+        return 'App API mutation suites: skipped (a prod App; docs/deployment.md, "Live validation per client", gaps)'
+    if conclusion == "absent":
+        return "App API mutation suites: not reported by this run"
+    return f"App API mutation suites: {conclusion}"
+
+
+def _gate_notes(verdict: Any, job: str) -> str:
+    """Whose run this is, and for the Playwright job what its App API mutation step did."""
+
+    notes = [client_note(getattr(verdict, "client", None))]
+    mutation = app_api_mutation_note(getattr(verdict, "app_api_mutation", None))
+    if job == PLAYWRIGHT_JOB and mutation is not None:
+        notes.append(mutation)
+    return "; ".join(notes)
+
+
 def _live_evidence(name: str, operator: str, operator_evidence: str | None, passed_claim: str, mode: str, verdict: Any) -> Evidence:
     """One of the six live checks: 'passed' only from a PASS gate verdict; an operator 'failed' stays failed."""
 
@@ -111,19 +142,20 @@ def _live_evidence(name: str, operator: str, operator_evidence: str | None, pass
     job = LIVE_CHECK_JOBS[name]
     run = f"{verdict.run_url} on {verdict.run_sha}, {verdict.age_days} days old" if verdict.run_url else "no certifying run"
     suffix = f"; {OPERATOR_ONLY}" if operator == "passed" else ""
+    notes = _gate_notes(verdict, job)
     if verdict.status == "PASS":
-        return Evidence("passed", f"live-validation gate PASS: {run}; {job}: success", passed_claim)
+        return Evidence("passed", f"live-validation gate PASS ({notes}): {run}; {job}: success", passed_claim)
     if verdict.reason == "later_failure":
-        return Evidence("failed", f"live-validation gate FAIL (later_failure): {run}", f"{passed_claim} cannot be claimed.")
+        return Evidence("failed", f"live-validation gate FAIL (later_failure; {notes}): {run}", f"{passed_claim} cannot be claimed.")
     if verdict.reason == "job_not_success" and verdict.jobs.get(job) != "success":
         conclusion = verdict.jobs.get(job, "absent")
         return Evidence(
             "failed",
-            f"live-validation gate FAIL (job_not_success): {run}; {job}: {conclusion}",
+            f"live-validation gate FAIL (job_not_success; {notes}): {run}; {job}: {conclusion}",
             f"{passed_claim} cannot be claimed.",
         )
     reason = verdict.reason or verdict.status
-    return Evidence("unknown", f"live-validation gate {verdict.status} ({reason}): {run}{suffix}", f"{passed_claim} is unverified.")
+    return Evidence("unknown", f"live-validation gate {verdict.status} ({reason}; {notes}): {run}{suffix}", f"{passed_claim} is unverified.")
 
 
 def _check_zip_hygiene(path: Path) -> Evidence:
@@ -312,6 +344,7 @@ def build_report(args: argparse.Namespace, live_verdict: Any = None) -> dict[str
         "live_evidence": {
             "mode": mode,
             "release_sha": args.release_sha,
+            "client": getattr(args, "client", None) if mode == "github" else None,
             "verdict": live_verdict.as_dict() if mode == "github" and live_verdict is not None else None,
         },
         "cannot_claim": cannot_claim(checks),
@@ -362,6 +395,12 @@ def cannot_claim(checks: dict[str, Evidence]) -> list[str]:
     return blocked
 
 
+def _live_evidence_line(live: dict[str, Any]) -> str:
+    if live["mode"] != "github":
+        return f"`{live['mode']}` (the six live checks stay unverified)"
+    return f"`github`, {client_note(live.get('client'))}"
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Module 0 Release Readiness",
@@ -369,6 +408,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Generated: `{report['generated_at']}`",
         f"- App URL: `{report['app_url'] or 'not provided'}`",
         f"- Release zip: `{report['release_zip']}`",
+        f"- Live evidence: {_live_evidence_line(report['live_evidence'])}",
         "",
         "## Evidence Summary",
         "",
@@ -446,7 +486,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--client",
         default=None,
-        help="the client whose nightly.yml runs are evidence; without it any client's run counts",
+        help="the client whose nightly.yml runs are evidence (a customer release passes it); without it any client's run counts and every live check says 'client: any'",
     )
     parser.add_argument("--mls-listing-status", choices=VALID_FEED_STATUSES, default="unknown")
     parser.add_argument("--building-permit-status", choices=VALID_FEED_STATUSES, default="unknown")
