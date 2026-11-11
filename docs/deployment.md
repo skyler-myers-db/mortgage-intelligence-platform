@@ -2323,7 +2323,13 @@ emergency recipe gates on.
    no creator; the creator is among them), the deploying identity and the
    plan's sha256. Review it, then run with `MIP_GENIE_PIN_ACK=<sha256>` exported
    in the shell (never `.env.local`). Step 0a recomputes the plan immediately
-   before it pins and refuses with nothing changed if the digest moved.
+   before it pins and refuses with nothing changed if the digest moved. In CI
+   the plan's id, holders and deployer are runner masks, so the owner reviews
+   it with `tools.clients.genie_pin_review` (read-only, counts and one digest
+   only): it recomputes the plan's sha256 from the profile's
+   `MIP_IDENTITY_IDS_JSON.deployer`, which must equal the CI log's, and counts
+   the grantees the pre-stop owner-equivalent probe would refuse on that space
+   (the cutover runbook's 10B-0).
 4. **More than one.** Refused as ambiguous.
 
 The preflight runs the same resolution read-only

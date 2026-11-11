@@ -199,8 +199,13 @@ each in the client profile (step 4), never in git:
   `<prefix>-data-owners` group plus the reviewed third-party principal that
   holds `MANAGE` on the governed catalog today. `MIP_GENIE_MANAGER_PRINCIPALS`:
   the reviewed third-party principal that holds `CAN_MANAGE` on the governed
-  Genie space. Without them the pre-stop owner-equivalent probe refuses
-  (docs/deployment.md, "Pre-stop probes").
+  Genie space, and the space's creator, which holds a direct `CAN_MANAGE` from
+  creation, for as long as it keeps that grant (unless the creator is the
+  deployer, which the probe approves anyway). Without them the pre-stop
+  owner-equivalent probe refuses (docs/deployment.md, "Pre-stop probes"). The
+  Genie API names no creator, so this list, not a count, is what names it:
+  10B-0's review counts every holder this list (with the approved owners, the
+  deployer and the platform's `admins` group) leaves out.
 - **Accepted exposure** (`MIP_ACCEPTED_EXPOSURE_JSON`): one exact entry per
   Genie grant reaching the App outside the governed space (the workspace's
   `users` grants): read class for the `CAN_RUN` ones, explicit `elevated`,
@@ -657,27 +662,47 @@ carries the governed title but no pin names it, and no ack names it`, then
 prints the read-only pin plan: `candidate space`, `creator (direct
 CAN_MANAGE; ...)`, `deploying identity` and `pin plan sha256`. In the job log
 the first three are runner masks (`***`, one per direct holder on the creator
-line), and the digest covers the CI deployer, so the plan can be neither read
-nor recomputed from the log. Review it as the owner, read-only, before passing
-the digest on, with the profile's `MIP_GENIE_MANAGER_PRINCIPALS` (step 2)
-exported in that shell for that one command (it is read from the shell only,
-never from `.env.local`):
+line); the digest is printed as it is, but it covers the CI deployer, so the
+plan cannot be read from the log. Review it as the owner, read-only, before
+passing the digest on, with the profile's `MIP_IDENTITY_IDS_JSON` (step 4's
+local pins), `MIP_UC_APPROVED_OWNER_PRINCIPALS` and
+`MIP_GENIE_MANAGER_PRINCIPALS` (step 2) exported in that shell for that one
+command (each is read from the shell only, never from `.env.local`; without
+the deployer pin it refuses):
 
 ```bash
-DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.genie_pin_review --genie-space-name "<genie-space-title>"
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.genie_pin_review --app-name <app-name> --genie-space-name "<genie-space-title>"
 ```
 
-It prints counts only, never an id or a principal name
+It prints counts and one digest, never an id or a principal name
 (`tools/clients/genie_pin_review.py`): how many spaces carry the governed title
-(the pin check pins only exactly one, so anything else is a stop), how many
+(the pin check pins only exactly one, so anything else is a stop); how many
 principals hold a direct `CAN_MANAGE` on that one and whether the owner is one
-of them, and how many of the reviewed managers are among the holders and how
-many holders are outside that list. Go on only if the title count is 1, the
-holder count equals the masked entries on the CI creator line, every reviewed
-manager is among the holders, and at most one holder is outside the list: the
-space's creator (step 2: the creator plus the reviewed principal). The digest
-binds that candidate, those holders and the deployer: if a holder changes
-before 10B-1, 10B-1 refuses `the ack names another plan`; review again.
+of them; how many of the reviewed managers are among the holders and how many
+holders are outside that list; how many principals with `CAN_EDIT` or
+`CAN_MANAGE` on the space, direct or inherited, the pre-stop owner-equivalent
+probe does not approve (counted by the probe's own functions); and the pin plan
+sha256 recomputed from that space, its holders and the profile's deployer. Go
+on only if:
+
+- the title count is 1;
+- the recomputed `pin plan sha256` equals the CI log's. Only then did CI see
+  this space, these holders and that deployer: a stranger in the creator's
+  place counts the same but gives another digest;
+- the holder count equals the masked entries on the CI creator line, and every
+  reviewed manager is among the holders;
+- no principal is outside the probe's approved principals. 10B-1 refuses each
+  one (`[mip-prestop] REFUSED: owner_equivalent`) before the lease. A count
+  never says who a holder is, so a creator the list leaves out counts like a
+  stranger: approve the reviewed one in `.env.local` (step 2), re-run
+  `github_environment --plan` and `--apply --ack-plan <sha256>` so the deploy
+  reads it, and take the new profile ack from a plan dispatch (the profile
+  changed); or remove its grant with its owner's consent. Then review again.
+  If the owner created the space, the review says the caller is one of the
+  holders, and the owner's own user is then the creator to approve.
+
+The digest binds that candidate, those holders and the deployer: if a holder
+changes before 10B-1, 10B-1 refuses `the ack names another plan`; review again.
 
 **10B-1, read-only: the adopt plans.**
 
