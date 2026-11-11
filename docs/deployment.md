@@ -4602,8 +4602,18 @@ The proof fails in any of these cases:
   unclassified call counts as an account-admin need. A tool reviewed as
   workspace-only may not reach an account API through its imports, and inline
   Python the interpreter runs (`-c` or a heredoc) is held to that same rule
-  directly: it may not name an account API, import a module that reaches
-  one, load code by name or start a process;
+  directly: it may not name an account API or import a module that reaches
+  one, and everything else it names must be on a reviewed allowlist
+  (`tests/fixtures/inline_code_review.py`, read from the inline code the dry
+  runs execute). The allowlist lists the modules it may import, outside the
+  repository and in it, the attributes it may use of each and the builtins
+  it may name, and it refuses a `match` statement and any private, dunder or
+  frame attribute, so every module name and builtin the code reaches, by any
+  import form or alias, is on that list. It does not model what an object a
+  reviewed call returns does through its own public attributes, nor what the
+  code writes for a later process to load. Such a write can land outside the
+  sandbox: the sandbox clone's `.venv` links to the interpreter prefix that
+  runs the tests;
 - a bundle call addresses another target than `client`, whether it is
   planned, run through the CLI or run through the `bundle_env` wrapper, or a
   bundle variable databricks.yml declares resolves to a client-#1 default;
@@ -4638,7 +4648,12 @@ switched off (`if`, `continue-on-error`, `needs`), a step that writes
 `$GITHUB_ENV` or checks out another ref, a pytest command that deselects or
 swallows a failure, a trigger filter that skips the workflow, and a
 workflow-wide shell or variable that changes what the shell or pytest runs.
-The job is advisory until the owner makes it a required check.
+It reads the triggers as GitHub does: a push must trigger on `main` itself,
+and no negation that could match `main` may follow it. The shell's variables
+are matched by exact name. So a `run-name`, an explicit pull_request `types`
+list that keeps the three defaults, push `tags`, or an unrelated variable
+such as `ENVIRONMENT_LABEL` all pass. The job is advisory until the owner
+makes it a required check.
 
 ## Jobs identity and pinned job parameters (M2-PR5)
 

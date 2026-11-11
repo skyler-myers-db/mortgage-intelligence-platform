@@ -36,7 +36,8 @@ Positive controls (a dispatch with planted defects, and the checks applied to
 inputs that must fail them) prove each check can fail: account-admin calls in
 the shapes the deploy really uses, planned and executed (a Python tool by
 ``-m``, behind an interpreter flag or by path, inline ``-c`` code and a
-heredoc, the account identity's wrapper, a CLI call behind a global flag, an
+heredoc, a heredoc starting the human bootstrap through an aliased ``os``,
+the account identity's wrapper, a CLI call behind a global flag, an
 account rule-set update through ``databricks api``, the human bootstrap by
 path), agentic tools called from a core file (planned, executed by path and
 imported inline), bundle calls to another target (planned by path, executed
@@ -106,8 +107,10 @@ TARGET = re.compile(r"(?:^|\s)(?:-t|--target)(?:\s+|=)(\S+)")
 # (review of #330). Run: a CLI call behind a global flag, an account rule-set
 # update through ``databricks api`` on the workspace proxy path, the human
 # bootstrap by path, an unreviewed tool behind an interpreter flag, inline
-# code and a heredoc importing what reaches an account API, an agentic tool by
-# path. Planned: a CLI call behind a global flag, the rule-set update, an
+# code and a heredoc importing what reaches an account API, a heredoc that
+# runs the human bootstrap in a child process through an aliased ``os``
+# (round 3: the child is the real interpreter, which no recorder sees), an
+# agentic tool by path. Planned: a CLI call behind a global flag, the rule-set update, an
 # unreviewed Python tool, an unreviewed tool under the account identity's
 # wrapper, a reviewed workspace tool under it and the human bootstrap by path.
 PLANTED_NEEDS = (
@@ -118,6 +121,7 @@ PLANTED_NEEDS = (
     "executed (unclassified): -P -m tools.databricks.account_admin_grant --help",
     "executed (account_admin): -c raise SystemExit(0); import tools.clients.bootstrap_account planted-inline",
     "executed (unclassified): - planted-heredoc (script on stdin)",
+    "executed (unclassified): - planted-aliased-os (script on stdin)",
     "executed (unclassified): tools/databricks/read_agent_tool_probe_expectation.py --help",
     "planned (account_admin): databricks api put /api/2.0/preview/accounts/access-control/rule-sets",
     "planned (account_admin): databricks --profile account-admin account groups list",
@@ -157,6 +161,9 @@ def _planted(values: dict[str, str]) -> tuple[cp.Plant, ...]:
         '"$PYTHON" -m tools.databricks.bundle_env --help -t dev >/dev/null 2>&1 || true\n'
         "\"$PYTHON\" -c 'raise SystemExit(0); import tools.clients.bootstrap_account' planted-inline || true\n"
         f"\"$PYTHON\" - planted-heredoc <<'PYEOF' || true\nraise SystemExit(0)\nimport {IMPORTED_AGENTIC}\nPYEOF\n"
+        # Round 3's probe: it really runs the bootstrap, in a child no recorder sees.
+        "\"$PYTHON\" - planted-aliased-os <<'PYEOF' || true\nimport os as _os, sys\n_os.system(sys.executable"
+        " + ' -m tools.clients.bootstrap_account --help > \"$PROOF_PAYLOAD_DIR/aliased-os.out\" 2>&1')\nPYEOF\n"
         f'MIP_PLANTED=1 "$PYTHON" {EXECUTED_AGENTIC.replace(".", "/")}.py --help >/dev/null 2>&1 || true\n'
         'run "$PYTHON" -m tools.databricks.active_deployment_pin digest --app-name mip-app\n'
         "echo \"  lender: $(printf '%s' \"$MIP_LENDER_NAME\" | tr '[:lower:]' '[:upper:]')\"\n"
@@ -665,6 +672,11 @@ def test_planted_account_admin_calls_are_found(planted: cp.Dispatch) -> None:
     python = re.compile(r"\S*/deploy-python(?=\s)")
 
     assert sorted(python.sub("$PY", need) for need in needs) == sorted(PLANTED_NEEDS)
+    # Round 3: the aliased-os heredoc really ran the human bootstrap, in a
+    # child the recorders never saw, so only the ledger's reading of the heredoc finds it.
+    ran = (planted.record.payload_dir / "aliased-os.out").read_text(encoding="utf-8")
+    assert "usage: python -m tools.clients.bootstrap_account" in ran, ran[-2000:]
+    assert ("-m", "tools.clients.bootstrap_account", "--help") not in {call.argv for call in planted.record.executions()}
 
 
 def test_planted_agentic_tools_are_found_though_the_tree_stops_calling_them_agentic_only(planted: cp.Dispatch) -> None:

@@ -22,7 +22,10 @@ job ``client-portability-proof`` runs both):
   slices name exactly the committed tools, every tool a core deploy file
   names is classed (the ones no dry run reaches listed as outside the proof,
   with those that reach an account API pinned), and the ledger fails closed
-  for every call shape, planned or executed (review of #330).
+  for every call shape, planned or executed (review of #330), inline code
+  included: it is held to a reviewed allowlist of what it may name, and
+  every way rounds 3 and 4 found to start a process or load code by name is
+  refused while the deploy's own inline code, written other ways, is not.
 
 The owner hardware-key attestation layer is deferred (M1-PR5): the integrity
 here is main's exact-digest pin and acks. Nothing signs or verifies a
@@ -31,6 +34,8 @@ signature.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
 import shutil
 import subprocess
@@ -44,6 +49,7 @@ from tests.fixtures import portability_checks as checks
 from tests.fixtures import role_ledger as roles
 from tests.fixtures.bootstrap_harness import FakeSink, plan_and_apply, run_tool
 from tests.fixtures.fake_databricks_account import FakeEstate
+from tests.fixtures.inline_code_review import INLINE_MODULES, INLINE_REPO_MODULES
 from tests.fixtures.role_ledger import READ, Execution, account_admin_needs, sdk_role
 from tools.clients import dispatch_acks
 from tools.clients import profile as views
@@ -257,6 +263,27 @@ def _scripts_copy(tmp_path: Path, plant: tuple[str, str] | None = None) -> Path:
     return scripts
 
 
+def _shapes(tool: str) -> tuple[str, ...]:
+    """One call of ``tool`` in each shape a deploy file writes one (review of #330, round 3).
+
+    ``-m`` and a path; a quoted ``-m``; a path behind ``$ROOT_DIR`` or ``./``;
+    a ``-m`` continued on the next line; and an array whose body holds ``-m``
+    and the name on lines of their own, as deploy_step_agentic_cutover.sh's
+    ``AI_GATEWAY_PROOF_ARGS`` does.
+    """
+
+    path = tool.replace(".", "/") + ".py"
+    return (
+        f'"$PYTHON" -m {tool} --x',
+        f'"$PYTHON" {path}',
+        f'"$PYTHON" -m "{tool}"',
+        f'"$PYTHON" "$ROOT_DIR/{path}" --x',
+        f'"$PYTHON" ./{path}',
+        f'"$PYTHON" -m \\\n  {tool} \\\n  --x',
+        f'ARGS=(\n  -m\n  {tool}\n  --x\n)\n"$PYTHON" "${{ARGS[@]}}"',
+    )
+
+
 def test_every_tool_a_core_deploy_file_names_is_classed(tmp_path: Path) -> None:
     """Review of #330: a tool only a live run reaches is never planned or run by the proof's dry runs.
 
@@ -270,13 +297,11 @@ def test_every_tool_a_core_deploy_file_names_is_classed(tmp_path: Path) -> None:
 
     assert outside == roles.OUTSIDE_PROOF_MODULES, sorted(outside ^ roles.OUTSIDE_PROOF_MODULES)
     assert {m for m in outside if roles.account_api_reach(m)} == roles.OUTSIDE_PROOF_ACCOUNT_REACH
-    # Positive controls: a tool a live-only branch runs, by -m or by path, is named.
-    preflight = "lib/deploy_step_preflight_gates.sh"
-    for line, tool in (
-        ('if [[ "$DRY_RUN" -eq 0 ]]; then "$PYTHON" -m tools.databricks.account_admin_grant --grant x; fi', "tools.databricks.account_admin_grant"),
-        ('[[ "$DRY_RUN" -eq 0 ]] || "$PYTHON" tools/databricks/account_sp_create.py', "tools.databricks.account_sp_create"),
-    ):
-        assert tool in checks.core_deploy_tools(_scripts_copy(tmp_path / tool, (preflight, line))) - named, line
+    # Positive controls: a tool a live-only branch runs is named in every
+    # shape a deploy file writes a call (review of #330, round 3).
+    for index, line in enumerate(_shapes("tools.databricks.account_admin_grant")):
+        scripts = _scripts_copy(tmp_path / str(index), ("lib/deploy_step_preflight_gates.sh", f'if [[ "$DRY_RUN" -eq 0 ]]; then\n{line}\nfi'))
+        assert checks.core_deploy_tools(scripts) - named == {"tools.databricks.account_admin_grant"}, line
 
 
 def test_the_role_table_fails_closed_for_every_shape_the_deploy_uses() -> None:
@@ -373,12 +398,111 @@ def test_every_executed_shape_is_classed_and_fails_closed() -> None:
     assert roles.inline_imports("from tools.databricks import agent_proxy_access") >= {"tools.databricks.agent_proxy_access"}
 
 
+# Review of #330, round 3: inline code that starts a process or loads code by
+# name, which round 2's literal-name denylist classed workspace (the first
+# six), and its relatives: each refused by tests/fixtures/inline_code_review.py.
+INLINE_BYPASSES = (
+    "import os as _os, sys\n_os.system(sys.executable + ' -m tools.clients.bootstrap_account --help')",
+    "import builtins; builtins.__import__('tools.clients.bootstrap_account')",
+    "import pkgutil; pkgutil.resolve_name('tools.clients.bootstrap_account:main')",
+    "import sys; sys.path.insert(0, 'tools/clients'); import bootstrap_account",
+    "import asyncio\nasyncio.run(asyncio.create_subprocess_exec('python', '-m', 'tools.x'))",
+    "import os\ngetattr(os, 'system')('python -m tools.x')",
+    # Every other import form and alias of os, and a module reached through another.
+    "from os import system as run; run('python -m tools.x')",
+    "from os import *\nsystem('python -m tools.x')",
+    "import os\nalias = os\nalias.system('python -m tools.x')",
+    "import os.path as p\np.os.system('python -m tools.x')",
+    "import pathlib\npathlib.os.system('python -m tools.x')",
+    "from backend.schemas.lender_identity_record import hashlib",  # a name its imports bind: a module re-exported
+    "import sys\nsys.modules['os'].system('python -m tools.x')",
+    # The routes from an object back to a namespace or the builtins.
+    "import json\njson.loads.__globals__['os'].system('x')",
+    "frames = (x for x in [1])\nframes.gi_frame.f_globals['__builtins__']['__import__']('os')",
+    "import os\nvars(os)['system']('x')",
+    "eval('1')",
+    "asyncio.create_subprocess_exec('x')",  # a name the code never binds
+    # Reviewed modules' unreviewed surfaces: yaml's object constructor, a submodule.
+    "import yaml\nyaml.unsafe_load('x: 1')",
+    "import json\njson.decoder.scanstring('x', 0)",
+    "import concurrent.futures\nconcurrent.futures.ProcessPoolExecutor()",
+    # Round 4. A reviewed module's public name that is a getattr by string:
+    # pathlib binds operator.attrgetter, which "any public attribute" let through.
+    "import pathlib, json\npathlib.attrgetter('__globals__')(json.loads)['__builtins__']['__import__']('os').system('x')",
+    "from pathlib import attrgetter\nimport json\nattrgetter('__globals__')(json.loads)['__builtins__']['__import__']('os')",
+    # A class pattern reads its keywords as attributes, with no attribute node.
+    "import json\nmatch json.loads:\n    case object(__globals__={'__builtins__': {'__import__': imp}}):\n        imp('os').system('x')",
+    "g = (x for x in [1])\nmatch g:\n    case object(gi_frame=object(f_builtins={'__import__': imp})):\n        imp('os').system('x')",
+    # A private repository helper that runs a caller's argv, from a module no
+    # inline code is reviewed to import; and a private name of a reviewed one.
+    "from tools.deps_report.advisories import _json_command\n_json_command(['sh', '-c', 'x'], 'x')",
+    "from pathlib import Path\nfrom tools.databricks.app_runtime_closure import _git\n_git(Path('.'), '-c', 'alias.zz=!sh', 'zz')",
+    "from backend.schemas.lender_identity_record import _unique_object\nprint(_unique_object([]))",
+    # A tool the table does not review, run in process: by ``-m`` it is unclassified.
+    "from tools.databricks.provision_agentic_resources import main\nmain(['--plan-only'])",
+)
+# Not rigid: what the deploy's own inline code does, written the other ways a
+# heredoc would write it (round 3 asked that legitimate code stay workspace).
+INLINE_ACCEPTED = (
+    "import os.path\nprint(os.path.join('a', 'b'), os.environ.get('X'), os.getenv('Y'))",
+    "from os import environ, path\nprint(environ.get('X'), path.exists('.'))",
+    "import json, re\nprint(json.dumps({'a': 1}, indent=2), re.IGNORECASE, re.compile('x').pattern)",
+    "class Row:\n    width = 1\n\n\ndef f(*args, **kwargs):\n    return [a for a in args if a]\n\n\nprint(f(Row.width), {k: v for k, v in {}.items()})",
+    "try:\n    import yaml\nexcept ModuleNotFoundError as error:\n    raise SystemExit(str(error)) from error\nprint(yaml.safe_load('a: 1'))",
+    "import sys\nsys.stdout.write(sys.argv[0])\nsys.exit(0)",
+    "def main():\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main())",
+    "from pathlib import Path\nprint(Path('.env.local').exists() and Path('.env.local').read_text(encoding='utf-8'))",
+    "from backend.schemas.lender_identity_record import as_configured\nprint(as_configured({}))",
+    # Round 4's explicit sets keep the reviewed siblings of what the dry runs use.
+    "import json, re, sys\nbody = json.loads(sys.stdin.read())\nprint(re.sub(r'\\s+', ' ', body.get('x', '')), re.fullmatch('a', 'a'))",
+    "import os.path\nfrom pathlib import PurePath\nprint(os.path.basename(os.path.abspath('.')), PurePath('a').suffix)",
+    "from backend.schemas import lender_identity_record\nimport backend.services.ai_gateway_proof_attestation as gateway\n"
+    "print(lender_identity_record.LEGACY_ENV_NAMES, gateway.derive_gateway_proof_verify_key)",
+)
+
+
+def _exposed_modules(value: object) -> list[str]:
+    """How a reviewed value exposes a module: it is one, or a class with a public attribute that is one (3.13's ``Path.parser``)."""
+
+    if inspect.ismodule(value):
+        return ["itself"]
+    if not isinstance(value, type):
+        return []
+    return [name for name in dir(value) if not name.startswith("_") and inspect.ismodule(getattr(value, name, None))]
+
+
+def test_inline_code_is_held_to_the_reviewed_allowlist() -> None:
+    """Review of #330, rounds 3 and 4: an allowlist of what inline code may name, not a list of literal names it may not."""
+
+    for code in INLINE_BYPASSES:
+        assert _executed("-c", code) == _executed("-", stdin=code) == roles.UNCLASSIFIED, code
+    for code in INLINE_ACCEPTED:
+        assert _executed("-c", code) == _executed("-", stdin=code) == roles.WORKSPACE, code
+    # No stale entry: each reviewed module exists, and each reviewed attribute
+    # is one it has. A value reached through an attribute is held only to the
+    # private and frame rule, so none may be a module or a class exposing one.
+    for module, attributes in INLINE_MODULES.items():
+        imported = importlib.import_module(module)
+        for name in attributes:
+            assert hasattr(imported, name), f"{module}.{name}"
+            assert not _exposed_modules(getattr(imported, name)), f"{module}.{name}"
+    repo = roles.repository()
+    for module in INLINE_REPO_MODULES:
+        assert roles.module_files(module) and not roles.account_api_reach(module), module
+        imported = importlib.import_module(module)
+        public = [name for name in dir(imported) if not name.startswith("_") and repo.defines(module, name)]
+        assert public and not {name: found for name in public if (found := _exposed_modules(getattr(imported, name)))}, module
+    # The check's positive control: a class whose public attribute is a module, as Python 3.13's Path.parser is.
+    assert _exposed_modules(type("Shaped", (), {"parser": importlib})) == ["parser"]
+
+
 def test_the_agentic_slices_name_exactly_the_committed_tools(tmp_path: Path) -> None:
     """The set the proof refuses is committed; the tree is held to it, so a core call into one fails both ways."""
 
     assert checks.agentic_only_modules() == checks.AGENTIC_ONLY_MODULES
     assert not roles.REVIEWED_MODULES & checks.AGENTIC_ONLY_MODULES
-    # Positive controls (review of #330): a new agentic tool, -m or by path, changes the set read from the tree.
-    for index, line in enumerate(('run "$PYTHON" -m tools.databricks.new_agentic_tool', 'run "$PYTHON" tools/databricks/new_agentic_tool.py')):
+    # Positive controls (review of #330, rounds 2 and 3): a new agentic tool,
+    # in any shape a deploy file writes a call, changes the set read from the tree.
+    for index, line in enumerate(_shapes("tools.databricks.new_agentic_tool")):
         scripts = _scripts_copy(tmp_path / str(index), ("lib/deploy_step_agentic_provisioning.sh", line))
         assert checks.agentic_only_modules(scripts) - checks.AGENTIC_ONLY_MODULES == {"tools.databricks.new_agentic_tool"}, line
