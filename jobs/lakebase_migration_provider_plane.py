@@ -13,6 +13,7 @@ from jobs.lakebase_migration_contracts import (
     _SCHEMA_PRIVILEGE_NAMES,
     _SEQUENCE_PRIVILEGE_NAMES,
     _TABLE_PRIVILEGE_NAMES,
+    _public_schema_acl_variants,
 )
 
 
@@ -32,7 +33,8 @@ def _postflight_public_schema_boundary(
     application database removes PUBLIC schema lookup instead of pretending it
     can rewrite every provider object. The preflight accepts the one legacy
     PUBLIC-USAGE row only so the same transaction can remove it; postflight
-    requires the hardened ACL exactly.
+    requires one reviewed revision's hardened ACL exactly
+    (``_public_schema_acl_variants``).
     """
 
     if allow_absent_provider_schema:
@@ -86,18 +88,13 @@ def _postflight_public_schema_boundary(
         (str(grantee), str(privilege), bool(grantable), str(grantor))
         for grantee, privilege, grantable, grantor in cur.fetchall()  # type: ignore[attr-defined]
     }
-    expected_acl = {
-        ("pg_database_owner", "CREATE", False, "pg_database_owner"),
-        ("pg_database_owner", "USAGE", False, "pg_database_owner"),
-        ("databricks_superuser", "CREATE", True, "pg_database_owner"),
-        ("databricks_superuser", "USAGE", True, "pg_database_owner"),
-        (writer_role, "CREATE", False, "pg_database_owner"),
-        (writer_role, "USAGE", False, "pg_database_owner"),
-    }
+    variants = _public_schema_acl_variants(writer_role)
     legacy_public_row = ("PUBLIC", "USAGE", False, "pg_database_owner")
-    accepted_acls = {frozenset(expected_acl)}
+    accepted_acls = set(variants)
     if allow_legacy_public_usage:
-        accepted_acls.add(frozenset({*expected_acl, legacy_public_row}))
+        accepted_acls |= {frozenset({*variant, legacy_public_row}) for variant in variants}
+    # Report the difference from the nearest reviewed revision.
+    expected_acl = set(min(variants, key=lambda variant: len(set(variant) ^ actual_acl)))
     if frozenset(actual_acl) not in accepted_acls:
         raise RuntimeError(
             f"Lakebase {principal_label} public-schema ACL mismatch: "

@@ -3450,17 +3450,26 @@ of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
 pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
 unsupported kind fails its bind, and the run undoes the binds before it.
 
-**Dashboards (attack O9).** Spike S4 (a dashboard `parent_path` move on
-throwaway resources: update in place, or recreate?) has not run, because it
-needs resources only the owner can delete. The worst case is assumed: a move
-recreates the dashboard, losing its id, history and shares. So
-`MIP_DASHBOARD_PARENT_PATH` stays pinned at the legacy dashboards' live folder
-and is permanent for this install (the profile requires it inside
-`MIP_LEGACY_BUNDLE_ROOT`; the adopt plan refuses a legacy dashboard outside it
-and records `pinned_permanent`; the post-bind gate refuses a dashboard
-recreate or move). The other branch, moving both dashboards into the
-deployer's root and updating the pin with the state together, stays unbuilt
-until S4 shows the move is an in-place update.
+**Dashboards (attack O9).** Spike S4 measured a dashboard `parent_path` move
+on throwaway resources (CLI v1.10.0, direct engine): `parent_path` is
+`spec:immutable`, so a changed folder plans `recreate` (a new dashboard id,
+the old one trashed, its published revision and URL gone), and the Lakeview
+API has no in-place move (an update carrying only `parent_path` is accepted
+and ignored). A `display_name` change, such as the development-mode prefix
+dropping, is an in-place update. So `MIP_DASHBOARD_PARENT_PATH` stays pinned
+at the legacy dashboards' live folder, permanently for this install (the
+profile requires it inside `MIP_LEGACY_BUNDLE_ROOT`; the adopt plan refuses a
+legacy dashboard outside it and records `pinned_permanent`; the post-bind
+gate refuses a dashboard recreate or move). Moving them into the deployer's
+root is a recreate, so it is only ever an owner decision, never a deploy.
+
+`lakeview.get` answers a dashboard's folder as `/Users/<owner>/...`, while
+`MIP_DASHBOARD_PARENT_PATH` must be `/Workspace/...` (spike S4 read both
+live client-#1 dashboards that way), and the CLI plans no change between the
+two spellings of one folder. The adopt map compares the two through
+`adopt_legacy_map.canonical_folder`, which aliases exactly `/Users` and
+`/Shared` to their `/Workspace` spelling and drops a trailing slash; any
+other difference is another folder and refuses `dashboard_parent_moved`.
 
 **Archiving the legacy root (cutover step 16).**
 `python -m tools.clients.archive_legacy_root` is read-only by default. It plans
@@ -3659,6 +3668,8 @@ and the journal. Neither tool has run live.
 python -m tools.clients.handover_uc_ownership --plan --report-out <private report>
 python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal <new path>
 python -m tools.clients.handover_uc_ownership --verify
+# after the release (step 10):
+python -m tools.clients.handover_uc_ownership --verify --released
 ```
 
 The target is `<MIP_IDENTITY_PREFIX>-data-owners`. The plan enumerates the
@@ -3675,13 +3686,36 @@ refuses explicitly: the metastore (`metastore`), a Delta Sharing catalog
 `foreign_securable`), a system catalog (`system_catalog`), an object the
 System user owns (never a change), and the users, account users or admins
 vocabulary as the target. The first failure stops the apply (exit 3).
-`--verify` is read-only: nothing left to move, and every pipeline dataset
-paired exactly. `--interim-days N` (1 to 14, default 14) sets the suggested
-pairs' expiry.
+`--verify` is read-only: nothing left to move, every pipeline dataset the
+legacy owner still owns paired exactly, and every pipeline dataset owned by
+its own pipeline's live `run_as_user_name` and by an approved principal: the
+jobs identity (`MIP_IDENTITY_IDS_JSON.jobs`), or the legacy owner until the
+release (`tools/clients/handover_pipeline_owner.py`: `pipeline_unresolved`,
+`pipeline_run_as_unreadable`, `pipeline_owner_not_run_as`,
+`pipeline_owner_unapproved`). The platform keeps a dataset's owner equal to
+its pipeline's run_as, so the approved-owner rule is what refuses: another
+identity running a pipeline into the governed catalog, or a run_as moved off
+the jobs identity. `--verify --released`, after the release, no longer admits
+the legacy owner, pair or not. `--interim-days N` (1 to 14, default 14) sets
+the suggested pairs' expiry.
 
-**Pipeline-managed datasets.** Spike S4 (does `ALTER OWNER` on a
-pipeline-published streaming table or materialized view hold, and survive the
-pipeline's run_as change?) has not run, so they are excluded. The private
+**Pipeline-managed datasets.** Spike S4 measured that a pipeline-published
+streaming table or materialized view can never change owner by itself: the
+REST owner PATCH and every `ALTER ... OWNER TO` form were refused, for every
+actor tried, metastore owner included
+(`CHANGE_OWNER_NOT_ALLOWED_FOR_PIPELINE_TABLE`). Its owner is always the
+pipeline's run_as identity, and it flips the moment the pipeline's run_as
+setting changes, before any run; grants on the datasets survive the flip. So
+the plan excludes them for good. Until the release they are the legacy
+identity's, which the pipeline runs as; the release's bundle apply moves the
+pipeline's run_as to the jobs identity and with it every dataset, at once,
+while blue serves. From then on the jobs identity (`MIP_IDENTITY_IDS_JSON.jobs`)
+owns them permanently, never `<MIP_IDENTITY_PREFIX>-data-owners`: a group
+cannot be a run_as. `--verify --released` after the release proves that end
+state: every pipeline dataset in the governed catalog is owned by the jobs
+identity, and its pipeline runs live as it. The release postflight's live
+run_as check (below, "Workspace ACLs") already refuses the release when the
+governed pipeline does not. The private
 report (`--report-out`; the printed lines carry counts only) suggests one
 interim owner pair per dataset, `(full_name, owner, expires_at)`, at most 14
 days ahead, as rows (`suggested_interim_pairs`) and as the single-line value
@@ -3696,11 +3730,85 @@ the metastore. The deploy's pre-stop probe set holds no pipeline dataset, so
 it passes none: no deploy probe judges a pipeline dataset today, so no
 production caller hands pairs to the policy yet, and `--verify` matches each
 dataset with the same `build_pairs` output from the same profile field.
-Unset the field after the pipeline update or a journaled re-own moves the
-datasets.
+A pair covers the window from this handover to the release's bundle apply;
+no journaled re-own exists. Unset the field once `--verify --released`
+passes after the release; the pairs then match nothing.
 
-**Lakebase (step 8).** After the deployer's Postgres role exists (by the
-mechanism the S3 rehearsal picks), run as the legacy owner:
+**Lakebase (step 8).** Spike S3 rehearsed this on a throwaway of the install's
+type (Provisioned, PostgreSQL 16) and chose L-A role setup with this tool's
+per-object `ALTER ... OWNER TO` at `lock_timeout = '3s'` and
+`statement_timeout = '30s'`: the worst App wait was about the lock timeout,
+with no App error from lock contention. Not `REASSIGN OWNED` (all or nothing
+across every table, and it also takes the instance's other databases and
+extensions) and not L-B (it deletes the legacy role, which stale jobs still
+run as). First print the L-A setup, read-only, as the legacy owner connected
+to the App database:
+
+```bash
+python -m tools.clients.lakebase_handover --preconditions [--report-out <private file>]
+```
+
+It prints, in order and quoted, only the steps that do not hold yet, with the
+role names from the profile and the database (so the output names roles: keep
+it in your terminal or the mode-0600 report, never in a shared log):
+
+1. `CREATE EXTENSION IF NOT EXISTS databricks_auth;` and
+   `SELECT databricks_create_role('<deployer application id>', 'SERVICE_PRINCIPAL');`,
+   run BY THE LEGACY OWNER, which leaves the legacy owner an ADMIN edge on the
+   new role. Never create the deployer's role through the REST API or the UI
+   first: that leaves no ADMIN edge, so step 2 fails; `--preconditions` then
+   refuses `target_role_without_admin_edge` (the tool never drops a role);
+2. `GRANT "<deployer>" TO "<legacy owner>" WITH INHERIT TRUE, SET TRUE;`
+   (SET for the apply, INHERIT for the exact revert);
+3. `GRANT CREATE ON SCHEMA "mip_app" TO "<deployer>";`
+4. `GRANT USAGE ON SCHEMA "<schema>" TO "<deployer>";` for every other
+   non-system schema the deployer cannot use yet (a synced-table or leftover
+   schema, for example). `public` is never printed: the deployer uses it as
+   the database owner. The grants job closes `public` as `pg_database_owner`
+   (it refuses "public-schema closure authority mismatch" unless the role
+   running it may `SET ROLE` to it) and its exact public-schema gate refuses
+   any extra ACL row there, so a USAGE grant on `public` breaks every later
+   release. When the App database belongs to neither the legacy owner (the
+   handover then moves it) nor the deployer, and the deployer holds no
+   `SET` and `INHERIT` membership in its owner, the mode prints no SQL and
+   refuses `target_will_not_own_database`: the database's owner gives it to
+   the legacy owner, then re-run this mode. SET alone fails the grants job's
+   revokes in `public`, and INHERIT alone its closure (PostgreSQL 16.15, PR
+   #336 review round 2). USAGE lets the grants job look up the objects in a
+   schema, but it is not enough on its own:
+5. `GRANT <one privilege> ON <object> TO "<deployer>";` for every table,
+   view, sequence and routine the handover leaves to another owner (anything
+   outside `mip_app`, and a `mip_app` object another role owns) that the
+   deployer holds no privilege on that its revoke accepts: `SELECT` on a
+   table, view or sequence, `EXECUTE` on a routine. The grants job run as the
+   deployer revokes the App roles' privileges on every one of them, and
+   PostgreSQL refuses a revoke outright from a role that holds nothing on the
+   object: with step 4 alone, a legacy-owned table in a usable schema
+   planned clean and the grants job failed "permission denied for table"
+   after the apply (PostgreSQL 16.15, PR #336 review). Its `REVOKE ALL` on a
+   table, view or sequence also revokes each column, where only a column
+   privilege counts: the deployer's `SELECT`, `INSERT`, `UPDATE` or
+   `REFERENCES` on a table or view, or `SELECT` or `UPDATE` on a sequence,
+   is enough, and `TRIGGER`, `DELETE` or `TRUNCATE` alone on a table, or
+   `USAGE` alone on a sequence, failed "permission denied for column
+   tableoid" (round 2). The step prints a grant only where the legacy owner can
+   give one (it owns the object, or holds its owner's privileges); each other
+   object refuses `target_needs_object_privilege` until its owner grants the
+   deployer a privilege on it. Who owns a synced-table schema's tables on the
+   install has not been measured: this step reads it. Column grants and
+   default-privilege rows are not predicted (the grants job revokes only the
+   App roles' entries there, which a grants run before the handover leaves
+   empty); one that appears later fails the grants job closed.
+
+Run them in `psql` as the legacy owner and re-run `--preconditions` until it
+prints `-- Every precondition holds.`. Names in its comments are JSON strings,
+and a statement whose name holds a control character is not printed: it
+refuses `name_has_control_character`, and the owner grants that one by hand. Before the apply, check read-only that
+no App session holds a long transaction: one older than the per-object budget
+(10 attempts, about 120 s) exhausts it into the WR5 window or a revert
+(`SELECT state, now() - xact_start FROM pg_stat_activity WHERE datname =
+current_database() AND xact_start IS NOT NULL ORDER BY 2 DESC;`). Then, as the
+legacy owner:
 
 ```bash
 python -m tools.clients.lakebase_handover --plan
@@ -3718,16 +3826,36 @@ precondition PostgreSQL sets for `ALTER ... OWNER TO`: the target's CREATE on
 `mip_app` for the schema's objects (`target_needs_schema_create`), the
 session's CREATE on the database for the schema
 (`caller_needs_database_create`) and CREATEDB for the database
-(`caller_needs_createdb`). Which mechanism grants them is spike S3's; the
-rehearsal reads the same preconditions first. The apply moves
+(`caller_needs_createdb`). It also refuses an App database the target will
+neither own nor act for as owner (`target_will_not_own_database`, step 4);
+once per schema and by count only, a non-system schema the target cannot use
+(`target_needs_schema_usage`): the grants job the deployer runs after the
+handover revokes on every table in every non-system schema and failed
+"permission denied for schema" without it (spike S3); each object the
+handover leaves to another owner that the target holds no privilege on that
+its revoke accepts (`target_needs_object_privilege`, step 5); and an entry
+naming the target that the revert could not restore exactly
+(`target_grant_unrevertible`, below). The rehearsal reads the same
+preconditions first. The apply moves
 the App database and each `mip_app` object the legacy role owns, one
 `ALTER ... OWNER TO` per transaction under `SET LOCAL lock_timeout = '3s'`
-and `SET LOCAL statement_timeout = '30s'`. `ALTER OWNER` takes an ACCESS
+and `SET LOCAL statement_timeout = '30s'`, in this order: types and domains,
+tables (a column's own sequence moves with its table) and standalone
+sequences, invoker routines, views and materialized views, the schema,
+SECURITY DEFINER routines, the database. A view or a SECURITY DEFINER routine
+reads with its owner's privileges, and under L-A the legacy role holds the
+deployer's privileges but not the reverse, so what is read moves first (S3:
+with views first, every App read through a view failed 42501 for as long as
+the handover ran). A definer routine also resolves the names in its body as
+its owner, which needs USAGE on `mip_app`; step 3 gives the deployer only
+CREATE there, so definer routines move after the schema (moved before it,
+each failed "permission denied for schema mip_app" until the schema
+followed, in the apply and in the revert). `ALTER OWNER` takes an ACCESS
 EXCLUSIVE lock, and App queries queue behind a waiting one, so the lock
 timeout is what bounds an App query's wait. A lock timeout rolls back and
 retries after a backoff, at most 10 times per object and 10 minutes in all.
-It never creates, drops or reassigns a role and emits no DROP, DELETE,
-TRUNCATE, GRANT or REVOKE. When the budget runs out it stops with nothing
+It never creates, drops or reassigns a role, and the apply emits no DROP,
+DELETE, TRUNCATE, GRANT or REVOKE. When the budget runs out it stops with nothing
 half-applied (exit 4) and offers exactly two exits:
 
 - **WR5**, an announced window: `./scripts/lakebase_handover_window.sh
@@ -3767,16 +3895,39 @@ half-applied (exit 4) and offers exactly two exits:
   `--remainder --journal <path>` prints, read-only, the exhausted journal's
   remainder count and the digest the window plan pins.
 - **Revert**: `--revert --journal <path>`, the exact inverse by the same lock
-  bounds.
+  bounds. `ALTER OWNER` merges an entry the legacy owner granted the
+  deployer (step 3's CREATE, say) into the deployer's owner entry, and the
+  inverse leaves the deployer nothing, so the plan journals the GRANT that
+  restores each such entry (`revert_grants`) and the revert runs it, as the
+  legacy owner, in the same transaction as that object's inverse. Any other
+  entry naming the deployer (granted by another role, with a grant option,
+  granted by the deployer, of a privilege the legacy owner's own entry lacks,
+  which the owner would come back holding, a column grant, or on a column's
+  own sequence) could not come back exactly, so the plan refuses it
+  (`target_grant_unrevertible`). Apply, revert and a new plan give the
+  original plan digest.
 
-`--retire-check [--legacy-identity <name>]` (also `python -m
-tools.clients.handover_verify retire-check`; the default identity is the
+`--retire-check [--legacy-identity <name>]` (the default identity is the
 caller's) is the read-only gate before the owner removes the legacy role by
 hand: it refuses while any job or pipeline still runs as the legacy identity,
 judged by its effective run_as (each job read by id; never its creator), or
-while one's run_as cannot be read. `--rehearse --rehearse-instance <throwaway> --rehearse-database
+while one's run_as cannot be read (`python -m tools.clients.handover_verify
+retire-check` checks this half alone); and, from the App database, while the
+legacy Postgres role still owns an extension, owns a default-ACL row, owns any
+other object, holds a privilege, or granted another role a membership, on any
+database of the instance (`legacy_role_residue`, counts by category; names go
+only to `--report-out`); and when no Postgres role has the identity's exact
+name (`legacy_role_not_found`: a typo, or a case variant, which the jobs half
+would still match, would otherwise read as no residue). The handover leaves two of those by design (spike
+S3): the extensions (`pgcrypto` stays the legacy owner's) and the legacy
+owner's own `pg_default_acl` row. Neither affects a deploy; both must be
+cleared before the role can be dropped. `--rehearse --rehearse-instance <throwaway> --rehearse-database
 <db>` is spike S3's mode (owner-run, refused on the install's own instance):
-it creates one table on the throwaway, holds a concurrent long transaction on
+it creates one schema and table on the throwaway, grants the deployer CREATE
+on that schema it owns when the deployer lacks it (and revokes exactly that
+grant at the end, also after a failure; a pass needs the revoke to land, and
+when a failure's revoke fails too it prints the `REVOKE` to run on the
+throwaway), holds a concurrent long transaction on
 it past `lock_timeout`, probes it, runs the handover's own lock-bounded change
 and its inverse, and passes only if the change needed a retry, the inverse
 restored the owner, at least one probe query arrived while the change waited
@@ -4635,8 +4786,18 @@ The proof fails in any of these cases:
   unclassified call counts as an account-admin need. A tool reviewed as
   workspace-only may not reach an account API through its imports, and inline
   Python the interpreter runs (`-c` or a heredoc) is held to that same rule
-  directly: it may not name an account API, import a module that reaches
-  one, load code by name or start a process;
+  directly: it may not name an account API or import a module that reaches
+  one, and everything else it names must be on a reviewed allowlist
+  (`tests/fixtures/inline_code_review.py`, read from the inline code the dry
+  runs execute). The allowlist lists the modules it may import, outside the
+  repository and in it, the attributes it may use of each and the builtins
+  it may name, and it refuses a `match` statement and any private, dunder or
+  frame attribute, so every module name and builtin the code reaches, by any
+  import form or alias, is on that list. It does not model what an object a
+  reviewed call returns does through its own public attributes, nor what the
+  code writes for a later process to load. Such a write can land outside the
+  sandbox: the sandbox clone's `.venv` links to the interpreter prefix that
+  runs the tests;
 - a bundle call addresses another target than `client`, whether it is
   planned, run through the CLI or run through the `bundle_env` wrapper, or a
   bundle variable databricks.yml declares resolves to a client-#1 default;
@@ -4671,7 +4832,12 @@ switched off (`if`, `continue-on-error`, `needs`), a step that writes
 `$GITHUB_ENV` or checks out another ref, a pytest command that deselects or
 swallows a failure, a trigger filter that skips the workflow, and a
 workflow-wide shell or variable that changes what the shell or pytest runs.
-The job is advisory until the owner makes it a required check.
+It reads the triggers as GitHub does: a push must trigger on `main` itself,
+and no negation that could match `main` may follow it. The shell's variables
+are matched by exact name. So a `run-name`, an explicit pull_request `types`
+list that keeps the three defaults, push `tags`, or an unrelated variable
+such as `ENVIRONMENT_LABEL` all pass. The job is advisory until the owner
+makes it a required check.
 
 ## Jobs identity and pinned job parameters (M2-PR5)
 
@@ -4695,8 +4861,9 @@ identity that holds no workspace admin.
   `mip_growth_agent_monitor_scheduler`.
 * The CLI v1.10.0 bundle schema declares `run_as` on `resources.Pipeline`,
   so the pipeline does not need spike S4's fallback (staying on the
-  deployer). S4's live half, ALTER OWNER on the pipeline's published
-  datasets after a run_as change, stays with the cutover.
+  deployer). S4's live half: no ALTER can re-own the pipeline's published
+  datasets; they follow its run_as, so they are the jobs identity's for good
+  ("Pipeline-managed datasets" above).
 * `tests/unit/test_jobs_identity_shape.py` pins the split.
 
 **Workspace ACLs.** The jobs identity holds no workspace admin and only a
@@ -4717,12 +4884,26 @@ job runs as it, runs `tools/databricks/jobs_identity_acl.py apply`:
   a new dependency cannot ship without its grant.
 * It resolves each object from the bundle summary, and refuses unless the
   summary's jobs-identity jobs run as the profile's jobs principal.
+* Before any grant it reads the **live** `run_as_user_name` of every
+  jobs-identity job and pipeline by id (`jobs.get`, `pipelines.get`; a
+  pipeline's spec never carries run_as) and refuses, exit 4 and nothing
+  granted, unless each runs as the jobs principal: `live_run_as_drift` for one
+  that runs as anyone else, `live_run_as_unreadable` for a blank answer or a
+  missing object. The summary is configuration, and spike S4 measured that
+  the direct-engine plan cannot see a pipeline's run_as (`input_only`): a
+  drifted pipeline planned `skip` and a deploy left it drifted. A job's drift
+  the plan does see and the apply repairs. A pipeline's needs a reviewed
+  change by the owner, then a re-run.
 * It adds only what the identity lacks, by the permissions API's PATCH, then
   re-reads every object. It never removes or lowers a grant, so the App's
   `CAN_MANAGE_RUN` bindings, the verifier's warehouse `CAN_USE` and other
   teams' grants stay. Bundle `permissions:` blocks would set each object's
   whole ACL on every deploy and drop those, which is why this is a deploy
-  step.
+  step. For the same reason no tool sets (PUT) a job's or pipeline's ACL:
+  spike S4 measured that `jobs set-permissions` replaces the whole ACL
+  (setting IS_OWNER dropped another principal's `CAN_MANAGE_RUN`).
+  `tests/unit/test_job_pipeline_acl_writes.py` refuses any such call in the
+  tree.
 * `plan` reads only. Output names bundle keys, never object ids or
   principals. `tests/unit/test_jobs_identity_acl.py` pins all of this.
 

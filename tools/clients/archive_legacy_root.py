@@ -16,8 +16,9 @@ default:
   what the adoption bound;
 * a move whose path set intersects a protected path (either inside the
   other) refuses (``bound_path``), and so does the whole plan: an adopted
-  install's dashboards stay in their legacy folder until spike S4
-  (tools/clients/rules.py), so ``--only`` must leave that folder out.
+  install's dashboards stay in their legacy folder permanently, since spike
+  S4 measured that a move recreates them (tools/clients/rules.py), so
+  ``--only`` must leave that folder out.
 
 ``--apply --ack-plan <sha256>`` recomputes the plan and refuses unless its
 sha256 is the acknowledged one. The Workspace API has no move call (SDK

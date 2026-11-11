@@ -447,8 +447,9 @@ class ApprovedOwnerPolicy:
         verdict = self.interim_pairs.verdict(full_name=full_name, owner=owner_text)
         if verdict == EXPIRED:
             raise RuntimeError(
-                "Governed UC owner holds an expired interim owner pair: re-own the object "
-                "(tools/clients/handover_uc_ownership.py) before the pair expires"
+                "Governed UC owner holds an expired interim owner pair: the pair expired before "
+                "the release moved its pipeline's run_as, and no ALTER can re-own a pipeline "
+                "dataset (spike S4), so release or renew the pair"
             )
         return verdict == MATCH
 

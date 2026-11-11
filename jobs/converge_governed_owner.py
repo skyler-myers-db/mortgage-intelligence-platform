@@ -21,7 +21,10 @@ What it may touch, and nothing else:
 * the pinned group as the new owner, never a parameter.
 
 Pipeline-managed datasets (``MATERIALIZED_VIEW``, ``STREAMING_TABLE``) stay with
-the pipeline, whose run_as owns them; their handover is spike S4's and M2-PR8's.
+the pipeline, whose run_as owns them: spike S4 measured that no ALTER can
+change their owner (``CHANGE_OWNER_NOT_ALLOWED_FOR_PIPELINE_TABLE``), so they
+are the jobs identity's for good, never the data-owner group's
+(tools/clients/handover_pipeline_owner.py asserts it).
 Any other table type the identity owns refuses before any ALTER.
 
 Exit codes: 0 converged (or nothing to hand over); 2 an unexpected inventory

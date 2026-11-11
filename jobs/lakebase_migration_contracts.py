@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
@@ -345,6 +346,79 @@ _MANAGED_EVENT_TRIGGER_CONTRACT: dict[str, _ManagedEventTriggerContractRow] = {
     ),
 }
 
+
+
+class _ManagedEventTriggerVariant(NamedTuple):
+    """One provider revision of the complete managed event-trigger inventory, pinned exactly."""
+
+    revision: str
+    seen_on: str
+    rows: Mapping[str, _ManagedEventTriggerContractRow]
+
+
+# Spike S2b (2026-11-10) read every database on two Provisioned instances
+# created in 2026-11: all four carry one newer provider revision of these
+# bodies, identical across them. ``on_create_schema`` is unchanged.
+# ``on_create_sequence`` grants databricks_superuser USAGE, SELECT, UPDATE in
+# place of ALL. ``on_create_table_or_view`` grants a superuser-owned relation
+# SELECT, INSERT, UPDATE, DELETE, TRUNCATE (plus MAINTAIN from PostgreSQL 17)
+# in place of ALL, so never TRIGGER or REFERENCES, and other relations ALL as
+# before. Applying exactly those edits to the fresh bodies reproduces the
+# install revision's digests and byte lengths, and every other field below
+# matched, so only the two pinned digests and lengths differ. Both revisions
+# grant provider roles only.
+_MANAGED_EVENT_TRIGGER_CONTRACT_2026_11: dict[str, _ManagedEventTriggerContractRow] = {
+    "on_create_schema": _MANAGED_EVENT_TRIGGER_CONTRACT["on_create_schema"],
+    "on_create_sequence": _MANAGED_EVENT_TRIGGER_CONTRACT["on_create_sequence"]._replace(
+        function_source_sha256="8455ba3c7f11d90610079dd63bb522e334792847fa571f5065d4412b85577bb1",
+        function_source_bytes=754,
+    ),
+    "on_create_table_or_view": _MANAGED_EVENT_TRIGGER_CONTRACT["on_create_table_or_view"]._replace(
+        function_source_sha256="abcc894b28bd505cdc0c8f5dbb144329d0da2723fb0d61cc7458e8a495a47cff",
+        function_source_bytes=1991,
+    ),
+}
+# The reviewed revisions. A database must match one of them in full: a row
+# from one beside a row from the other, or any byte of any body outside both,
+# is refused. A new provider revision is added here, from a live capture,
+# never as a looser pattern.
+_MANAGED_EVENT_TRIGGER_VARIANTS: tuple[_ManagedEventTriggerVariant, ...] = (
+    _ManagedEventTriggerVariant(
+        revision="install",
+        seen_on="client #1's install instance, PostgreSQL 16 (the contract's origin)",
+        rows=_MANAGED_EVENT_TRIGGER_CONTRACT,
+    ),
+    _ManagedEventTriggerVariant(
+        revision="fresh-2026-11",
+        seen_on=(
+            "PostgreSQL 16.15 (server_version_num 160015), four databases on two "
+            "Provisioned instances created 2026-11 (spike S2b, 2026-11-10)"
+        ),
+        rows=_MANAGED_EVENT_TRIGGER_CONTRACT_2026_11,
+    ),
+)
+
+
+def _managed_event_trigger_drift(
+    actual: Mapping[str, _ManagedEventTriggerContractRow],
+) -> tuple[list[str], bool]:
+    """(managed names whose row matches no reviewed revision, whether complete rows mix revisions)."""
+
+    drifted = sorted(
+        name
+        for name, row in actual.items()
+        if name in _MANAGED_EVENT_TRIGGER_CONTRACT
+        and all(row != variant.rows[name] for variant in _MANAGED_EVENT_TRIGGER_VARIANTS)
+    )
+    complete = set(actual) == set(_MANAGED_EVENT_TRIGGER_CONTRACT)
+    mixed = (
+        complete
+        and not drifted
+        and not any(dict(actual) == dict(variant.rows) for variant in _MANAGED_EVENT_TRIGGER_VARIANTS)
+    )
+    return drifted, mixed
+
+
 # PostgreSQL represents the default owner-plus-PUBLIC EXECUTE state as NULL.
 # Earlier hardened databases can retain the exact cloud_admin-owner-only state.
 # Both are provider-owned, immutable representations; runtime lookup is denied
@@ -373,6 +447,35 @@ _MANAGED_OAUTH_ROLE_FUNCTION_ACLS = frozenset(
 _PROVIDER_SCHEMA_NAME = "__db_system"
 _PROVIDER_SCHEMA_OWNER = "databricks_control_plane"
 _PROVIDER_DATABASE_WRITER_ROLE_PREFIX = "databricks_writer_"
+
+
+def _public_schema_acl_variants(
+    writer_role: str,
+) -> tuple[frozenset[tuple[str, str, bool, str]], ...]:
+    """Every exact hardened ``public`` ACL a reviewed provider revision leaves, PUBLIC's USAGE closed.
+
+    (grantee, privilege, grantable, grantor) rows. The install revision also
+    grants the database's writer role USAGE and CREATE. A database created in
+    2026-11 has no such rows although the role exists (spike S2b: four
+    databases on two fresh instances, PostgreSQL 16.15); that revision is the
+    same ACL less those two rows, never a pattern, and grants nothing more.
+    """
+
+    provider = frozenset(
+        {
+            ("pg_database_owner", "CREATE", False, "pg_database_owner"),
+            ("pg_database_owner", "USAGE", False, "pg_database_owner"),
+            ("databricks_superuser", "CREATE", True, "pg_database_owner"),
+            ("databricks_superuser", "USAGE", True, "pg_database_owner"),
+        }
+    )
+    writer = frozenset(
+        {
+            (writer_role, "CREATE", False, "pg_database_owner"),
+            (writer_role, "USAGE", False, "pg_database_owner"),
+        }
+    )
+    return (provider | writer, provider)
 
 _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT: dict[str, tuple[str, int]] = {
     "databricks_list_roles": (
