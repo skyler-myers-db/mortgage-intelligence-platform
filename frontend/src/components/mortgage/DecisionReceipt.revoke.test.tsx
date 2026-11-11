@@ -143,13 +143,13 @@ describe('DecisionReceipt: Revoke on the queue receipt', () => {
   });
 
   it('says a campaign-bound approval cannot be revoked instead, and carries the campaign id on a tooltip', async () => {
-    await show({ ...LEDGER, campaign_id: '7e373ef5-d4b6-4fea-b555-0cb925987a72', variant_name: 'Supervisor B' }, { decidedHere: true, compact: true });
+    await show({ ...LEDGER, campaign_id: '5eed00a4-0000-4000-8000-0000000000a4', variant_name: 'Supervisor B' }, { decidedHere: true, compact: true });
     expect(revoke()).toBeNull();
     expect(bound()?.textContent).toBe("Campaign-bound approvals can't be revoked in this release.");
     const campaign = container.querySelector('[data-receipt-field="campaign"]');
     expect(campaign?.hasAttribute('title')).toBe(false);
     const tip = campaign?.getAttribute('data-tooltip');
-    expect(tip && document.getElementById(tip)?.textContent).toBe('7e373ef5-d4b6-4fea-b555-0cb925987a72');
+    expect(tip && document.getElementById(tip)?.textContent).toBe('5eed00a4-0000-4000-8000-0000000000a4');
     expect(container.querySelector('[data-receipt-field="copy-hash"]')?.hasAttribute('title')).toBe(false);
   });
 });

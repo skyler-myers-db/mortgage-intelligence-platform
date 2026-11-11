@@ -3,8 +3,8 @@
 > Internal validation artifact - not approved for public release. This document contains deployment identifiers, workspace references, and implementation notes intended for engineering review.
 
 **Persona:** Maya, Marketing Leader at Summit Mortgage  
-**Current deployment validated:** `01f14dbfb9e81300a5e969695671c6d2`  
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
+**Current deployment validated:** `<deployment-id>`  
+**App:** `https://<app-host>`  
 **Validation date:** 2026-05-12 America/New_York
 
 ## Remediation Status
@@ -44,7 +44,7 @@ Maya can now:
 
 ## Validation Evidence
 
-- `./scripts/deploy.sh --no-confirm --skip-silver` completed against deployment `01f14dbfb9e81300a5e969695671c6d2`.
+- `./scripts/deploy.sh --no-confirm --skip-silver` completed against deployment `<deployment-id>`.
 - Live smoke passed after Lakebase migration, gold refresh, lifecycle sync, and Genie rebind.
 - Live hardened probe passed:
   - default `/api/portfolio/preview` returned eligible-only population `233,420`; explicit `marketing_eligibility='Any'` returned full population `5,156,184`;
@@ -52,7 +52,7 @@ Maya can now:
   - suppressed/frequency-capped borrower `B-0FSL4B96HG6V4` failed closed on draft;
   - `campaign_id='jane@example.com'`, `variant_name='Call 212-555-1212'`, and `variant_name='Jane Smith'` returned HTTP 422;
   - eligible borrower `B-102FL7THC6Q3L` returned disclosure-backed email, SMS, and direct-mail drafts.
-- Live Maya walkthrough passed with campaign `04da0c51-e10e-4a12-a320-ab1250c93254`; screenshots captured under `/tmp/mip-maya-walkthrough-20260512-final3`.
+- Live Maya walkthrough passed with campaign `<campaign-id>`; screenshots captured under `/tmp/mip-maya-walkthrough-20260512-final3`.
 - Live visual/responsive/proof suite passed: 42 Playwright tests, including Genie Answer proof non-overlap.
 - Local validation passed:
   - `.venv/bin/ruff check backend tests tools`;
@@ -66,7 +66,7 @@ Maya can now:
 
 The app still does not send to Marketo, SFMC, HubSpot, SMS gateways, or direct-mail vendors. That is intentional for Module 0: no external outreach is sent automatically. Post-send deliverability attribution and fair-lending copy linting should be implemented as a dedicated compliance/marketing-automation tranche before any production send integration.
 
-## Independent re-validation (Claude, 2026-05-12 09:50 UTC, deployment `01f14dbfb9e81300a5e969695671c6d2`)
+## Independent re-validation (Claude, 2026-05-12 09:50 UTC, deployment `<deployment-id>`)
 
 | Finding | Engineering claim | Independent live re-validation |
 |---|---|---|
@@ -75,7 +75,7 @@ The app still does not send to Marketo, SFMC, HubSpot, SMS gateways, or direct-m
 | P0-M3 Disclosure footer was placeholder | Versioned tenant disclosures resolve per state/channel | ✅ Verified. Email body now ends "Summit Mortgage, NMLS #123456. Equal Housing Lender. This is not a commitment to lend. Terms subject to credit, collateral, and underwriting approval. To opt out of marketing, reply unsubs..." Response includes `disclosure_version` and `disclosure_state` (e.g., `summit-demo-2026-05-v1`, `_ALL`). SMS body: "Summit: mortgage review. Reply YES. Summit Mortgage NMLS #123456. Equal Housing Lender. Reply STOP to opt out. Msg and data rates may apply." Direct mail body has no "Reply" framing and a mail-appropriate opt-out path. |
 | P1-M4 No consent/suppression/recency filter UI | Filters exposed on Segments / Lead Queue / Portfolio Builder | ✅ Verified visually. Segment Intelligence now shows **CONTACTABILITY Eligible only / CONSENT Any / RECENCY Any** chips after the existing LOCATION/OCCUPANCY/LIEN/OWNER LINK/PURCHASE INTENT/CASH-OUT. Lead Queue queue-filter card mirrors the same three chips after STATE/RELATIONSHIP/SEGMENT/PRODUCT. With CONTACTABILITY=Eligible only the In-the-Money segment count drops from 134,534 → **6,204**. |
 | P1-M5 No message variants | `message_variants` accepted on campaign create with PII-safe validation | ✅ Verified. The Maya-QA seeded campaign carries an array of `message_variants` with `variant_name / subject / body / channel / weight_pct`. Variant_name validation rejects PII shapes — `Call 212-555-1212` → **HTTP 422** "variant_name cannot contain PII, raw identifiers, or unresolved placeholders"; `Jane Smith` → **HTTP 422** "variant_name cannot contain human-name-shaped text"; `jane@example.com` → **HTTP 422** same as phone. |
-| P1-M6 No list/get/patch for campaigns | `/api/portfolio` + `/api/campaigns` list, owner/admin-scoped, status advancement audited | ✅ Verified. `GET /api/portfolio` and `GET /api/campaigns` both return 200 with the same list. Seeded campaign `04da0c51-e10e-4a12-a320-ab1250c93254` "Maya QA CA recapture 9a8e2a" carries `status=pending_review`, full `criteria`, `suppression_policy {frequency_cap_days, marketing_eligibility, exclude_suppression_reasons}`, and `message_variants`. |
+| P1-M6 No list/get/patch for campaigns | `/api/portfolio` + `/api/campaigns` list, owner/admin-scoped, status advancement audited | ✅ Verified. `GET /api/portfolio` and `GET /api/campaigns` both return 200 with the same list. Seeded campaign `<campaign-id>` "Maya QA CA recapture 9a8e2a" carries `status=pending_review`, full `criteria`, `suppression_policy {frequency_cap_days, marketing_eligibility, exclude_suppression_reasons}`, and `message_variants`. |
 | P1-M7 `marketing_eligible` in CTAS but not in live gold | Gold projects the column | ✅ Verified. `DESCRIBE mip.gold.borrower_360` now includes the column; counts match `/api/portfolio/preview`. |
 | P1-M8 Single disclosure constant | State/channel keyed disclosures with _ALL fallback | ✅ Verified by `disclosure_state` and `disclosure_version` on every draft response (e.g., `disclosure_state="_ALL"`). |
 | P1-M9 External deliverability/attribution | Deferred to post-Module-0 send-integration tranche | 🟡 Correctly deferred — no external send path; no callback in scope. |

@@ -3,9 +3,9 @@
 > **Internal validation artifact — not public release collateral.** This document includes workspace-specific deployment details, authenticated actor/header observations, and sandbox audit byproducts. Use it to track remediation and release gates; do not treat it as customer-facing proof or final public-release signoff.
 
 **Auditor:** Claude (Cowork)
-**Scope:** Live Databricks App at `https://mip-app-2543889327043640.aws.databricksapps.com`, the codebase at `/Users/entrada-mac/repos/mortgage-intelligence-platform`, and the underlying Unity Catalog (`mip.*`) + Lakebase (`mip_app_state`) data plane.
+**Scope:** Live Databricks App at `https://<app-host>`, the codebase at `/Users/entrada-mac/repos/mortgage-intelligence-platform`, and the underlying Unity Catalog (`mip.*`) + Lakebase (`mip_app_state`) data plane.
 **Reference:** Module 0 Top-of-Funnel Lead Generation & Borrower Segmentation spec (uploaded `.docx`).
-**Method:** Direct SQL via Statement Execution API on warehouse `81d08d4fa2d799e9`; live `/api/*` calls with the user's workspace OAuth token; live Genie space invocation (`01f13d4968af1b249dc388fd5b18b195`); visual screenshots of every route at 1373×898 (Chrome read-only).
+**Method:** Direct SQL via Statement Execution API on warehouse `<warehouse-id>`; live `/api/*` calls with the user's workspace OAuth token; live Genie space invocation (`<genie-space-id>`); visual screenshots of every route at 1373×898 (Chrome read-only).
 
 ---
 
@@ -15,7 +15,7 @@ The product is in good shape for internal/partner demo rehearsal. Home, Portfoli
 
 This is not unconditional ship/public-release signoff. Remaining release gates are explicit: the Databricks Apps edge-header policy decision, Cotality MLS/Listings and Building Permits feeds, and governance approval for retaining versus deleting sandbox audit byproducts.
 
-This file records the original audit findings, the remediation status the engineering team reported, and an independent live re-validation Claude ran against the deployed Databricks App snapshot `01f14beaf1f01b4e95a5825ce5ebe3e6` (active deployment 2026-05-09T21:10:34Z, creator skyler@entrada.ai).
+This file records the original audit findings, the remediation status the engineering team reported, and an independent live re-validation Claude ran against the deployed Databricks App snapshot `<deployment-id>` (active deployment 2026-05-09T21:10:34Z, creator `<operator-email>`).
 
 ## Codex re-review addendum (2026-05-09 22:30-23:00 UTC)
 
@@ -30,7 +30,7 @@ Adjustments made during this re-review:
 Validation from this pass:
 - `./.venv/bin/python -m pytest tests/unit/test_outreach_reject.py tests/integration/test_borrower_dossier_parity.py tests/unit/test_admin_rules.py tests/unit/test_workspace_api.py tests/unit/test_workspace_store_contract.py tests/unit/test_lifecycle_sync_contract.py tests/unit/test_public_api_schema_guards.py -q` passed (`55 passed, 3 skipped`).
 - `npm --prefix frontend run test -- --run src/components/mortgage/BorrowerTruthFlags.test.ts src/lib/api.test.ts src/lib/drawerSources.test.ts src/components/mortgage/GenieAnswer.test.tsx` passed (`45 passed`).
-- `scripts/e2e_live.sh` passed the live Playwright real-data suite against `https://mip-app-2543889327043640.aws.databricksapps.com` (`21 passed, 1 skipped`; the forced-503 degraded-banner case remains skipped without `MIP_FORCE_DEGRADED_TOKEN`).
+- `scripts/e2e_live.sh` passed the live Playwright real-data suite against `https://<app-host>` (`21 passed, 1 skipped`; the forced-503 degraded-banner case remains skipped without `MIP_FORCE_DEGRADED_TOKEN`).
 - `git diff --check` and `bash -n scripts/e2e_live.sh` passed.
 
 Independent review lanes returned PASS for data/API fixes, P1/P2 behavior, stale draft cleanup, audit-doc boundary, and audit pollution handling. The only remaining BLOCK is the Databricks Apps edge headers (`gap-auth`, `x-databricks-internal-pod-ip`) on authenticated responses; public/customer release still needs a Databricks platform exception or a header-stripping front door.
@@ -62,11 +62,11 @@ Independent review lanes returned PASS for data/API fixes, P1/P2 behavior, stale
 | **State rollups** | `/api/geo/state-rollups` matches the current live Cotality geography footprint; per-state addressable counts match `borrower_360`. |
 | **Genie grounding** | Direct ask "How many borrowers are in the in-the-money segment?" → 134,534 (matches), Genie writes a clean SQL against `mip.gold.borrower_360 WHERE in_the_money = TRUE`. |
 | **Genie known-gap handling** | "How many in-the-money borrowers also have a building permit?" → "Cotality MLS/listing and Building Permits feeds are pending… Source: `mip.gold.source_readiness`." It does not silently return 0. |
-| **Audit ledger** | Every API call I made (`view_borrower_360`, `view_leads_ranked`, `recommend_offer`, `draft_outreach`, `outreach.approve`, `outreach.reject`) wrote a structured row to `mip_app.audit_events` with the correct `actor=skyler@entrada.ai` (sourced from `gap-auth` / X-Forwarded-Email), evidence_ids, payload_json, subject_clip, and request_id. |
+| **Audit ledger** | Every API call I made (`view_borrower_360`, `view_leads_ranked`, `recommend_offer`, `draft_outreach`, `outreach.approve`, `outreach.reject`) wrote a structured row to `mip_app.audit_events` with the correct `actor=<operator-email>` (sourced from `gap-auth` / X-Forwarded-Email), evidence_ids, payload_json, subject_clip, and request_id. |
 | **Idempotent approvals** | Re-POSTing `/api/outreach/approve` with the same `request_id` returns the **same** `approval_id` and an **empty** `audit_event_id` (no double-write). The partial unique index on `mip_app.approvals.request_id` is doing its job. |
 | **Lifecycle mirror** | `mip.gold.borrower_lifecycle_state` carries exactly 5,156,184 rows, matching `mip.gold.borrower_360`; orphan anti-join count is 0 after the lifecycle sync fix. |
 | **Resilience telemetry** | `/api/health` reports `dependencies: warehouse=up, lakebase=up, genie=up`, all three circuit breakers `closed`, `breaker_state_changes_last_hour: 0`, `recent_errors_count: 0`. |
-| **Trust boundary** | Response headers include `gap-auth: skyler@entrada.ai`; the backend uses `resolve_actor(request)` against `X-Forwarded-Email`, not request body fields, so an attacker can't spoof `payload.actor`. |
+| **Trust boundary** | Response headers include `gap-auth: <operator-email>`; the backend uses `resolve_actor(request)` against `X-Forwarded-Email`, not request body fields, so an attacker can't spoof `payload.actor`. |
 | **Source coverage** | 12 of 19 source assets `live`, 5 `demo_synthetic` (first-party Summit feeds), 2 `roadmap` (MLS, Permits — explicitly disclosed). |
 | **Evidence richness** | 18,263,605 rows across 11 signal types (`market_trend`, `equity`, `competitor_lien`, `rate_spread`, `multi_property`, `corporate_owner`, `recent_sale`, `absentee_mailing`, `recent_payoff`, `recent_refi`, `foreclosure_stage`). |
 
@@ -99,13 +99,13 @@ At audit time, the Borrower 360 endpoint backed onto `mip.gold.borrower_dossier`
 **Repro:**
 ```bash
 curl -s -H "Authorization: Bearer $TOK" \
-  https://mip-app-2543889327043640.aws.databricksapps.com/api/borrowers/B-102FL7THC6Q3L | \
+  https://<app-host>/api/borrowers/B-102FL7THC6Q3L | \
   jq '{is_investor, is_owner_occupied, segment_codes}'
 # → { "is_investor": false, "is_owner_occupied": false, "segment_codes": ["itm","investor","equity"] }
 
 databricks api post /api/2.0/sql/statements --json '{
   "statement":"SELECT is_investor, is_owner_occupied FROM mip.gold.borrower_dossier WHERE borrower_id='\''B-102FL7THC6Q3L'\''",
-  "warehouse_id":"81d08d4fa2d799e9","wait_timeout":"30s"}'
+  "warehouse_id":"<warehouse-id>","wait_timeout":"30s"}'
 # → [["true","false"]]
 ```
 
@@ -126,7 +126,7 @@ By contrast, the borrower-scoped reads (`/api/borrowers/{id}`, `/api/borrowers/{
 curl -s -H "Authorization: Bearer $TOK" -X POST \
   -H 'Content-Type: application/json' \
   -d '{"borrower_id":"B-DOES-NOT-EXIST","offer_code":"OFFER-x","request_id":"'$(uuidgen)'"}' \
-  https://mip-app-2543889327043640.aws.databricksapps.com/api/outreach/approve
+  https://<app-host>/api/outreach/approve
 # → {"approved":true,"approval_id":"...","audit_event_id":"..."}
 ```
 
@@ -222,13 +222,13 @@ At original audit time, `SELECT COUNT(*) FROM mip.gold.borrower_lifecycle_state`
 
 ### P2-3. Genie warehouse vs. app warehouse split
 
-`/api/2.0/apps/mip-app` shows the app bound to `81d08d4fa2d799e9` ([dev skyler] mip_serverless_sql). The Genie space is configured with `warehouse_id: da02d15a9490650b`. Two serverless warehouses warming up independently doubles cold-start exposure and DBU spend during a presentation. Either pin Genie to the app's warehouse (CAN_USE permission already covers it) or document the split.
+`/api/2.0/apps/mip-app` shows the app bound to `<warehouse-id>` ([dev skyler] mip_serverless_sql). The Genie space is configured with `warehouse_id: <warehouse-id>`. Two serverless warehouses warming up independently doubles cold-start exposure and DBU spend during a presentation. Either pin Genie to the app's warehouse (CAN_USE permission already covers it) or document the split.
 
 ### P2-4. Response headers leak internal infrastructure detail
 
 The HTML root response includes:
 ```
-gap-auth: skyler@entrada.ai
+gap-auth: <operator-email>
 x-databricks-internal-pod-ip: MTAuMTUyLjExOC4yMTE6NzE3Mg==     (base64 of 10.152.118.211:7172)
 ```
 
@@ -309,10 +309,10 @@ The user authorized state-changing test calls. The following rows now exist in t
 
 | Borrower ID | Action | approval_id | When |
 |---|---|---|---|
-| `B-AUDIT-PROBE-001` | approve | `8c77fc38-f58f-4139-b429-936a34fce4f9` | 2026-05-09T18:27:40Z |
-| `B-FUZZ-NORID` | approve (no client request_id; auto-derived) | `79261af1-2a81-42e3-812f-f5059487f209` | 2026-05-09T18:30:??Z |
-| `B-FUZZ-IDEM-1` | approve (idempotent — same `approval_id` returned twice) | `9a05d777-2154-4a09-930f-7387d29ae154` | 2026-05-09T18:30:??Z |
-| `B-FUZZ-REJECT` | reject | `e406e80d-19d2-491b-92f9-70a764b88770` | 2026-05-09T18:30:??Z |
+| `B-AUDIT-PROBE-001` | approve | `<approval-id>` | 2026-05-09T18:27:40Z |
+| `B-FUZZ-NORID` | approve (no client request_id; auto-derived) | `<approval-id>` | 2026-05-09T18:30:??Z |
+| `B-FUZZ-IDEM-1` | approve (idempotent — same `approval_id` returned twice) | `<approval-id>` | 2026-05-09T18:30:??Z |
+| `B-FUZZ-REJECT` | reject | `<approval-id>` | 2026-05-09T18:30:??Z |
 | `B-0FSL4B96HG6V4` | draft_outreach | n/a (no approval) | 2026-05-09T18:27:39Z |
 
 Optional cleanup after the now-deployed P0-2 fix, only if governance approves deleting sandbox audit pollution:

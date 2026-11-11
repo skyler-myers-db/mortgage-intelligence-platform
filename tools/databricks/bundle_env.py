@@ -43,6 +43,8 @@ Mapping, every target (env -> BUNDLE_VAR_*):
   MIP_LENDER_IDENTITY_JSON / _SHA256
                           -> BUNDLE_VAR_lender_identity_json / _sha256 (a
                              verified digest-pinned customer record only)
+  MIP_SEED_OPERATOR_EMAIL -> BUNDLE_VAR_seed_operator_email (-t client, the
+                             profile's demo-only field; unset otherwise)
   MIP_COTALITY_SOURCE_CATALOG / _SCHEMA / _TABLE_PREFIX
                           -> BUNDLE_VAR_cotality_source_catalog / _schema /
                              _table_prefix (canonical when unset; '-' is no
@@ -685,6 +687,12 @@ def main() -> int:
         # Only a record verified here may reach the bundle, never an ambient one.
         env.pop("BUNDLE_VAR_lender_identity_json", None)
         env.pop("BUNDLE_VAR_lender_identity_sha256", None)
+    # The demo seed's operator (M1-PR4): the profile's demo-only
+    # MIP_SEED_OPERATOR_EMAIL, never an ambient export; unset seeds the
+    # synthetic operator (jobs/lakebase_migration_seed.py).
+    env.pop("BUNDLE_VAR_seed_operator_email", None)
+    if profile is not None and profile.seed_operator_email:
+        env["BUNDLE_VAR_seed_operator_email"] = profile.seed_operator_email
 
     # -t client: the names are the profile's, which validated their shapes and
     # alias agreement; -t ci keeps the environment's names and defaults.

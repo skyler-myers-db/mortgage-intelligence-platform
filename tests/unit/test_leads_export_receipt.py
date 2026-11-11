@@ -151,7 +151,7 @@ def test_a_filter_set_whose_fingerprint_reads_as_a_phone_number_still_exports(
     audit_store: InMemoryAuditStore,
 ) -> None:
     # Pre-2026-10-28 the entity was ``export-{fingerprint[:16]}``. The lead
-    # export fingerprint is UNKEYED, so ``states=KS`` (85334b6556021725...)
+    # export fingerprint is UNKEYED, so ``states=KS`` (85334b65...)
     # read as a phone number in every deployment: the audit-id PII guard
     # refused the row and the Kansas CSV never downloaded (422).
     filters = {"states": "KS"}

@@ -353,6 +353,34 @@ def _cotality_source_env(dotenv: dict[str, str]) -> list[dict[str, str]]:
     ]
 
 
+# The App's Lakebase database (backend.config.settings.lakebase_database; a
+# test pins the default equal). The App reads it before the PGDATABASE its
+# database binding injects (backend/services/lakebase.py), so an App whose
+# payload does not name its database opens this default.
+DEFAULT_LAKEBASE_DATABASE = "mip_app_state"
+
+
+def _lakebase_database_env(lakebase_database: str) -> list[dict[str, str]]:
+    """``LAKEBASE_DATABASE`` for the App, only when the deploy binds another database.
+
+    The name is the one scripts/deploy.sh binds (``--lakebase-database``,
+    the client profile's ``LAKEBASE_DATABASE``), never an ambient or
+    ``.env.local`` value: a stale local DSN hint must not point the App at
+    another database than its binding. Before M3-PR4 the payload never named
+    it, so a second client's App opened the default database on its instance
+    (tests/unit/test_client_portability_proof.py). The default adds nothing,
+    so the default install's env-name set is exactly the one the emergency
+    recipe gates on (tests/unit/test_settings_d0_env_parity.py).
+    """
+
+    database = lakebase_database.strip()
+    if source_names.UC_IDENTIFIER.fullmatch(database) is None:
+        raise ValueError("--lakebase-database must be a lowercase unquoted identifier")
+    if database == DEFAULT_LAKEBASE_DATABASE:
+        return []
+    return [{"name": "LAKEBASE_DATABASE", "value": database}]
+
+
 # The runtime's Literal (backend.config.settings.mip_genie_refusal_text_capture).
 REFUSAL_TEXT_CAPTURE_VALUES = ("enabled", "disabled")
 
@@ -449,6 +477,7 @@ def build_payload(
     catalog: str = CATALOG_DEFAULT,
     schema: str = SCHEMA_DEFAULT,
     lakebase_instance: str = DEFAULT_LAKEBASE_INSTANCE_NAME,
+    lakebase_database: str = DEFAULT_LAKEBASE_DATABASE,
     mode: str = "SNAPSHOT",
     campaign_treatment_runtime_enabled: bool = False,
     otel_endpoint: str = "",
@@ -478,6 +507,7 @@ def build_payload(
     core_tier_switches = _core_tier_switches(dotenv, agentic_tier)
     _validated_refusal_text_capture(dotenv)
     cotality_source_env = _cotality_source_env(dotenv)
+    lakebase_database_env = _lakebase_database_env(lakebase_database)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
         raise ValueError(
             "MIP_OTEL_ENDPOINT and its App secret resource must be configured together"
@@ -490,6 +520,7 @@ def build_payload(
         {"name": "LAKEBASE_HOST", "value_from": "database"},
         {"name": "LAKEBASE_INSTANCE_NAME", "value": lakebase_instance},
         {"name": "MIP_LAKEBASE_INSTANCE", "value": lakebase_instance},
+        *lakebase_database_env,
         {"name": "MIP_LIFECYCLE_SYNC_JOB_ID", "value_from": "lifecycle_sync_job"},
         {"name": "MIP_FRED_RATES_JOB_ID", "value_from": "fred_rates_job"},
         {"name": "MIP_SILVER_REFRESH_JOB_ID", "value_from": "silver_refresh_job"},
@@ -584,6 +615,8 @@ def _parser() -> argparse.ArgumentParser:
         "--lakebase-instance",
         default=DEFAULT_LAKEBASE_INSTANCE_NAME,
     )
+    # The database scripts/deploy.sh binds; the default adds no name (M3-PR4).
+    parser.add_argument("--lakebase-database", default=DEFAULT_LAKEBASE_DATABASE)
     parser.add_argument("--mode", default="SNAPSHOT", choices=("SNAPSHOT", "AUTO_SYNC"))
     parser.add_argument(
         "--enable-campaign-treatment-runtime",
@@ -612,6 +645,7 @@ def main(argv: list[str] | None = None) -> int:
             catalog=args.catalog,
             schema=args.schema,
             lakebase_instance=args.lakebase_instance,
+            lakebase_database=args.lakebase_database,
             mode=args.mode,
             campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
             otel_endpoint=args.otel_endpoint,

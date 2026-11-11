@@ -6,9 +6,9 @@
 > regression gates that should catch configuration drift before deploy.
 
 **Date:** 2026-05-18  
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
-**Baseline deployment audited:** `01f1530971261d09af6eefef69992d05`  
-**Remediated deployment validated:** `01f1531dee6e18a79f82e1cb47c5fed4`
+**App:** `https://<app-host>`  
+**Baseline deployment audited:** `<deployment-id>`  
+**Remediated deployment validated:** `<deployment-id>`
 
 ## Headline Result
 
@@ -23,7 +23,7 @@ Entrada developer address. Those issues are now closed in the worktree.
 | Original item | Status | Evidence |
 |---|---|---|
 | HIGH 1 — `MIP_ADMIN_EMAILS`, `MIP_ADMIN_GROUP_NAME`, `MIP_DEFAULT_ACTOR`, `MIP_TRUST_FORWARDED_HEADERS` ignored | Closed | `Settings` now uses `AliasChoices(...)` with `MIP_*` first and legacy unprefixed aliases second. |
-| MEDIUM 1 — `admin_emails` hardcoded to `skyler@entrada.ai` | Closed | Default is now `""`; group membership remains the preferred admin path. |
+| MEDIUM 1 — `admin_emails` hardcoded to `<operator-email>` | Closed | Default is now `""`; group membership remains the preferred admin path. |
 | MEDIUM 2 — tuning knobs missing from `.env.example` | Closed | `.env.example` now documents load-protection, concurrency, Lakebase pool, RUM, admin, and trust-boundary knobs. |
 | LOW 1 — direct `os.environ` reads mixed into `.env.example` with no contract | Closed | `.env.example` now has an explicit direct-read / deploy-only section. |
 | LOW 2 — trust-boundary warning only visible in stdout | Closed | `/api/v1/admin/health` now includes `boundary_warning` for the same unsafe deploy-shape condition. |
@@ -90,7 +90,7 @@ Deployment validation completed:
 ```
 
 The orchestrator completed every phase and passed `scripts/smoke_live.sh`
-against `https://mip-app-2543889327043640.aws.databricksapps.com`:
+against `https://<app-host>`:
 
 - FRED market-rate refresh: success.
 - Silver refresh: success.
@@ -205,7 +205,7 @@ every PR.
   (`test_uc_functions_are_wired_before_gold_ctas`). The repo is
   developing a coherent "test the deploy artifact, not just the
   source" discipline.
-- Live deployment evidence (`01f1531dee6e18a79f82e1cb47c5fed4`,
+- Live deployment evidence (`<deployment-id>`,
   RUNNING/ACTIVE, smoke + 7 extra probes pass) is captured in the
   remediation doc. Live curls from this sandbox return HTTP 403 from
   the workspace proxy, so I relied on the engineering signoff's live
@@ -221,7 +221,7 @@ every PR.
 
 Every original finding (1 HIGH + 2 MEDIUM + 4 LOW) is genuinely closed
 in the working tree, locked by a real regression gate, and verified
-against the post-deployment active app `01f1531dee6e18a79f82e1cb47c5fed4`.
+against the post-deployment active app `<deployment-id>`.
 Three adjacent issues surfaced during engineering's live validation
 (deploy payload propagation, Lakebase DSN override, Lakebase probe
 PGUSER assumption) are also closed and tested. All 18 cross-audit

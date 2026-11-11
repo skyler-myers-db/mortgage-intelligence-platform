@@ -14,7 +14,7 @@ target's, and the reserved SPs are resolved by name in that workspace.
 (2026-10-27): the live metastore holds `mip_pr105_staging` and another
 team's catalog (its grant revoked via a pr105 credential 2026-08-03); `mip`,
 `mip_app_state`, `cotality_mortgage_data` are OPEN there; 12 ISOLATED
-catalogs, none bound to pr105 (workspace 7474645995341779 on record). The
+catalogs, none bound to pr105 (workspace `<workspace-id>` on record). The
 forked anchor separates only workspace-scoped objects (App, warehouse,
 endpoints, Genie, secret scopes, Lakebase, `users` group, SP assignments).
 **How to apply:** catalog-scoped names (MIP_DEFAULT_CATALOG,
@@ -44,7 +44,7 @@ both installs' endpoints, so creator cannot separate them.
 - `bundle_env.py` always exports `BUNDLE_VAR_genie_space_id`, so the dev
   target's Genie pin binds only for a bare `databricks bundle` call. The pin
   was stale (01f18188... = staging, from 441588f6) until this lane; live is
-  01f13d4968af1b249dc388fd5b18b195.
+  `<genie-space-id>`.
 - `bundle validate` on a `git archive` tree fails on missing `sql/_rendered/*`
   until `tools/render_sql.py --catalog mip` runs there, but still emits the
   JSON render; never validate `prod` (pins DEFAULT = pr105) or `pr105-host`.

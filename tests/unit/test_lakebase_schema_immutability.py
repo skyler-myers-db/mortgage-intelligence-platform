@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from jobs.lakebase_migration_seed import render_seed_sql
+
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 
 
 def _migration_source() -> str:

@@ -6,7 +6,7 @@
 
 **Slice:** 13 — Accuracy Validation.
 **Date run:** 2026-04-21.
-**Warehouse:** `da02d15a9490650b` (serverless).
+**Warehouse:** `<warehouse-id>` (serverless).
 **Catalog:** `mip`.
 **Share:** `cotality_mortgage_data.corelogic` (last updated 2026-10-29 per gap analysis).
 **Pass/fail summary:** Live gate compares all unblocked segments across every refreshed coverage state discovered from gold rollups. In this 2026-04-21 run, `listed` and `permit` were still source-blocked and correctly returned 0 on both sides.
@@ -371,9 +371,9 @@ agent can route them.
 ```bash
 # Ensure env vars are set (or rely on the CLI OAuth fallback the test
 # ships with):
-export DATABRICKS_HOST=https://dbc-3aa503a9-4fa8.cloud.databricks.com
+export DATABRICKS_HOST=https://<workspace-host>
 export DATABRICKS_TOKEN=<PAT>                # or rely on `databricks auth token -p DEFAULT`
-export DATABRICKS_WAREHOUSE_ID=da02d15a9490650b
+export DATABRICKS_WAREHOUSE_ID=<warehouse-id>
 
 # Run just the parity test (~15s on a warm warehouse):
 pytest tests/integration/test_segment_count_parity.py -v

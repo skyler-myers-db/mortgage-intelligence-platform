@@ -1,6 +1,11 @@
 name: prod-readiness-gate
 on:
   workflow_dispatch:
+    inputs:
+      client:
+        description: "The client key whose nightly.yml runs are the live evidence (run-name nightly client=<key> sha=<sha>)"
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -32,6 +37,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Live-validation release gate
+        # Per-client evidence (M1-PR8): another client's green run never
+        # certifies this client's release.
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python -m tools.live_validation_gate --release-sha "$GITHUB_SHA" --max-age-days 14
+          MIP_DISPATCH_CLIENT: ${{ inputs.client }}
+        run: python -m tools.live_validation_gate --release-sha "$GITHUB_SHA" --max-age-days 14 --client "$MIP_DISPATCH_CLIENT"

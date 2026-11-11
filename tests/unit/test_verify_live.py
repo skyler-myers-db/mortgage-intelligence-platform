@@ -544,7 +544,8 @@ def test_the_cli_threads_the_threshold_into_the_flags(monkeypatch: pytest.Monkey
     monkeypatch.setattr(verify_live, "collect_red_flags", fake_collect)
     monkeypatch.setattr(verify_live, "resolve_max_source_age_days", no_jobs_read)
     out = tmp_path / "report.md"
-    monkeypatch.setattr("sys.argv", ["verify_live.py", "--out", str(out), "--max-source-age-days", "9"])
+    argv = ["verify_live.py", "--base-url", "https://app.example", "--out", str(out)]
+    monkeypatch.setattr("sys.argv", [*argv, "--max-source-age-days", "9"])
 
     assert verify_live.main() == 0
     assert seen["days"] == 9

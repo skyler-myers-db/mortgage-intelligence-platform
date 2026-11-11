@@ -16,8 +16,8 @@ from tools.databricks.lakebase_oauth_role_recovery_identity import (
     prove_deleted_bootstrap_principal_absent,
 )
 
-_PRINCIPAL_ID = "78879891843203"
-_APPLICATION_ID = "3ca89330-2494-4b09-9587-1604d9432429"
+_PRINCIPAL_ID = "70000000000106"
+_APPLICATION_ID = "5eed00b5-0000-4000-8000-0000000000b5"
 
 
 def _not_found() -> NotFound:

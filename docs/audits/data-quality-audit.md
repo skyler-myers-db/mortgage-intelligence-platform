@@ -3,8 +3,8 @@
 > **Internal validation artifact — not approved for public release.** End-to-end check that the live app's data plane and contract layer agree: every gold table row count, every parent-child FK, every refresh timestamp, every Pydantic-to-SQL projection. Designed to catch silent drift between what the warehouse holds and what the API returns.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14e554fcd12a9bfc8eab46332c320`
-**Warehouse:** `81d08d4fa2d799e9` (DEFAULT profile, direct SQL Statements API)
+**App:** `https://<app-host>`, deployment `<deployment-id>`
+**Warehouse:** `<warehouse-id>` (DEFAULT profile, direct SQL Statements API)
 **Method:** SQL probes against `mip.silver.*`, `mip.gold.*`, `mip.ref.*`, `mip.semantics.*`, `mip.first_party.*` + grep against `backend/services/repositories/databricks_repo.py` + `backend/schemas/lead.py` to compare projections vs Pydantic schemas vs DDL.
 **Scope:** schema inventory, cardinality, null/FK integrity, refresh staleness, lifecycle mirror parity, value-range realism, projection-to-schema drift.
 
@@ -179,13 +179,13 @@ The data plane is production-quality. The three P2 items are honest-UX polish an
 
 ## Sources
 
-- Live SQL probes against warehouse `81d08d4fa2d799e9` via Databricks Statements API
+- Live SQL probes against warehouse `<warehouse-id>` via Databricks Statements API
 - `backend/services/repositories/databricks_repo.py` lines 101–141, 1699–1703
 - `backend/schemas/lead.py` lines 31–158
 - `sql/transformations/gold_borrower_360.sql` lines 121, 266–270, 666–667
 - `sql/transformations/gold_segment_population.sql` lines 32–80
 - `sql/uc_functions/fn_rate_spread.sql`
-- Statement IDs: `01f14e66-b5af-1299-b2e0-a7980b6c80ad`, `01f14e66-b675-1af8-8430-64d6736b9c37` (segment prior); plus follow-up rate / AVM / FK probes documented in `/tmp/segpop.sh`, `/tmp/segpop2.sh`, `/tmp/rate_check.sh`, `/tmp/rate_real.sh`, `/tmp/rate_source.sh`, `/tmp/rate_units.sh`, `/tmp/avm_check.sh`
+- Statement IDs: `<statement-id>`, `<statement-id>` (segment prior); plus follow-up rate / AVM / FK probes documented in `/tmp/segpop.sh`, `/tmp/segpop2.sh`, `/tmp/rate_check.sh`, `/tmp/rate_real.sh`, `/tmp/rate_source.sh`, `/tmp/rate_units.sh`, `/tmp/avm_check.sh`
 
 ---
 
@@ -193,8 +193,8 @@ The data plane is production-quality. The three P2 items are honest-UX polish an
 
 After the engineering team shipped fixes for all three P2 defects, re-ran the original probes plus live API + UI checks against the new deployment.
 
-**Active deployment:** `01f14e6f026a161e95c88e798a8096cc`
-**Gold refresh run:** `623227038704667` (refresh_at `2026-05-13T01:46:40.218Z`, applied uniformly across `borrower_360`, `borrower_dossier`, `lead_scores`, `lead_population`)
+**Active deployment:** `<deployment-id>`
+**Gold refresh run:** `<run-id>` (refresh_at `2026-05-13T01:46:40.218Z`, applied uniformly across `borrower_360`, `borrower_dossier`, `lead_scores`, `lead_population`)
 
 ### Claim-by-claim verdict
 
@@ -232,7 +232,7 @@ After the engineering team shipped fixes for all three P2 defects, re-ran the or
 
 ### Sign-off
 
-All three P2 defects from the original audit were **closed live on historical deployment `01f14e6f026a161e95c88e798a8096cc`**. The parity bug found mid-fix (evidence chips showing stale `+9238 bps` while borrower math showed `+863 bps`) was also closed in that validation pass — chip, why-panel, supporting-evidence section, and trigger timeline all agreed on `+863 bps`.
+All three P2 defects from the original audit were **closed live on historical deployment `<deployment-id>`**. The parity bug found mid-fix (evidence chips showing stale `+9238 bps` while borrower math showed `+863 bps`) was also closed in that validation pass — chip, why-panel, supporting-evidence section, and trigger timeline all agreed on `+863 bps`.
 
 The op note about `databricks bundle deploy -t dev` returning 403 on app-update (recovered via direct `databricks apps deploy`) was a tooling story for the bundle workflow, not a data-quality issue, and did not affect this sign-off. It was resolved on 2026-05-14 by pinning the dev target's Genie space id so the bare bundle path no longer sends the CI placeholder to Databricks Apps.
 

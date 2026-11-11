@@ -177,7 +177,7 @@ def test_rationale_with_pii_is_rejected_before_any_tool_can_run() -> None:
                 "step_id": "s1",
                 "tool": "fn_build_cohort",
                 "params": {},
-                "rationale": "call 415-555-1234 or email a@b.com " + "x" * 400,
+                "rationale": "call 415-555-1234 or email a@b.example " + "x" * 400,
             }
         ]
     }

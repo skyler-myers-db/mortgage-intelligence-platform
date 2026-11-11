@@ -1853,12 +1853,12 @@ def test_raw_clip_identifier_is_policy_blocked_not_charted() -> None:
     [
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE clip = '9154364327'",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE b.clip IN ('9154364327')",
-        "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE owner_link_id = 1100000134187756",
+        "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE owner_link_id = 1100000000000101",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE `clip` = '9154364327'",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 b WHERE b.`clip` IN ('9154364327')",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE clip = CAST('9154364327' AS STRING)",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE `borrower_identifier` = '1234567890'",
-        "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE `owner_1_identifier` = '1100000134187756'",
+        "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE `owner_1_identifier` = '1100000000000101'",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE CAST(clip AS STRING) = '9154364327'",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE TRIM(clip) = '9154364327'",
         "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE '9154364327' = clip",
@@ -1889,13 +1889,13 @@ def test_raw_cotality_identifier_literals_are_policy_blocked(sql_query: str) -> 
 @pytest.mark.parametrize(
     "answer_text",
     [
-        "Owner Link 1100000134187756 has 2 related properties.",
-        "Owner Link ID 1100000134187756 has 2 related properties.",
-        "owner_1_identifier=1100000134187756 matched.",
-        "Owner ID: 1100000134187756 matched.",
-        "owner_id=1100000134187756 matched.",
-        "OwnerID 1100000134187756 matched.",
-        "OwnerLink ID 1100000134187756 matched.",
+        "Owner Link 1100000000000101 has 2 related properties.",
+        "Owner Link ID 1100000000000101 has 2 related properties.",
+        "owner_1_identifier=1100000000000101 matched.",
+        "Owner ID: 1100000000000101 matched.",
+        "owner_id=1100000000000101 matched.",
+        "OwnerID 1100000000000101 matched.",
+        "OwnerLink ID 1100000000000101 matched.",
     ],
 )
 def test_raw_owner_identifier_answer_text_withholds_prose_ships_governed_rows(
@@ -1915,12 +1915,12 @@ def test_raw_owner_identifier_answer_text_withholds_prose_ships_governed_rows(
     stub = _StubClient(_make_breaker("closed"), response=live)
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
 
-    result = repo.respond("Tell me about Owner Link 1100000134187756.")
+    result = repo.respond("Tell me about Owner Link 1100000000000101.")
 
     assert result.source == "genie"
     assert result.sql_query == live.sql_query
     assert result.table_rows == [{"borrowers": 2}]
-    assert "1100000134187756" not in result.answer
+    assert "1100000000000101" not in result.answer
     # Disclosed in the proof and the process trace, never as body prose
     # (user feedback 2026-09-08: the notice read as pipeline chatter).
     assert "withheld" not in result.answer

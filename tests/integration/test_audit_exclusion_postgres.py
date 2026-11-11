@@ -25,12 +25,13 @@ from psycopg.rows import dict_row
 from backend.services.audit_filter_sql import audit_filter_clauses, read_audit_count
 from backend.services.audit_lakebase_store import LakebaseAuditStore
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 
 ADMIN = "ops@summit.example"
 AUDITOR = "auditor.one@summit.example"

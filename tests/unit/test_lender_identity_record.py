@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from backend.schemas import lender_branding
 from backend.schemas import lender_identity_record as record_module
 from backend.schemas.lender_identity import (
     effective_public_tenant_id,
@@ -46,6 +47,19 @@ MARK = {
     "authorization_ref": "BRAND-AUTH/2026-0042",
     "reviewed_on": "2026-09-30",
 }
+# The day the mark rule reads (lender_branding._today), pinned by the
+# pinned_today fixture. CI run 42926476980 built "tomorrow" in a parametrize
+# list, so at collection, on one day; the case ran after midnight, the
+# "future" date was today, and nothing refused. The pinned day is in the real
+# past, so a rule that stopped reading the seam would accept the pinned
+# tomorrow as a past date and fail the refusal case.
+PINNED_TODAY = date(2026, 10, 1)
+
+
+@pytest.fixture
+def pinned_today(monkeypatch: pytest.MonkeyPatch) -> date:
+    monkeypatch.setattr(lender_branding, "_today", lambda: PINNED_TODAY)
+    return PINNED_TODAY
 
 
 def _text(record: dict[str, Any] | None = None) -> str:
@@ -239,13 +253,22 @@ def test_a_record_mark_parses_under_the_lender_mark_rules() -> None:
     assert identity.mark.reviewed_on == date(2026, 9, 30)
 
 
+def test_a_record_mark_reviewed_today_parses(pinned_today: date) -> None:
+    mark = {**MARK, "reviewed_on": pinned_today.isoformat()}
+    identity = reviewed_lender_identity_from_env(_pinned({**RECORD, "mark": mark}))
+
+    assert identity.mark is not None
+    assert identity.mark.reviewed_on == pinned_today
+
+
+@pytest.mark.usefixtures("pinned_today")
 @pytest.mark.parametrize(
     ("change", "rule"),
     [
         ({"sha256": "AB" * 32}, "sha256 is not 64 lowercase hex"),
         ({"media_type": "image/gif"}, "media_type is not PNG or WebP"),
         ({"authorization_ref": "https://brand.example/ok"}, "authorization_ref is not a plain reference"),
-        ({"reviewed_on": (date.today() + timedelta(days=1)).isoformat()}, "reviewed_on is not a past"),
+        ({"reviewed_on": (PINNED_TODAY + timedelta(days=1)).isoformat()}, "reviewed_on is not a past"),
         ({"reviewed_on": "soon"}, "ISO-8601 calendar date"),
         ({"height": 20}, "not a reviewable mark size"),
         ({"width": 65, "height": 32.0}, "whole numbers"),
@@ -355,7 +378,10 @@ def test_no_doc_claims_an_approval_the_pin_does_not_carry() -> None:
 
     root = Path(__file__).resolve().parents[2]
     workflows = "\n".join(path.read_text(encoding="utf-8") for path in sorted((root / ".github").rglob("*.yml")))
-    assert "MIP_LENDER_NAME" in workflows, "positive control: the workflows carry the legacy lender name"
+    # Positive control: the scan reads the workflows. M1-PR8 retired the last
+    # workflow that carried the legacy lender name (the parked nightly.yml);
+    # deploy-dev.yml names the record's pin.
+    assert "MIP_LENDER_IDENTITY_SHA256" in workflows, "positive control: the workflows name the lender identity pin"
     deployment = (root / "docs" / "deployment.md").read_text(encoding="utf-8")
     section = deployment[deployment.index("## Customer lender identity") :]
     docs = {

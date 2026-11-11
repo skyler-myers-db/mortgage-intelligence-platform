@@ -30,12 +30,13 @@ from backend.schemas.outreach_revoke import OutreachRevokeRequest
 from backend.services.approval_funnel import ApprovalFunnelStore, clear_approval_funnel_cache
 from backend.services.outreach_revoke import revoke_approval
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 APPROVER = "pat.approver@summit.example"
 BORROWER_A = "B-0000000000FR1"
 BORROWER_B = "B-0000000000FR2"

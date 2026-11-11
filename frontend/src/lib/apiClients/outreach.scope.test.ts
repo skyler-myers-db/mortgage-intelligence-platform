@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 
-const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const BATCH = '5eed00a1-0000-4000-8000-0000000000a1';
 let bodies: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {

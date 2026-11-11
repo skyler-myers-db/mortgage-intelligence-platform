@@ -1,7 +1,7 @@
 """Three of the governed space's own deep-analysis plan lines must survive the guards.
 
 Captured 2026-09-08 by replaying ``_planning_prompt(question, deep=True)``
-against the paychex space (``01f13d4968af1b249dc388fd5b18b195``) for a full-
+against the first client's governed space (``<genie-space-id>``) for a full-
 analysis ask ("Do a full analysis of the existing marketable population. What
 segments have the highest opportunity? ... what offers should we be making
 exactly and why?") and for a Head-of-Growth "comprehensive analysis of our

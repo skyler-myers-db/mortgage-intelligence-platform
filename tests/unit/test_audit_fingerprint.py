@@ -163,7 +163,7 @@ def test_the_audit_export_receipt_writes_no_row_without_a_key(monkeypatch: pytes
     monkeypatch.setattr(settings, "mip_genie_action_secret_previous", None)
     monkeypatch.setattr(settings, "app_env", "production")
     store = InMemoryAuditStore()
-    event_ids = ["0f8fad5b-d9cb-469f-a165-70867728950e"]
+    event_ids = ["5eed00a1-0000-4000-8000-0000000000a1"]
     declaration = AuditExportReceiptRequest(
         row_count=1,
         csv_sha256="a" * 64,

@@ -232,7 +232,7 @@ def test_public_safe_names_are_allowed(store: _MemoryStore, name: str) -> None:
     [
         ("John Smith leads", ("John", "Smith")),
         ("call 212-555-1212", ("212", "555-1212")),
-        ("jane@x.com", ("jane", "x.com")),
+        ("jane@x.example", ("jane", "x.example")),
         ("B-0123456789ABC", ("0123456789ABC",)),
     ],
 )

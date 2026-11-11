@@ -29,7 +29,7 @@ class _Client:
         self.fetchall_calls += 1
         return [
             {
-                "assignment_id": "7b9a9c78-c222-4e03-b63e-c5a80f2695f6",
+                "assignment_id": "5eed00b7-0000-4000-8000-0000000000b7",
                 "borrower_id": "B-CACHED",
                 "assigned_to_email": "lo01@summit.example",
                 "assigned_to_label": self.label,
