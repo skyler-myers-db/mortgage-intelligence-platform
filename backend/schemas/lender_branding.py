@@ -85,6 +85,17 @@ def _registry_problems() -> list[str]:
     return problems
 
 
+def _today() -> date:
+    """The day the reviewed_on rule reads: the one clock seam a test pins.
+
+    A test pins this function, never this module's ``date``: the rule checks
+    ``type(reviewed_on) is date``, so a date subclass patched over it would
+    refuse every mark, past ones included.
+    """
+
+    return date.today()
+
+
 def reviewed_mark_problems(label: str, mark: ReviewedLenderMark) -> list[str]:
     """The rules every reviewed mark entry meets, each broken one as ``label: rule``.
 
@@ -100,7 +111,7 @@ def reviewed_mark_problems(label: str, mark: ReviewedLenderMark) -> list[str]:
     if _AUTHORIZATION_REF_RE.fullmatch(ref) is None or "://" in ref or "@" in ref:
         problems.append(f"{label}: authorization_ref is not a plain reference")
     reviewed_on: object = mark.reviewed_on
-    if type(reviewed_on) is not date or reviewed_on > date.today():
+    if type(reviewed_on) is not date or reviewed_on > _today():
         problems.append(f"{label}: reviewed_on is not a past calendar date")
     if mark.media_type not in ("image/png", "image/webp"):
         problems.append(f"{label}: media_type is not PNG or WebP")
