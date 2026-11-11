@@ -39,6 +39,7 @@ from psycopg.conninfo import make_conninfo
 from jobs import lakebase_migrate
 from jobs import lakebase_migration_provider_plane as provider_plane
 from jobs.lakebase_migration_read_only import read_only_session
+from jobs.lakebase_migration_seed import render_seed_sql
 from tools.clients import handover_journal as journals
 from tools.clients import lakebase_handover as handover
 from tools.clients import lakebase_handover_roles as roles
@@ -205,7 +206,7 @@ def install(monkeypatch: pytest.MonkeyPatch) -> Iterator[Install]:
         # The dedicated database's posture (as CI's own database takes it), then an install as the legacy owner.
         current.run(current.legacy, "REVOKE ALL ON SCHEMA public FROM PUBLIC")
         schema = (REPO / "lakebase" / "schema.sql").read_text(encoding="utf-8")
-        seed = (REPO / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
+        seed = render_seed_sql((REPO / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8"))
         pre_seed, post_seed = lakebase_migrate._split_schema_sql(schema)
         lakebase_migrate._run_transaction(
             (pre_seed, seed, post_seed),
