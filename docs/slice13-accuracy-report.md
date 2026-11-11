@@ -198,7 +198,7 @@ been closed. This section holds the evidence.
 
 ### 2.1 Gate 1 — operator rebuild: CLOSED
 
-Bundle deployed to dev (`dbc-3aa503a9-4fa8`), every refresh job run,
+Bundle deployed to dev (`<workspace-host>`), every refresh job run,
 every table rebuilt from the post-Wave-2 SQL:
 
 | Job                          | Outcome                     | Duration |

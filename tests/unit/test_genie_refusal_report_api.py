@@ -424,7 +424,7 @@ def test_report_accepts_the_id_shapes_genie_issues() -> None:
     response = client.post(
         REPORT_PATH,
         json=_body(
-            conversation_id="01F13D4968AF1B249DC388FD5B18B195",
+            conversation_id="01F1C0DE000000000000000000000001",
             message_id="5eed00b3-0000-4000-8000-0000000000b3",
         ),
         headers=ACTOR_HEADERS,
@@ -432,7 +432,7 @@ def test_report_accepts_the_id_shapes_genie_issues() -> None:
 
     assert response.status_code == 200, response.text
     report = next(iter(lakebase.reports.values()))
-    assert report["conversation_id"] == "01F13D4968AF1B249DC388FD5B18B195"
+    assert report["conversation_id"] == "01F1C0DE000000000000000000000001"
     assert report["message_id"] == "5eed00b3-0000-4000-8000-0000000000b3"
 
 
