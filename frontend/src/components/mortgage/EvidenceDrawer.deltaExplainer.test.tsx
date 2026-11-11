@@ -84,6 +84,11 @@ describe('EvidenceDrawer Delta Explainer slot', () => {
   let root: Root;
 
   beforeEach(() => {
+    // The day the explainer counts from (DeltaExplainer.test.tsx's TODAY);
+    // timers stay real. Unpinned, the 2026-09-01 baseline leaves the 400-day
+    // attribution window on 2027-10-07 and the explainer stops reading it.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-01T12:00:00Z'));
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
     apiMocks.lineageManifest.mockResolvedValue({ families: [] });
@@ -110,6 +115,7 @@ describe('EvidenceDrawer Delta Explainer slot', () => {
     act(() => root.unmount());
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   async function render(source: DrawerSource): Promise<void> {
