@@ -47,6 +47,7 @@ from typing import Any
 
 from jobs.lakebase_migration_read_only import assert_read_statement
 from tools.clients.lakebase_handover_acl import GRANT_KEYWORDS, SCHEMA_USAGE_SQL, TARGET_ACL_SQL
+from tools.clients.lakebase_handover_reach import OBJECT_REACH_SQL
 from tools.clients.lakebase_handover_rehearse import (
     INSTALL_SCHEMA_SQL,
     OWNER_SQL,
@@ -117,9 +118,26 @@ OWNER_PRIVILEGES = {
     "SCHEMA": ("USAGE", "CREATE"),
     "TABLE": ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"),
     "VIEW": ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"),
+    "MATERIALIZED VIEW": ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"),
     "SEQUENCE": ("USAGE", "SELECT", "UPDATE"),
     "FUNCTION": ("EXECUTE",),
+    "PROCEDURE": ("EXECUTE",),
     "TYPE": ("USAGE",),
+    "DOMAIN": ("USAGE",),
+}
+
+
+# PostgreSQL's acldefault for PUBLIC: what an object with no explicit ACL grants everyone.
+PUBLIC_DEFAULTS = {"FUNCTION": ("EXECUTE",), "PROCEDURE": ("EXECUTE",), "DATABASE": ("CONNECT", "TEMPORARY"), "TYPE": ("USAGE",), "DOMAIN": ("USAGE",)}
+# The GRANT ... ON keyword of each kind the grants job revokes on.
+_REVOKED_KINDS = {
+    "TABLE": "TABLE",
+    "VIEW": "TABLE",
+    "MATERIALIZED VIEW": "TABLE",
+    "FOREIGN TABLE": "TABLE",
+    "SEQUENCE": "SEQUENCE",
+    "FUNCTION": "FUNCTION",
+    "PROCEDURE": "PROCEDURE",
 }
 
 
@@ -137,6 +155,9 @@ def acl() -> dict[str, Acl]:
         "TABLE:mip_app.campaigns": {**owner_entries("TABLE:", LEGACY), (APP_ROLE, LEGACY, "SELECT"): False},
         "VIEW:mip_app.campaign_summary": {**owner_entries("VIEW:", LEGACY), (APP_ROLE, LEGACY, "SELECT"): False},
         "FUNCTION:mip_app.approval_count()": {**owner_entries("FUNCTION:", LEGACY), (APP_ROLE, LEGACY, "EXECUTE"): False},
+        # Another role's mip_app table: the handover leaves it, so the target
+        # holds a privilege on it, or the grants job it runs could not revoke there.
+        "TABLE:mip_app.app_owned_scratch": {**owner_entries("TABLE:", APP_ROLE), (DEPLOYER, APP_ROLE, "SELECT"): False},
     }
 
 
@@ -243,11 +264,26 @@ class FakeServer:
             held.add(DATABASE_OWNER)
         return held
 
-    def has_privilege(self, role: str, key: str, privilege: str) -> bool:
+    def entries(self, key: str) -> Acl:
+        """``key``'s ACL; with none explicit, PostgreSQL's default (the owner's, and PUBLIC's for some kinds)."""
+
+        if key in self.acl:
+            return self.acl[key]
+        defaults = PUBLIC_DEFAULTS.get(key.partition(":")[0], ())
+        return {("PUBLIC", self.owner_of(key), privilege): False for privilege in defaults}
+
+    def has_privilege(self, role: str, key: str, privilege: str | None = None) -> bool:
+        """``privilege`` held by ``role`` (any privilege when None): as owner, inherited, or through PUBLIC."""
+
         held = self.effective(role)
         if self.owner_of(key) in held:
             return True
-        return any(grantee in held and name == privilege for grantee, _grantor, name in self.acl.get(key, {}))
+        return any(grantee in held and privilege in (None, name) for grantee, _grantor, name in self.entries(key))
+
+    def in_inventory(self, item: PgObject) -> bool:
+        """What INVENTORY_SQL and TARGET_ACL_SQL read: the database, mip_app and its objects."""
+
+        return item.kind == "DATABASE" or item.schema == "mip_app" or (item.kind == "SCHEMA" and item.name == "mip_app")
 
     def check_owner_change(self, item: PgObject, owner: str, new_owner: str) -> None:
         """PostgreSQL 16's ALTER ... OWNER TO checks: own (or inherit) it, SET to the new owner, who has CREATE on the schema."""
@@ -368,7 +404,11 @@ class FakeCursor:
         server = self.server
         if statement == INVENTORY_SQL:
             marker = "prosecdef" in statement
-            return [(_tag(item, definer_marker=marker), item.schema, item.name, item.signature, server.owners[item.key]) for item in server.objects]
+            return [
+                (_tag(item, definer_marker=marker), item.schema, item.name, item.signature, server.owners[item.key])
+                for item in server.objects
+                if server.in_inventory(item)
+            ]
         if statement == AUTHORITY_SQL:
             target = params["target"]
             exists = target in server.roles
@@ -400,6 +440,8 @@ class FakeCursor:
             return missing
         if statement == TARGET_ACL_SQL:
             return self._target_acl(params["target"])
+        if statement == OBJECT_REACH_SQL:
+            return self._unreachable(params["target"], params["legacy"], params["schema"])
         if statement == FACTS_SQL:
             target = params["target"]
             database = server.database_key().partition(":")[2]
@@ -414,10 +456,33 @@ class FakeCursor:
             return [(server.owners[REHEARSAL_KEY],)]
         return None
 
+    def _unreachable(self, target: str, legacy: str, schema: str) -> list[tuple[Any, ...]]:
+        """OBJECT_REACH_SQL: what the grants job revokes on, the handover leaves, and the target holds nothing on."""
+
+        server = self.server
+        if target not in server.roles:
+            return []
+        rows = []
+        for item in server.objects:
+            owner = server.owner_of(item.key)
+            if item.kind == "DATABASE":
+                keyword, left_out = "DATABASE", owner == legacy  # the handover moves it
+            elif item.kind in _REVOKED_KINDS and not _SYSTEM_SCHEMA.fullmatch(item.schema):
+                keyword = _REVOKED_KINDS[item.kind]
+                # Moved by the handover, or the provider's own (the grants job skips it).
+                left_out = (item.schema == schema and owner == legacy) or (item.schema == "public" and owner == "cloud_admin")
+            else:
+                continue
+            if not left_out and not server.has_privilege(target, item.key):
+                rows.append((keyword, item.schema, item.name, item.signature, owner in server.effective(server.caller)))
+        return sorted(rows)
+
     def _target_acl(self, target: str) -> list[tuple[Any, ...]]:
         server = self.server
         rows = []
         for item in server.objects:
+            if not server.in_inventory(item):
+                continue
             owner = server.owner_of(item.key)
             for (grantee, grantor, privilege), grantable in sorted(server.acl.get(item.key, {}).items()):
                 if target in (grantee, grantor):
@@ -482,7 +547,10 @@ class FakeCursor:
         grantor = server.grantor_for(item.key)
         if grantor is None:
             return  # PostgreSQL: WARNING no privileges were granted (or revoked)
-        entries = server.acl.setdefault(item.key, {})
+        if item.key not in server.acl:
+            # The first change makes the default ACL explicit: the owner's entry, and PUBLIC's defaults.
+            server.acl[item.key] = {**owner_entries(item.key, server.owner_of(item.key)), **server.entries(item.key)}
+        entries = server.acl[item.key]
         for privilege in match.group("privileges").split(", "):
             if granting:
                 entries[(role, grantor, privilege)] = entries.get((role, grantor, privilege), False) or bool(match.group("option"))

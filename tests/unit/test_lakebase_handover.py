@@ -50,6 +50,7 @@ HANDOVER_MODULES = (
     "lakebase_handover_sql.py",
     "lakebase_handover_acl.py",
     "lakebase_handover_roles.py",
+    "lakebase_handover_reach.py",
     "lakebase_handover_rehearse.py",
     "lakebase_handover_window.py",
     "handover_uc_plan.py",
@@ -153,7 +154,7 @@ def test_a_wrong_or_stale_digest_changes_nothing(tmp_path: Path, ack: str) -> No
     server = FakeServer()
     if ack == "stale":
         ack = _plan(server).sha256
-        server.owners["TABLE:mip_app.app_owned_scratch"] = LEGACY
+        server.change_owner("TABLE:mip_app.app_owned_scratch", APP_ROLE, LEGACY)
     with pytest.raises(sql.LakebaseHandoverRefused, match="not the acknowledged digest"):
         _apply(server, tmp_path / "j.json", ack=ack)
     assert server.transactions == [] and not (tmp_path / "j.json").exists()

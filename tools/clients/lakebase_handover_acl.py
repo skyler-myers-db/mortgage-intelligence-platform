@@ -9,7 +9,9 @@ Three facts the owner changes alone do not cover:
   ``schemas_without_usage`` lists them, by the grants job's own predicate,
   leaving out ``mip_app`` (the handover gives it to the target) and, when the
   target will own the database, a schema ``pg_database_owner`` owns
-  (``public``: the database owner uses it through that role).
+  (``public``: the database owner uses it through that role). USAGE is
+  needed, not enough: each object there the target must REVOKE on is
+  tools/clients/lakebase_handover_reach.py's.
 * **The target's own grants.** ``ALTER ... OWNER TO`` rewrites the old owner to
   the new one as grantor and grantee and merges duplicates (PostgreSQL's
   ``aclnewowner``). On the apply, an entry the legacy owner granted the
@@ -130,6 +132,14 @@ ORDER BY 1, 2, 3, 4, 5, 7
 REVIEWED_PRIVILEGES = frozenset(
     {"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "EXECUTE", "USAGE", "CREATE", "CONNECT", "TEMPORARY", "MAINTAIN"}
 )
+# Every PostgreSQL 16 privilege of each kind the grants job revokes on (a
+# has_*_privilege list: any one held is a privilege on the object).
+PRIVILEGES_BY_KIND = {
+    "TABLE": ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"),
+    "SEQUENCE": ("USAGE", "SELECT", "UPDATE"),
+    "FUNCTION": ("EXECUTE",),
+    "DATABASE": ("CREATE", "CONNECT", "TEMPORARY"),
+}
 # GRANT ... ON <keyword>: a view and a materialized view are granted ON TABLE.
 GRANT_KEYWORDS = {
     "DATABASE": "DATABASE",
@@ -226,6 +236,7 @@ def restore_statements(entry: Mapping[str, Any]) -> Sequence[str]:
 __all__ = [
     "GRANT_KEYWORDS",
     "NON_SYSTEM_SCHEMA_PREDICATE",
+    "PRIVILEGES_BY_KIND",
     "REVIEWED_PRIVILEGES",
     "SCHEMA_USAGE_SQL",
     "TARGET_ACL_SQL",

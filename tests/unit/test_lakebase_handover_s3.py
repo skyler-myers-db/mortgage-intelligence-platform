@@ -404,7 +404,7 @@ def test_the_rehearsal_passes_with_no_manual_grant_and_takes_its_own_back() -> N
     revoke = f'REVOKE CREATE ON SCHEMA "{rehearsal.REHEARSAL_SCHEMA}" FROM "{DEPLOYER}"'
     assert [text for text in server.statements if text.startswith(("GRANT", "REVOKE"))] == [grant, revoke]
     assert server.statements.index(rehearsal.SETUP[0]) < server.statements.index(grant)
-    assert not server.has_privilege(DEPLOYER, key, "CREATE") and server.acl.get(key) == {}
+    assert not server.has_privilege(DEPLOYER, key, "CREATE") and server.acl.get(key) == owner_entries(key, LEGACY)
 
 
 def test_a_rehearsal_whose_target_already_holds_create_grants_and_revokes_nothing() -> None:

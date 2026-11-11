@@ -62,6 +62,7 @@ from tools.clients.lakebase_handover_acl import (
     schemas_without_usage,
     target_grants,
 )
+from tools.clients.lakebase_handover_reach import unreachable_objects
 from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     DEFAULT_BUDGET,
@@ -172,6 +173,8 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
         # The grants job the target runs next revokes in every non-system schema (S3, answer 4).
         owns_database = "DATABASE" in kinds or database_owner == target
         refusals.extend("target_needs_schema_usage" for _schema in schemas_without_usage(cursor, target=target, owns_database=owns_database))
+        # ... and on every object there, which it must hold a privilege on to REVOKE (PR #336 review).
+        refusals.extend("target_needs_object_privilege" for _item in unreachable_objects(cursor, legacy=legacy, target=target))
         # The target's own entries the apply merges away, restored by the revert (S3, answer 3b).
         grants = target_grants(cursor, legacy=legacy, target=target, planned=planned)
         refusals.extend("target_grant_unrevertible" for _entry in range(grants.unrevertible))

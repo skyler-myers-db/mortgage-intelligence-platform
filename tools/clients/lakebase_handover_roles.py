@@ -12,7 +12,11 @@ like ``--plan``) prints, in order and quoted, the SQL the owner runs before
    apply, INHERIT for the exact revert (``caller_cannot_revert``);
 3. ``GRANT CREATE ON SCHEMA mip_app TO <target>`` (``target_needs_schema_create``);
 4. ``GRANT USAGE ON SCHEMA <s> TO <target>`` for every other non-system
-   schema the target cannot use (``target_needs_schema_usage``).
+   schema the target cannot use (``target_needs_schema_usage``);
+5. ``GRANT <one privilege> ON <object> TO <target>`` for every object the
+   handover leaves to another owner that the target holds nothing on, when
+   the legacy owner can grant on it; the rest refuse
+   ``target_needs_object_privilege`` (tools/clients/lakebase_handover_reach.py).
 
 Each step already held is left out, so the output is exactly what remains to
 run. Role and schema names come from the profile and the database, never from
@@ -43,7 +47,13 @@ from tools.clients.lakebase_handover_acl import (
     membership_statement,
     schemas_without_usage,
 )
-from tools.clients.lakebase_handover_sql import AUTHORITY_SQL, SCHEMA_NAME, PgObject
+from tools.clients.lakebase_handover_reach import unreachable_objects
+from tools.clients.lakebase_handover_sql import (
+    AUTHORITY_SQL,
+    SCHEMA_NAME,
+    LakebaseHandoverRefused,
+    PgObject,
+)
 
 _PREFIX = "[mip-lakebase-handover]"
 # The deployer is a service principal: its Postgres role is its application id.
@@ -137,6 +147,10 @@ def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
     if schemas:
         lines.append(f"-- 4. The target uses every other non-system schema ({len(schemas)}): the grants job it runs revokes in each.")
         lines.extend(f"{grant_statement(_schema(name), ('USAGE',), target)};" for name in schemas)
+    if target_exists:
+        refusals.extend(_object_privileges(cursor, lines, legacy=legacy, target=target))
+    else:
+        lines.append("-- 5. Once the target exists, re-run this mode: it then reads the objects the target must hold a privilege on.")
     if not database_create:
         refusals.append("caller_needs_database_create")
     if not createdb:
@@ -145,6 +159,34 @@ def preconditions(cursor: Any, *, target: str) -> tuple[list[str], list[str]]:
         lines.append("-- Every precondition holds.")
     lines.append("-- Then, read-only: python -m tools.clients.lakebase_handover --plan")
     return lines, refusals
+
+
+def _object_privileges(cursor: Any, lines: list[str], *, legacy: str, target: str) -> list[str]:
+    """Step 5: one privilege on each object the handover leaves to another owner (lakebase_handover_reach)."""
+
+    unreachable = unreachable_objects(cursor, legacy=legacy, target=target)
+    if not unreachable:
+        return []
+    lines.append(
+        f"-- 5. The target holds a privilege on each object the handover leaves to another owner ({len(unreachable)}): "
+        "the grants job it runs revokes on every one, and PostgreSQL refuses that from a role holding nothing on the object."
+    )
+    others = 0
+    for item in unreachable:
+        try:
+            statement = item.remedy(target) if item.caller_can_grant else ""
+        except LakebaseHandoverRefused:
+            statement = ""
+        if statement:
+            lines.append(f"{statement};")
+        else:
+            others += 1
+    if others:
+        lines.append(
+            f"-- REFUSED target_needs_object_privilege x{others}: the legacy owner cannot grant on these; "
+            "each one's owner grants the target one privilege on it, then re-run this mode."
+        )
+    return ["target_needs_object_privilege"] * others
 
 
 def run_preconditions(args: argparse.Namespace, current: Any) -> int:
