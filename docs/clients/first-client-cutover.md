@@ -1,0 +1,781 @@
+# First-client cutover runbook
+
+Client #1's live install predates the client target: one person deployed it by
+hand, so that person owns its Unity Catalog objects, its Lakebase database and
+its bundle state, and it ships only through the emergency recipe
+(docs/deployment.md, "The emergency recipe, command by command"). This runbook
+moves it, in place and without a redeploy from scratch, onto the governed
+per-client path: the deployer's bundle root, the client's GitHub Environment
+and the `deploy-dev.yml` dispatch. It is the ordered list of the plan's cutover
+steps (revision 2, `cutover_steps`), one section per step, each with who runs
+it, its preconditions, the exact commands, the proof to read, the refusals it
+can hit and where to stop or roll back.
+
+The reference for every tool is [docs/deployment.md](../deployment.md); this
+page does not repeat it. The general onboarding order is
+[onboarding.md](onboarding.md); review modes are [review-modes.md](review-modes.md).
+
+## Placeholders, and where the real values live
+
+This page names no client value. Every one is a placeholder:
+
+| Placeholder | Meaning |
+|---|---|
+| `<client>` | client #1's client key (`MIP_CLIENT`), also its GitHub Environment |
+| `<owner-profile>` | the owner's own Databricks CLI profile (U2M) for client #1's workspace |
+| `<workspace-host>` | the workspace origin (`DATABRICKS_HOST`) |
+| `<app-name>` | the live App's name (`MIP_APP_NAME`) |
+| `<prefix>` | `MIP_IDENTITY_PREFIX` |
+| `<catalog>` | the governed catalog, `MIP_DEFAULT_CATALOG` (`mip`) |
+| `<legacy-owner>` | the identity that deployed the legacy install and owns it today |
+| `<legacy-root>` | its bundle root, `MIP_LEGACY_BUNDLE_ROOT` (`/Workspace/Users/<legacy-owner>/.bundle/mortgage-intelligence-platform/<leaf>`) |
+| `<private-dir>` | a mode-0700 directory outside the checkout for reports and journals |
+| `<sha256>`, `<profile-ack>` | a digest the named read-only plan printed |
+
+The real values live in the operator's profile (the owner's gitignored
+`.env.local` and `~/.databrickscfg`) and in the `<client>` GitHub
+Environment, never in git, an issue, a PR or a shared log. Reports and
+journals the tools write name resources: keep them in `<private-dir>`.
+
+## The state this runbook starts from (2026-11-11)
+
+- **The live App is STOPPED.** The owner stopped it on 2026-11-09. A
+  read-only read on 2026-11-11 found no active and no pending deployment; the
+  newest deployment is SUCCEEDED and the App's default source is that
+  deployment's source folder. Leave it stopped until step 10A.
+- **Step 3 is done** (the owner, 2026-11-06).
+- **Code on `main`:** waves 1-6 of the plan are merged except PR #334 (spike
+  S7: start proofs and the stopped-App blue) and PR #337 (spike S2: binding
+  updates), which merge before this runbook is used. Steps 10 and 12 need
+  both.
+
+## Blockers on main (code follow-ups, not runbook steps)
+
+Read against `main` plus #334 and #337, three gaps stop the governed path.
+Each is a code change; nothing in this runbook works around one.
+
+| # | Blocks | What happens | The follow-up |
+|---|---|---|---|
+| B1 | step 9's adopt readout, step 10 | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
+| B2 | step 10 | adopt-live's ack `MIP_ACK_ADOPT_LIVE` has no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live` is not one. A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`) to `OPERATION_ACKS`. |
+| B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
+
+Two smaller gaps are noted at their steps: the freeze marker needs a signing
+key no shell holds (step 1), and an open quiesce window that the owner
+restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
+
+## Decisions taken (the runbook's defaults)
+
+- **The client key** is `<client>`; the real key is in the operator's profile.
+- **Review mode** `single_maintainer_audited`: the environment approval is an
+  audited self-approval, not human-only review ([review-modes.md](review-modes.md)).
+- **Core tier for run 1** (`MIP_AGENTIC_TIER=off`), **refresh off**
+  (`MIP_SCHEDULED_REFRESH=off`) until seven green days (step 15).
+- **Keep the third-party grants that exist today.** Never revoke another
+  team's grant, never change the owner of anything outside this install's own
+  objects, never write an `ALTER ... OWNER` on a live object by hand (owner
+  changes happen only through the two plan-first handover tools in steps 7 and
+  8, plus the one database-owner move step 8 names if its plan refuses
+  `target_will_not_own_database`), and **never transfer metastore
+  ownership**. The reviewed third-party managers stay: they are listed as
+  approved principals (step 4), not revoked.
+- **No Salesforce bindings**: `MIP_SALESFORCE_BINDINGS` stays unset (off).
+  The live App binds 11 resources and none of the three Salesforce secrets.
+- **`MIP_SEED_OPERATOR_EMAIL`** is set, before the first governed migrate, to
+  the address the install was seeded with (step 4). Unset, the seed adds a
+  synthetic admin row and the Lakebase schema digest changes.
+- **Run 1 plans one bounded window** with its migration job, which revokes the
+  CREATE ON DATABASE re-grant a binding send leaves. The online `REVOKE` spike
+  S2b proposed is not used. Plan #3 names the window's actual reasons (step 11).
+- **Pipeline-managed datasets** belong permanently to the pipeline's run_as,
+  the jobs identity. There is no re-own exit. After the release:
+  `handover_uc_ownership --verify --released`, then unset
+  `MIP_UC_INTERIM_OWNER_PAIRS_JSON` (step 13).
+- **Dashboards stay pinned** in their legacy folder: `parent_path` is
+  immutable (spike S4), so `MIP_DASHBOARD_PARENT_PATH` names that folder for
+  good. The alternative, a one-time recreate that loses the dashboards' ids,
+  URLs and published history, is the owner's choice only.
+- **The App start before step 10** is the owner's raw `apps start` (step 10A).
+- **Owner break-glass for an open window**: a raw `apps start`
+  (docs/deployment.md, "Owner break-glass").
+
+## Steps at a glance
+
+| Step | What | Who | State |
+|---|---|---|---|
+| 1 | Freeze and snapshot | agent (read-only), owner | ready |
+| 2 | Owner decisions | owner | mostly decided (above) |
+| 3 | Supervisor rename and App `CAN_QUERY` revokes | owner | **done 2026-11-06** |
+| 4 | Bootstrap: identities, environments, profile | owner | ready |
+| 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
+| 6 | Plan #1 | CI | ready |
+| 7 | Unity Catalog ownership handover | owner | ready |
+| 8 | Lakebase ownership handover | owner | ready |
+| 9 | Plan #2 | CI | ready (adopt readout blocked, B1) |
+| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2)** |
+| 11 | Plan #3 | CI | after 10 |
+| 12 | Release (run 1) | CI | **blocked (B3)** |
+| 13 | Post-release verification | agent, owner | after 12 |
+| 14 | Data phase | CI | after 13 |
+| 15 | Refresh on, after 7 green days | owner | later |
+| 16 | Archive the legacy root | owner | after 13 |
+| 17 | Owner legacy deletions | owner | after 16 |
+| 18 | Run 2 prerequisites (agentic tier) | owner | optional; not wired (step 18) |
+| 19 | Run 2 | CI | optional |
+
+The plan's revision 1 listed 17 steps. Revision 2 (the reviewed plan this
+runbook follows) moved adopt after both handovers (attack O8), added plans #2
+and #3, and split run 2 into steps 18-19. Revision 1's step 6 (adopt) is
+step 10 here, its 9 is 11, its 10 is 12, its 11 to 15 are 13 to 17, and its 16
+and 17 are 18 and 19.
+
+Every dispatch below is the command of record, a `deploy-dev.yml` (or
+`nightly.yml`) dispatch on `main`, approved by the environment's reviewer in
+the run's page. Approve
+only the run you dispatched, after reading its inputs.
+
+---
+
+## Step 1. Freeze and snapshot
+
+**Who:** an agent (read-only) for the snapshot; the owner for the freeze.
+
+**Preconditions:** none.
+
+**Actions.**
+
+1. Freeze piecewise deploys: message every peer session that the emergency
+   recipe is frozen for client #1 until step 13. The owner keeps the live App
+   stopped.
+2. The signed freeze marker (`python -m tools.databricks.app_deployment_lease
+   freeze --app-name <app-name> --until <epoch>`) is **not available here**: it
+   needs the deploy's proof-signing key pair in the shell, and that key does
+   not exist until step 4, where `github_environment` generates it in memory
+   into a write-only environment secret that no shell can read. The freeze is
+   therefore the message and the owner's rule; a CI-run freeze is a follow-up.
+3. Take the read-only snapshot, kept in the session's private scratch (never
+   committed), hashed: the App's deployments (ids, states, source paths, the
+   newest one's env-name set) and its ACL; the legacy bundle state's 16 keys;
+   Unity Catalog owners and grants on the governed catalog, the Lakebase sync
+   catalog and the metastore; the Lakebase owners and roles (`datdba`,
+   `relowner`, `proowner`, `pg_auth_members`); the job, pipeline, warehouse,
+   experiment and dashboard settings; serving-endpoint and secret-scope ACLs;
+   the Genie space's serialized spec diffed against the repo spec.
+
+```bash
+databricks apps get <app-name> -p <owner-profile> -o json | jq '{compute: .compute_status.state, active: (.active_deployment != null), pending: (.pending_deployment != null)}'
+databricks apps list-deployments <app-name> -p <owner-profile>
+```
+
+**Proof:** the snapshot is hashed; the newest deployment's env-name set has no
+`MIP_AGENT_*` or Gateway name. The plan's "one Genie turn" needs a running
+App; take it at step 10A.
+
+**Rollback:** read-only. Lift the freeze by message.
+
+## Step 2. Owner decisions
+
+**Who:** the owner. Most decisions are taken (above). Still to write down,
+each in the client profile (step 4), never in git:
+
+- **Approved principals.** `MIP_UC_APPROVED_OWNER_PRINCIPALS`: the
+  `<prefix>-data-owners` group plus the reviewed third-party principal that
+  holds `MANAGE` on the governed catalog today. `MIP_GENIE_MANAGER_PRINCIPALS`:
+  the reviewed third-party principal that holds `CAN_MANAGE` on the governed
+  Genie space. Without them the pre-stop owner-equivalent probe refuses
+  (docs/deployment.md, "Pre-stop probes").
+- **Accepted exposure** (`MIP_ACCEPTED_EXPOSURE_JSON`): one exact entry per
+  Genie grant reaching the App outside the governed space (the workspace's
+  `users` grants): read class for the `CAN_RUN` ones, explicit `elevated`,
+  expiring within 30 days, for the `CAN_MANAGE` ones (re-review at every
+  expiry). List the candidates read-only, then pin the reviewed policy:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.estate.cli --emit-exposure-inventory --app-name <app-name> --expected-inventory-principal <owner-user-name> --genie-space-name "<genie-space-title>" --agentic-tier off
+python -m tools.databricks.estate.cli --plan
+```
+
+  The first lists candidate entries read-only, as the workspace admin it names
+  (`<owner-user-name>`, the caller's own user name), with placeholder `reason`
+  and `expires_at` for the owner to fill. The second reads only the profile and
+  prints the `accepted_exposure_plan` sha256 that plans and releases carry
+  (`operation_acks`, phases `plan` and `release`). See docs/deployment.md,
+  "Accepted shared-estate exposure".
+- **Dashboards:** pinned (default) or the one-time recreate.
+- Confirm: no metastore or catalog ownership transfer, no revoke of another
+  team's grant.
+
+**Proof:** each decision is written down; `python -m tools.clients check`
+validates the profile, the exposure JSON included.
+
+**Rollback:** revise a decision before step 4.
+
+## Step 3. Supervisor rename and App `CAN_QUERY` revokes (done)
+
+**Done by the owner on 2026-11-06.** The legacy, human-created Supervisor was
+renamed to a non-reserved name, and the App service principal's `CAN_QUERY` was
+removed from the legacy Supervisor's serving endpoint and the legacy agent
+gateway. The before-ACLs and the revert notes are in the owner's private
+scratch. Nothing on another team's object was touched.
+
+**Proof still to read:** the pre-stop probes (run in steps 10 and 12) find no
+Supervisor under a reserved name; in the core tier they skip the Supervisor
+clauses. The owner-equivalent probe passes for the catalog and the governed
+space once step 2's approved principals are in the profile.
+
+**Rollback:** rename back and re-grant from the step-1 snapshot.
+
+## Step 4. Bootstrap: identities, environments, profile
+
+**Who:** the owner (the client's account admin and the repository's
+maintainer), by hand, in a terminal. The tools refuse under CI or without a
+terminal, and each run logs in fresh, never reading `~/.databrickscfg`
+([bootstrap.md](bootstrap.md), [github-environment.md](github-environment.md)).
+
+**Preconditions:** steps 1 and 2.
+
+**The profile.** Fill `.env.local` from `deploy/clients/example.env` with the
+**live install's own names**, because adoption binds by name and refuses a
+rename (`renamed`): the App, Lakebase instance and database, sync catalog,
+secret scopes, Genie title and Supervisor name. Also, for an adopted install:
+
+- `MIP_LEGACY_BUNDLE_ROOT=<legacy-root>`, and `MIP_DASHBOARD_PARENT_PATH` set
+  to the legacy dashboards' live folder inside it (pinned);
+- the install class and App env the live install runs with (the emergency
+  recipe's `--install-class demo --app-env sandbox`);
+- `MIP_AGENTIC_TIER=off`, `MIP_SCHEDULED_REFRESH=off`,
+  `MIP_SALESFORCE_BINDINGS` unset;
+- `MIP_SEED_OPERATOR_EMAIL=<the address the install was seeded with>`
+  (identifying: `.env.local` and the environment secret);
+- `MIP_UC_METASTORE_OWNER`, `MIP_UC_APPROVED_OWNER_PRINCIPALS`,
+  `MIP_GENIE_MANAGER_PRINCIPALS`, `MIP_ACCEPTED_EXPOSURE_JSON` (step 2).
+
+**Commands,** in this order:
+
+```bash
+python -m tools.clients check
+python -m tools.clients.github_environment --plan
+python -m tools.clients.github_environment --apply --ack-plan <sha256>
+python -m tools.clients.bootstrap_account --plan --interim-member <legacy-owner-email>
+python -m tools.clients.bootstrap_account --apply --sink github-environment --interim-member <legacy-owner-email> --ack-plan <sha256>
+python -m tools.clients.bootstrap_account --plan --for rotate-adopted --interim-member <legacy-owner-email>
+python -m tools.clients.bootstrap_account --rotate-adopted --sink github-environment --interim-member <legacy-owner-email> --ack-plan <sha256>
+python -m tools.clients.bootstrap_account --verify --interim-member <legacy-owner-email>
+python -m tools.clients.github_environment --plan
+python -m tools.clients.github_environment --apply --ack-plan <sha256>
+```
+
+- `--interim-member` puts the legacy owner into `<prefix>-data-owners` for the
+  cutover, so jobs that still run as the legacy owner keep working after the
+  UC handover. Pass it to every bootstrap run while the membership exists: the
+  bootstrap refuses a data-owners group holding any member other than the
+  deployer, jobs and the named interim identity. It is removed by hand after
+  the release (step 13); the bootstrap never removes a member.
+- An identity that already exists under an expected name (a deployer the owner
+  created earlier, the account principal, reserved M2M identities left from an
+  earlier install) is refused as not pinned. Check its provenance, then pin it
+  with `--adopt <role>=<application id>` on both the plan and the apply.
+  `--rotate-adopted` then mints it a new secret, hands it to the environment
+  only, proves it and revokes every older secret, including ones of unknown
+  origin. Revoked secrets cannot come back.
+- The deployer is refused if it holds any OAuth secret, PAT or OBO token, or
+  more than one federation policy. Its subject is
+  `repo:<owner>/<repo>:environment:<client>`, set before its `ADMIN`
+  assignment.
+- The last `github_environment` run writes the profile's values; if it asks
+  for `--rotate`, pass it to both plan and apply.
+
+**Then, by hand:**
+
+- Fill `<client>-validate` with its five names ([onboarding.md](onboarding.md),
+  step 3).
+- Delete every repository- or organization-level variable or secret that
+  carries a profile field or alias name, and those the retired parked nightly
+  read: `check-dispatch` refuses every dispatch of either workflow while one
+  exists and names each (docs/deployment.md, CI deploy owner steps 3 and 5).
+
+**Proof:** a second `--apply` of each tool reports zero mutations;
+`bootstrap_account --verify` is clean; `gh secret list --env <client>` shows the
+schema's names; no tool printed a value.
+
+**Refusals:** see [bootstrap.md](bootstrap.md) (a holder that is not an account
+admin, a second federation policy, an account principal with account admin, a
+sink environment without the review mode's protections) and
+[github-environment.md](github-environment.md) (an identifying field stored as a
+variable, a stale digest asking for `--rotate`).
+
+**Rollback:** federation, assignments, group membership and environment
+settings are restored by hand from the step-1 snapshot; revoked secrets are
+replaced by the newly minted ones, never restored.
+
+## Step 5. Profile attestation (deferred)
+
+The owner-signed profile attestation (plan M1-PR5) is **deferred and not
+built**: nothing signs or verifies a profile. Its stand-ins, both exact
+digests:
+
+- `MIP_CLIENT_PROFILE_SHA256`, the profile digest `github_environment` records
+  (`python -m tools.clients digest` prints it locally);
+- the `profile` ack, `owner_attestation=<profile-ack>`, which every mutating
+  dispatch needs and every plan prints. A changed profile changes the ack.
+
+**Who:** the owner reads the plan's profile ack before passing it. **Proof:**
+the dispatch preflight reports `profile_ack` exact. **Refusal:** `profile_ack`
+(dispatch with the printed value after reviewing the profile).
+
+## Step 6. Plan #1
+
+**Who:** CI, dispatched and approved by the owner.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true
+```
+
+**Proof (step summary):** the OIDC proof passes (the profile's deployer, in
+`admins`, on the profile's workspace and metastore: this also answers spike
+S5, the federation audience); the dispatch preflight prints the profile ack
+and the environment-protection result; then the client live checks refuse
+`adoption: existing install not adopted`, and the run stops there (exit 2,
+nothing changed). That is the expected outcome, and on `main` the only
+refusal plan #1 can show: the live checks run before the pre-stop probes, so
+the plan's other expected refusals (UC owner policy, Lakebase executor) are not
+reached until the adopt phase. The public summary leaks no identifier.
+
+**Refusals and what to do:** `check-dispatch` names a repository-level profile
+name (delete it, step 4); `environment_protections_drift` (re-run
+`github_environment`); `environment_protections_unreadable` (spike S8(a) owed:
+a mutating phase then needs `protections_unverified_ack=<sha256>`, the exact
+ack the refusal prints); an OIDC proof mismatch, `tree_scan`, or any live-check
+line other than adoption: **stop the cutover** and fix the cause.
+
+**Rollback:** read-only.
+
+## Step 7. Unity Catalog ownership handover
+
+**Who:** the owner, as the legacy owner (an agent only on the owner's explicit
+go-ahead, with the owner's profile). **Announce** steps 7 to 12 to the owner
+and peers as one contiguous sequence; the App stays stopped until step 10A.
+
+**Preconditions:** step 6 showed only the adoption refusal; the interim
+membership (step 4) is in place. Pairs expire within 14 days, so steps 7 to 12
+must finish inside that window.
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --plan --report-out <private-dir>/uc-plan.json
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal <private-dir>/uc-journal.json
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --verify
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_verify privileges --principal <legacy-owner-email> --report-out <private-dir>/privileges.json
+```
+
+- The plan moves the governed catalog, its schemas, tables, views, volumes and
+  functions, and the sync catalog at catalog level, to `<prefix>-data-owners`.
+  It never touches the metastore, the share catalog, a foreign or system
+  catalog, or a System-user object.
+- Pipeline-managed streaming tables and materialized views are excluded for
+  good (spike S4): their owner is always the pipeline's run_as. Copy the
+  report's `interim_owner_pairs_json` into `MIP_UC_INTERIM_OWNER_PAIRS_JSON`
+  (`.env.local` and the environment secret, then re-run `github_environment`)
+  before `--verify`.
+
+**Proof:** the owner counts match the plan; `--verify` passes;
+`handover_verify privileges` shows the legacy owner's privileges on every
+lifecycle target unchanged (through the group). The App service principal's
+grants are untouched.
+
+**Refusals:** `metastore`, `share_catalog`, `foreign_catalog`,
+`foreign_securable`, `system_catalog` (never moved, by design);
+`interim_pair_expired` (renew or release the pair); exit 3, a partial apply:
+the journal names what moved; revert.
+
+**Rollback:**
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --revert --journal <private-dir>/uc-journal.json
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --revert --journal <private-dir>/uc-journal.json --ack-plan <sha256>
+```
+
+The first prints the revert plan's digest; the second applies exactly it. The
+legacy owner can also reclaim ownership as metastore owner.
+
+## Step 8. Lakebase ownership handover
+
+**Who:** the owner, as the legacy owner, connected to the App database.
+
+**Preconditions:** step 7. Unset `LAKEBASE_HOST`, `LAKEBASE_USER`,
+`LAKEBASE_PASSWORD` and `LAKEBASE_PORT` in the shell (the tool refuses those
+overrides).
+
+**The mechanism (spike S3):** L-A role setup plus the per-object
+`ALTER ... OWNER TO` at `lock_timeout = '3s'` and `statement_timeout = '30s'`.
+Not `REASSIGN OWNED`, not L-B (it deletes the legacy role). First print the
+preconditions, read-only:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_handover --preconditions --report-out <private-dir>/lakebase-preconditions-report
+```
+
+Run in `psql` (docs/runbook.md, section 1.2, shows the connection), as the
+legacy owner, **exactly** the SQL it prints, then re-run `--preconditions`
+until it prints `-- Every precondition holds.` It prints, in order, only the
+steps that do not hold yet; their shapes, with `<deployer>` the deployer's
+Postgres role (its application id), which the tool fills from the profile:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS databricks_auth;
+SELECT databricks_create_role('<deployer-application-id>', 'SERVICE_PRINCIPAL');
+GRANT "<deployer>" TO "<legacy-owner>" WITH INHERIT TRUE, SET TRUE;
+GRANT CREATE ON SCHEMA "mip_app" TO "<deployer>";
+GRANT USAGE ON SCHEMA "<schema>" TO "<deployer>";
+GRANT <one privilege> ON <object> TO "<deployer>";
+```
+
+- Create the deployer's role only this way, by the legacy owner: a role made
+  through the REST API or the UI has no ADMIN edge, and `--preconditions`
+  refuses `target_role_without_admin_edge`.
+- **Never hand-write `GRANT USAGE ON SCHEMA public`.** The deployer uses
+  `public` as the database owner; the grants job's exact public-schema gate
+  refuses any extra row there, so that grant breaks every later release.
+- `target_will_not_own_database`: the App database belongs to neither the
+  legacy owner nor the deployer. Its owner first gives the App database to the
+  legacy owner; then re-run `--preconditions`.
+- `target_needs_object_privilege`: the object's owner grants the deployer a
+  column-capable privilege (`SELECT` on a table, view or sequence). `TRIGGER`,
+  `DELETE` or `TRUNCATE` alone, or `USAGE` alone on a sequence, is not enough.
+
+Then check that no session holds a long transaction (one older than the
+per-object budget, about 120 s, exhausts it), plan and apply:
+
+```sql
+SELECT state, now() - xact_start FROM pg_stat_activity WHERE datname = current_database() AND xact_start IS NOT NULL ORDER BY 2 DESC;
+```
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_handover --plan
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_handover --apply --ack-plan <sha256> --journal <private-dir>/lakebase-journal.json
+```
+
+**Proof:** the apply reports `applied` with its counts; a new `--plan` has
+nothing left to move. The legacy role is kept (never run `--retire-check`
+toward a drop yet: jobs still run as it). The plan's other proofs (the
+executor probe as the deployer, the App role still SAFE with no
+`pg_auth_members` rows) are read by the governed migration plan in plan #3
+(step 11). Synced tables advancing and `/health` wait for step 10A.
+
+**Refusals:** `target_role_missing`, `target_role_not_settable`,
+`caller_cannot_revert`, `target_needs_schema_create`,
+`caller_needs_database_create`, `caller_needs_createdb`,
+`target_needs_schema_usage`, `target_needs_object_privilege`,
+`target_grant_unrevertible`, `name_has_control_character`: fix the named
+precondition (re-run `--preconditions`), then plan again. Exit 4: the lock
+budget ran out with nothing half-applied. The WR5 window is not available while
+the App is stopped (it refuses `window_app_not_active`), so the exit is the
+revert below, then a new plan. Exit 3: a partial apply; revert.
+
+**Rollback:**
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_handover --revert --journal <private-dir>/lakebase-journal.json
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.lakebase_handover --revert --journal <private-dir>/lakebase-journal.json --ack-plan <sha256>
+```
+
+## Step 9. Plan #2
+
+**Who:** CI.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true
+```
+
+**Proof:** exactly the adoption refusal, as in step 6; nothing new. The
+adoption's own read-only readout (the bind plan, the pre-stop probes in their
+adopt mode and adopt-live's preconditions) comes from a `phase=adopt` dispatch
+without acks, which is blocked by B1 on `main`:
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
+```
+
+Once B1 is fixed, that run is read-only: it prints the adopt plan's sha256 and
+adopt-live's plan sha256 and stops before the lease. Expect: 16 legacy keys to
+bind, 2 planned creates, no delete, recreate or instance change, the
+dashboards `pinned_permanent`, and `s7_default_source: not_settable`.
+
+**Rollback:** read-only. If anything else refuses, revert steps 7 and 8 or fix
+the cause.
+
+## Step 10. Start the App (10A), then adopt (10B)
+
+### 10A. Start the stopped App (owner)
+
+adopt-live signs only a **running** App: a stopped App has no active
+deployment and refuses `deployment_unstable`. Immediately before 10B the owner
+starts it, raw, with their own profile. The start creates a new SNAPSHOT
+deployment of the App's default-source folder (spike S7), which adopt-live then
+checks (`tree_drift`: the folder and its snapshot must digest equal).
+
+```bash
+databricks apps start <app-name> -p <owner-profile>
+databricks apps get <app-name> -p <owner-profile> -o json | jq '{compute: .compute_status.state, pending: (.pending_deployment != null), active_state: .active_deployment.status.state, default_is_active_source: (.default_source_code_path == .active_deployment.source_code_path)}'
+databricks apps list-deployments <app-name> -p <owner-profile>
+```
+
+Wait until the compute is `ACTIVE`, nothing is pending, the active deployment
+is `SUCCEEDED` and the newest of any state, and `default_is_active_source` is
+true. Then measure, read-only, what spike S7's follow-up needs (#334's
+stranded-start check compares env values, which Databricks may redact): for the
+new start's deployment and for the previous newest one (both ids from
+`list-deployments`, kept in your terminal), record only these counts:
+
+```bash
+databricks apps get-deployment <app-name> <deployment-id> -p <owner-profile> -o json | jq '{env_vars: ((.env_vars // []) | length), with_a_value: ([(.env_vars // [])[] | select((.value // "") != "")] | length)}'
+```
+
+Also now, with the App up: one real Genie turn (BUDGET_EXCEEDED means the owner
+restores the budget before step 12), `/health` ok, synced tables advancing, and
+the next App-triggered lifecycle run, watched read-only and never run-now:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_verify watch-next-run --job-id <lifecycle-job-id> --report-out <private-dir>/lifecycle-run.json
+```
+
+**Stop point:** if the start's deployment FAILED, do not adopt. Stop the App
+again if the owner wants it stopped, and fix the folder first (a fresh
+emergency deploy of a current commit is the remedy for `closure_differs`).
+
+### 10B. Adopt (CI): **blocked by B1 and B2**
+
+**Preconditions:** 10A; steps 7 and 8 done; #334 and #337 on `main`.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="adopt_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+```
+
+The first run is read-only and prints both digests. The second binds the 16
+legacy keys into the deployer's state, judges the post-bind plan in adopt mode,
+then (B2) needs adopt-live's ack too, which no dispatch input carries today.
+Once B2 is fixed it copies the live folder create-only into the deployer's
+`app-src/adopted-<id12>-<digest12>`, re-hashes it and signs one v7 core record.
+It never stops, starts or deploys the App. Do not pass
+`expected_active_deployment_sha256`: it is release-only, and an adopt dispatch
+with it refuses.
+
+**Proof:** the gate shows 0 delete, 0 recreate, no instance change, creates =
+the 2 jobs the legacy install never had; the active deployment is unchanged (the
+10A start); the record verifies; `frontend_provenance` is reported
+(`unverified` in CI, see B3).
+
+**Refusals:** bind plan: `missing`, `renamed`, `foreign_bound`,
+`bound_elsewhere`, `duplicate_id`, `deployer_state_orphan`,
+`legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
+`state_mismatch`, `malformed_state`, `read_failed`; post-bind gate:
+`instance_change`, `create_set_mismatch`, `dashboard_recreate`,
+`dashboard_move`, `rename_collision`; adopt-live: `deployment_unstable`,
+`env_names_not_proxyless`, `bindings_invalid`, `bindings_differ`,
+`acl_unreadable`, `treatment_unverified`, `health_unreadable`,
+`main_unresolved`, `source_not_on_main`, `health_sha_not_on_main`,
+`tree_drift`, `app_yaml_differs`, `closure_differs`, `record_present`,
+`tier_agentic`. Each is in docs/deployment.md ("Adopting an existing install",
+"Signing the live deployment as an adopted blue"). Exit 3 from the bind: its
+undo is unproven; dispatch `phase=unadopt`.
+
+**Rollback:** dispatch `phase=unadopt` (with its own acks): the exact unbind
+plus a tombstone record version. Nothing is deleted.
+
+## Step 11. Plan #3
+
+**Who:** CI.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f operation_acks="accepted_exposure_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+```
+
+**Proof:** 0 refusals; blue is the adopted record; the bundle plan gate shows
+0 delete and 0 recreate; the migration plan is a noop (inputs unchanged since
+the seeded install, which needs `MIP_SEED_OPERATOR_EMAIL` set: otherwise the
+plan applies a seed change, a contract WR3); the window plan states its reasons,
+predicted length and budget admission; the EXECUTE-gap prediction is shown; the
+step summary prints the profile ack and the active deployment's sha256.
+
+**The window.** Plan for one window in run 1 and announce it. On the shape
+spike S2 read, #337's set comparison predicts no WR1 (order and a binding's own
+description are not reasons; the empty App description is fixed online), and
+the jobs identity's `jobs_reader` Lakebase role, which no earlier run created,
+makes it a WR2 (docs/deployment.md, WR2). A live App role that already holds
+CREATE ON DATABASE is a WR2 too. Whatever reasons plan #3 prints are the ones
+the release acks; a reason that appears only at the release's recheck
+refuses.
+
+**Refusals:** `window_budget_refused`, `window_migration_refused`,
+`window_start_source_drift`, `window_journal_open`, `window_facts_incomplete`
+(docs/deployment.md, "Keep blue serving"); `accepted_exposure`; a Genie pin
+refusal (exit 10) prints the `genie_pin` digest the release then carries.
+
+**Rollback:** read-only.
+
+## Step 12. Release (run 1): **blocked by B3**
+
+**Who:** CI. **Preconditions:** step 11 clean; the App running; the Genie
+budget restored; the announcement made.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="quiesce_window=<sha256> accepted_exposure_plan=<sha256>" -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true
+```
+
+Add `genie_pin=<sha256>` or `database_instance_update=<sha256>` to
+`operation_acks` only when plan #3 printed them. Never set
+`rebase_unverified_app`: it stops an App that has no signed record, and this
+App has one.
+
+While blue serves, the run rechecks the plan, applies the bundle (names lose
+the development prefix, run_as moves to the deployer and the jobs identity,
+jobs stay PAUSED; the pipeline's datasets follow its run_as to the jobs
+identity at once), writes the catalog marker, grants and lineage, publishes the
+release, then opens the one admitted window with the dead-man armed, starts and
+re-pins blue, and activates green in one rollover with a signed core capture.
+The data jobs are deferred to step 14.
+
+**B3:** the pre-activation proof refuses green activation with
+`unverified_frontend_unacked` because the adopted frontend is unverified and no
+dispatch input carries `restore_unverified_frontend`. Blue keeps serving. Do not
+dispatch step 12 until the follow-up lands.
+
+**Proof:** green SUCCEEDED; health `git_sha` equals the dispatched commit; the
+env-name diff equals the plan's; jobs run as the planned identities and are
+PAUSED; the runtime secrets and the pii-salt were not rewritten; observed
+downtime equals the predicted window plus one rollover.
+
+**Refusals:** the pre-stop probe codes (`[mip-prestop] REFUSED: <code>`, before
+the lease, App untouched); `window_unacked` (the digest moved: plan and ack
+again); the release postflight's live run_as check (exit 4, before any grant,
+when a jobs-identity job or the pipeline does not run as the jobs identity);
+`no_rollback_proof`, `unverified_frontend_unacked` (B3).
+
+**Rollback:** before activation, blue keeps serving (`blue_serving`). Inside
+the window, the run starts and re-pins blue, or the dead-man restarts it at the
+deadline and the next run re-pins it (`repin --from-deadman`). If the outage
+cannot wait for the dead-man: the owner break-glass (docs/deployment.md, "Owner
+break-glass"). After activation, the tier-b restore of the adopted copy from the
+record.
+
+## Step 13. Post-release verification
+
+**Who:** an agent for the checks; the owner for the grants and the membership.
+
+1. The owner grants the validator its read-only set ([onboarding.md](onboarding.md),
+   step 8), while still a data-owners member.
+2. Dispatch the per-client nightly and read the gate:
+
+```bash
+gh workflow run nightly.yml --ref main -f client=<client>
+python -m tools.live_validation_gate --release-sha <sha> --client <client>
+```
+
+3. In the App: an evidence drawer citing real rows; one human approval writing
+   a Lakebase audit row; one Genie turn answering live-first. Announce the App
+   is live.
+4. Prove the UC end state, then unset the pairs:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ownership --verify --released
+```
+
+   It passes only when every pipeline dataset in the governed catalog is owned
+   by the jobs identity, which its pipeline runs as. Then unset
+   `MIP_UC_INTERIM_OWNER_PAIRS_JSON` (`.env.local` and the environment secret).
+5. With the owner's OK, remove the legacy owner's interim membership of
+   `<prefix>-data-owners` in the account console, then dispatch a plan and watch
+   the next App-triggered lifecycle run (now as the jobs identity) with
+   `handover_verify watch-next-run`.
+
+**Proof:** the nightly is green and the gate accepts the commit; `--verify
+--released` passes; after the membership removal the plan shows 0 refusals and
+the lifecycle run SUCCEEDS.
+
+**Refusals:** `pipeline_owner_unapproved`, `pipeline_owner_not_run_as`,
+`pipeline_run_as_unreadable`, `pipeline_unresolved` (a pipeline dataset not
+owned by the jobs identity: stop, the release did not move the run_as).
+
+**Rollback:** re-add the membership; dispatch a release of the previous green
+commit, or restore through the record.
+
+## Step 14. Data phase
+
+**Who:** CI.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=data -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
+```
+
+**Proof:** job digests match the bundle; `mip_scheduled_refresh` SUCCEEDED and
+its outcome gate passed; the reviewed-function grants are reconciled and
+verified; the data smoke is green; a second dispatch re-attaches or skips.
+
+**Refusals:** exit 4 (a job still running at the deadline: dispatch again);
+a stale or rerun ledger (`data_ledger_supersede` / `data_ledger_rerun` digest
+in `operation_acks`, docs/deployment.md "Governed run phases").
+
+**Rollback:** the jobs are idempotent; gold swaps are atomic per table.
+
+## Step 15. Refresh on, after seven green days
+
+**Who:** the owner. Set `MIP_SCHEDULED_REFRESH=on` and
+`MIP_SCHEDULED_REFRESH_RECIPIENTS` (email recipients only), re-run
+`github_environment`, dispatch a plan, then a release with the new profile ack.
+
+**Proof:** `mip_scheduled_refresh` is UNPAUSED as the jobs identity, with email
+recipients only. **Rollback:** set it back to `off` and release.
+
+## Step 16. Archive the legacy root
+
+**Who:** the owner (or an agent with the owner's approval and profile).
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --report-out <private-dir>/archive-plan.json
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.archive_legacy_root --apply --ack-plan <sha256>
+```
+
+It copies the legacy root's top-level children into
+`<deployer root>/legacy-archive/<leaf>/` create-only and byte-verified, and
+never deletes. It refuses any path a bound resource still uses (`bound_path`):
+the pinned dashboards' folder stays where it is. Keep the legacy deployment's
+source folder until a governed capture supersedes the adopted record (narrow
+with `--only <name>`). Removing the originals is the owner's, from the plan's
+list.
+
+**Proof:** the copied set intersects no bound path; plan still clean; the
+active deployment and the record unaffected. **Rollback:** nothing was moved.
+
+## Step 17. Owner legacy deletions
+
+**Who:** the owner; each permanent, so each needs the owner's own go-ahead:
+
+- the retired `dev` and `copilot` GitHub environments;
+- repository-level identity secrets and both retired `DATABRICKS_TOKEN`
+  secrets (anything that still blocks `check-dispatch` went in step 4);
+- the federation audience of the deleted staging workspace, and dangling
+  metastore assignments of deleted workspaces;
+- the partial legacy `app-src` folder and the temporary and proof service
+  principals of the retired staging install;
+- the historical public CI run logs that printed identifying values;
+- the throwaway spike resources on the owner's private delete list.
+
+**Proof:** each deleted object returns not-found; a plan is still clean.
+**Rollback:** none.
+
+## Step 18. Run 2 prerequisites (agentic tier; optional)
+
+Not part of run 1. The agentic tier needs the owner's estate inventory, taken as
+the metastore's direct owner (`tools/clients/estate_inventory.py`,
+docs/deployment.md "Estate inventory"), `bootstrap_account --tier agentic`, and
+the owners of other teams' `account users` and elevated Genie grants narrowing
+them, or the tier stays off. **Not wired into `deploy-dev.yml` today:** the
+inventory (`MIP_ESTATE_INVENTORY_JSON` or `_FILE`) and its `estate` ack are read
+from the deploy process's own environment only, and no dispatch input carries
+them.
+
+## Step 19. Run 2 (optional)
+
+A plan and a release with `MIP_AGENTIC_TIER=on`, once step 18's wiring exists.
+Before activation the core green keeps serving; after it, tier b restores the
+core record.

@@ -88,7 +88,8 @@ audit `dataviz-01`), pinned by the same test:
   manifest has no place in the App source tree.
 
 Two operational facts to know before assembling any ad-hoc App source tree
-(emergency recovery only — the command of record is `./scripts/deploy.sh`):
+(emergency recovery only — the command of record is the governed `deploy-dev.yml`
+dispatch, which runs `./scripts/deploy.sh`):
 
 - **Source lister budget.** The Apps deployment source snapshot has a hard
   60-second listing budget; the failure reads `Failed to snapshot source
@@ -330,9 +331,9 @@ the staged closure with its manifest. `deploy-dev.yml` uses it so that its
 
 ## Emergency recovery: a slim per-release App source folder
 
-**Emergency recovery only. The command of record is `./scripts/deploy.sh -t
-client`, which stages, publishes and promotes a per-release folder itself
-(previous section).** A hand-made slim folder is for the case that path cannot
+**Emergency recovery only. The command of record is the governed
+`deploy-dev.yml` dispatch, whose `./scripts/deploy.sh -t client` run stages,
+publishes and promotes a per-release folder itself (previous section).** A hand-made slim folder is for the case that path cannot
 run at all, which today includes every ship to the live install: it predates
 the client target and is reached only through the recipe below until it is
 adopted (M2-PR6). A deploy from it bypasses three governed steps, and `stage`
@@ -645,6 +646,53 @@ root: it publishes under its own deployer root
 and its prune lists only that root's `app-src/`. Folders published by this
 recipe, and legacy `app-src/<short sha>` folders (which are not release ids),
 stay owner cleanup until the adoption.
+
+**The freeze during the first-client cutover.** Cutover step 1 freezes this
+recipe ([docs/clients/first-client-cutover.md](clients/first-client-cutover.md)).
+The marker command above needs the deploy's proof-signing key pair in the
+shell, and no shell holds it: `python -m tools.clients.github_environment`
+generates a client's signing key in memory and pipes it into a write-only
+environment secret, and no workflow step runs `freeze`. So on `main` the
+freeze is a message to every peer session plus the owner's rule, not a
+marker; a CI-run freeze and thaw is a follow-up. The governed run is never
+blocked by a marker of its own App (its held lease exempts it, above).
+
+### Owner break-glass: a raw `apps start`
+
+Owner-only, with the owner's own CLI profile for the client's workspace
+(`<owner-profile>`; never an agent's decision). `apps start` creates a new
+SNAPSHOT deployment of the App's current `default_source_code_path` bytes,
+with the newest deployment's env-name set (spike S7); it never deploys other
+source. Read the window journal first, read-only (codes and booleans only):
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.quiesce_window status --unverified --app-name <app-name>
+databricks apps start <app-name> -p <owner-profile>
+```
+
+- **A stopped App no signed record governs** (the journal reads `absent`).
+  This is cutover step 10A: adopt-live signs only a running App, so the owner
+  starts it right before the adopt phase, which then signs the deployment the
+  start created (its `tree_drift` precondition checks that folder against its
+  snapshot).
+- **An open quiesce window** (the journal in any state but `absent` or
+  `closed`) whose dead-man has not restarted blue. Prefer the governed
+  path: the dead-man starts blue at the job's deadline, within its start
+  budget, and the next governed run re-pins that start (`repin
+  --from-deadman`). Break glass only when the outage cannot wait. The raw start
+  serves the App again, but it is not a governed restore: no proof ran, the
+  window's journal stays open and no dead-man restart is recorded, so every
+  later governed run refuses `window_journal_open` before its lease. On `main`
+  no tool re-pins an owner start or closes that journal, so "the next run
+  re-pins" is not yet true for this case: the governed path stays blocked
+  until a reviewed follow-up adds that re-pin. Record the start (when, which
+  deployment, why) for it. A dead-man still armed then finds the App no longer
+  its stopped blue at its deadline, records `deadman_skipped` and starts
+  nothing.
+- **Never break glass on a contract window** (the window plan's
+  `blue_restorable` false, the dead-man's `deadman_left_stopped`): blue's code
+  would serve the migrated schema. That outage is the acknowledged one; escalate
+  instead.
 
 ## App Python dependencies: the deps-digest line
 
@@ -975,9 +1023,11 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    resource uses the bundle's own warehouse.
    `deploy-dev.yml` runs one client environment's phase per manual dispatch
    (M1-PR7), and `nightly.yml` validates one client per dispatch (M1-PR8,
-   "Live validation per client"). The command of
-   record is `./scripts/deploy.sh -t client`, which `deploy-dev.yml` runs.
-   Before the first deployment into an isolated workspace, run:
+   "Live validation per client"). The command of record is the governed
+   dispatch of `deploy-dev.yml` (step 3), which runs `./scripts/deploy.sh -t
+   client --phase <phase>` in the client's GitHub Environment; a live phase,
+   `plan` included, is CI-only. Before the first deployment into an isolated
+   workspace, run locally:
 
 ```bash
 python tools/databricks/bundle_env.py validate -t client
@@ -1004,14 +1054,18 @@ python tools/databricks/bundle_env.py validate -t client
    builds the same payload; for a client bound to another database, add
    `--lakebase-database <database>` to its `app_deploy_payload` line.
 
-3. Run the deployment script. It builds the frontend, provisions Genie if
-   needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
-   publishes the staged per-release App source folder and promotes it to the
-   running Databricks App ("Governed per-release App source"), and runs the
-   refresh/smoke steps.
+3. Dispatch the governed deploy, one client and one phase per run, plan
+   first (`make deploy-dev` prints this command and deploys nothing). In CI it
+   runs `./scripts/deploy.sh -t client --phase <phase>`, which builds the
+   frontend, provisions Genie if needed, validates/plans/deploys the direct
+   bundle through the env-aware wrapper, publishes the staged per-release App
+   source folder and promotes it to the running Databricks App ("Governed
+   per-release App source"), and runs the refresh/smoke steps (the data jobs in
+   `phase=data`). The order of phases for a new client, and the acks each
+   needs, is [docs/clients/onboarding.md](clients/onboarding.md).
 
 ```bash
-./scripts/deploy.sh -t client
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f acknowledge_single_maintainer_break_glass=true
 ```
 
 The command of record deploys only an exact committed revision. Before any
@@ -3103,8 +3157,9 @@ serving the dead-man's start (stopped or restarted by hand) needs the owner
 break-glass below. Any other open journal still refuses before the lease
 (`window_journal_open`): a contract window the dead-man left stopped, a start
 it could not prove, or a dead-man that has not reached its deadline. That is
-the owner break-glass case: a raw `apps start` with the owner's U2M profile,
-then the next governed run re-pins (M2-PR9 documents it).
+the owner break-glass case: a raw `apps start` with the owner's U2M profile
+("Owner break-glass: a raw `apps start`", under the emergency recipe, which
+also says what the next governed run does after one today).
 
 **The workflow.** `deploy-dev.yml`'s deploy job (M1-PR7) first records
 `MIP_JOB_DEADLINE_EPOCH` from its phase's own timeout, and a step after the
@@ -3603,7 +3658,7 @@ and the journal. Neither tool has run live.
 python -m tools.clients.handover_uc_ownership --plan --report-out <private report>
 python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal <new path>
 python -m tools.clients.handover_uc_ownership --verify
-# after the release (step 10):
+# after the release (cutover step 12):
 python -m tools.clients.handover_uc_ownership --verify --released
 ```
 
@@ -4479,6 +4534,13 @@ variables, identifying fields as secrets, freshly generated Ed25519 signing
 keys, and the profile digest `MIP_CLIENT_PROFILE_SHA256`. It uses the same
 plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
 [docs/clients/github-environment.md](clients/github-environment.md).
+
+The order of a new client's onboarding, from profile to the per-client
+nightly, is [docs/clients/onboarding.md](clients/onboarding.md); adopting the
+first client's existing install is
+[docs/clients/first-client-cutover.md](clients/first-client-cutover.md); and
+what the single-maintainer environment approval does and does not prove is
+[docs/clients/review-modes.md](clients/review-modes.md).
 
 ## Live validation per client
 
