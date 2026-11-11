@@ -14,6 +14,7 @@ import os
 import stat
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -184,6 +185,88 @@ def test_a_git_ignored_report_inside_the_tree_is_allowed() -> None:
         pytest.skip("not a git checkout")
     assert verify_live.report_path_refusal(ROOT / "test-results" / "verify-live.md") is None
     assert verify_live.report_path_refusal(ROOT / "docs" / "verify-live.md") is not None
+
+
+def test_a_system_temp_directory_inside_the_checkout_is_refused_before_any_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no --out the report goes under the system temp directory, which TMPDIR can put in the checkout."""
+
+    if not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    temp_root = ROOT / "docs" / "verify-live-temp"  # never created: the refusal comes first
+    assert verify_live.report_path_refusal(temp_root / "x" / verify_live.REPORT_NAME) is not None  # git keeps it
+    _no_probe(monkeypatch)
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    monkeypatch.setattr("sys.argv", ["verify_live.py", "--base-url", "https://app.example"])
+
+    with pytest.raises(SystemExit) as refused:
+        verify_live.main()
+
+    assert refused.value.code == 2
+    err = capsys.readouterr().err
+    assert f"the system temp directory {temp_root} is inside the checkout" in err and "set TMPDIR" in err
+    assert f"--out {temp_root}" not in err and not temp_root.exists()  # no --out was given
+
+
+def _git_ignoring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ignored: Callable[[Path], bool]) -> Path:
+    """A checkout at ``tmp_path/checkout`` whose temp root is ``.tmp`` in it, and a git that ignores ``ignored``."""
+
+    checkout = (tmp_path / "checkout").resolve()
+    temp_root = checkout / ".tmp"
+    temp_root.mkdir(parents=True)
+    monkeypatch.setattr(verify_live, "_REPO_ROOT", checkout)
+
+    def fake_git(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        assert command[:3] == ["git", "check-ignore", "-q"]
+        return subprocess.CompletedProcess(command, 0 if ignored(Path(command[3]).relative_to(temp_root)) else 1)
+
+    monkeypatch.setattr(verify_live.subprocess, "run", fake_git)
+    return temp_root
+
+
+@pytest.mark.parametrize("rule", ["temp_root_files", "private_report_dirs"])
+def test_the_default_report_is_checked_where_it_is_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rule: str
+) -> None:
+    """A rule like ``.tmp/*.md`` ignores ``<tmp>/<report>`` but not ``<tmp>/mip-verify-live-*/<report>``."""
+
+    def private(path: Path) -> bool:
+        return len(path.parts) == 2 and path.parts[0].startswith(verify_live.REPORT_DIR_PREFIX)
+
+    checked: list[Path] = []
+    rules = {"temp_root_files": lambda path: len(path.parts) == 1, "private_report_dirs": private}
+    temp_root = _git_ignoring(monkeypatch, tmp_path, lambda path: checked.append(path) or rules[rule](path))
+
+    if rule == "temp_root_files":  # the report it would write is not ignored: refused before any token
+        _no_probe(monkeypatch)
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+        monkeypatch.setattr("sys.argv", ["verify_live.py", "--base-url", "https://app.example"])
+        with pytest.raises(SystemExit) as refused:
+            verify_live.main()
+        assert refused.value.code == 2 and list(temp_root.iterdir()) == []
+        return
+    _run_with_the_default_report(monkeypatch, temp_root)
+    [made] = temp_root.glob(f"{verify_live.REPORT_DIR_PREFIX}*")
+    assert Path(made.name, verify_live.REPORT_NAME) in checked, "the path mkdtemp picked is checked before it is opened"
+
+
+def test_a_report_only_its_shape_passes_is_never_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The pre-token check reads a stand-in name; the name mkdtemp picks is checked again, and refused here."""
+
+    stand_in = f"{verify_live.REPORT_DIR_PREFIX}xxxxxxxx"
+    temp_root = _git_ignoring(monkeypatch, tmp_path, lambda path: path.parts[0] == stand_in)
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    monkeypatch.setattr(verify_live, "get_oauth_token", lambda profile: "test-token")
+    monkeypatch.setattr(verify_live, "run_probes", lambda base, token: [])
+    monkeypatch.setattr(
+        "sys.argv", ["verify_live.py", "--base-url", "https://app.example", "--max-source-age-days", "8"]
+    )
+
+    assert verify_live.main() == 2
+    assert list(temp_root.iterdir()) == [] and "is inside the checkout" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

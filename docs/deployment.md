@@ -3904,7 +3904,10 @@ Three values that were committed defaults are now inputs:
   <app-name>` prints it as `url`. The verifier's report names the URL, so it
   is written to a new private (0700) `mip-verify-live-*` directory in the
   system temp directory, never a fixed path there, and an `--out` inside the
-  checkout that git does not ignore, or cannot answer for, is refused.
+  checkout that git does not ignore, or cannot answer for, is refused. So is
+  the default when `TMPDIR` puts that directory inside the checkout and git
+  does not ignore the report there: the path mkdtemp picks is checked again
+  before it is opened.
 - **The load-test target** recorded in `tools/load_test/baseline.json` reads
   `https://<app-host>/api/v1`. It is a label, never compared:
   `tools/load_test/baseline.py --target` keeps the scheme and path and
