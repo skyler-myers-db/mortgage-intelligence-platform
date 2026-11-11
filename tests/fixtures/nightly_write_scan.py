@@ -178,11 +178,34 @@ def _tool_path_literals(tree: ast.Module) -> set[str]:
     return found
 
 
+# A script node runs loads its relative imports. An app module it reaches is read, not followed, as for a spec:
+# the app's own API client names every write path.
+_JS = frozenset({".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx"})
+_JS_UNFOLLOWED = ("frontend/src/",)
+
+
+def _js_imports(root: Path, path: Path, text: str) -> tuple[list[Path], list[str]]:
+    """(the repo files a node script's relative imports load, findings: one that resolves nowhere, or source it cannot lex)."""
+
+    if path.relative_to(root).as_posix().startswith(_JS_UNFOLLOWED):
+        return [], []
+    where = path.relative_to(root)
+    try:
+        found, unresolved = _relative_imports(path, text)
+    except LexError as error:
+        return [], [f"{where}: source this scan cannot lex ({error})"]
+    inside = [each for each in found if each.is_relative_to(root)]
+    problems = [f"{where}: imports {name}, which resolves to no file this scan can read" for name in unresolved]
+    problems += [f"{where}: imports {each}, outside the repo" for each in found if not each.is_relative_to(root)]
+    return inside, problems
+
+
 def loaded_files(root: Path, paths: Iterable[Path]) -> set[Path]:
     """These files and, transitively, every repo file they run or load.
 
     A Python module loads what it imports (``pytest_plugins`` included) and the
-    tools scripts it names by path (a child process runs one); a shell script
+    tools scripts it names by path (a child process runs one); a node script
+    loads its relative imports and the tools scripts it names; a shell script
     loads the tools scripts it names (run or sourced), the tools modules it
     runs with ``-m`` and what a here-document that parses as Python imports.
     """
@@ -198,6 +221,9 @@ def loaded_files(root: Path, paths: Iterable[Path]) -> set[Path]:
         if path.suffix == ".py":
             todo.extend(_imported(root, path, text))
             todo.extend(_scripts(root, path, text))
+        elif path.suffix in _JS:
+            todo.extend(root / name for name in sorted(set(TOOL_PATH.findall(text))) if (root / name).is_file())
+            todo.extend(_js_imports(root, path, text)[0])
         else:
             todo.extend(root / name for name in sorted(set(TOOL_PATH.findall(text))) if (root / name).is_file())
             todo.extend(module for name in TOOL_MODULE.findall(text) if (module := _module_path(root, name)) is not None)
@@ -216,6 +242,8 @@ def whole_module_findings(root: Path, paths: Iterable[Path]) -> list[str]:
             findings.append(f"{path.relative_to(root)}:{_line_of(source, match.start())}: {match.group()} in a file nightly loads")
         if path.suffix == ".py":
             findings += _unreadable_plugin_findings(root, path, source)
+        elif path.suffix in _JS:
+            findings += _js_imports(root, path, source)[1]
     return sorted(findings)
 
 
@@ -478,12 +506,35 @@ _APPENDED = ("", ".ts", ".tsx", "/index.ts", "/index.tsx")
 _TS_TWINS = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
 
 
+def _specifiers(src: str) -> list[str]:
+    """The relative specifiers ``src`` imports, from its code tokens: a comment or a string's text is no import.
+
+    ``import 'x'``, ``import(...)``, ``from 'x'`` (``import ... from``, ``export ... from``) and
+    ``require('x')``, not a member such as ``Array.from('x')``. A template specifier is kept as
+    written, so one that builds its path at run time (``${...}``) resolves to no file.
+    """
+
+    tokens, _end = _lex(src)
+    found: list[str] = []
+    for k, token in enumerate(tokens):
+        if token.kind != "ident" or token.value not in ("import", "from", "require") or (k and tokens[k - 1].value == "."):
+            continue
+        j = k + 1
+        if token.value != "from" and j < len(tokens) and tokens[j].value == "(":
+            j += 1
+        elif token.value == "require":
+            continue
+        if j < len(tokens) and tokens[j].kind in ("string", "template") and tokens[j].value.startswith(("./", "../")):
+            found.append(tokens[j].value)
+    return found
+
+
 def _relative_imports(path: Path, src: str) -> tuple[list[Path], list[str]]:
     """(the files ``src``'s relative imports resolve to, the specifiers that resolve to no file)."""
 
     found: list[Path] = []
     unresolved: list[str] = []
-    for module in re.findall(r"""(?:from|import|require)\s*\(?\s*['"](\.{1,2}/[^'"]+)['"]""", src):
+    for module in _specifiers(src):
         base = (path.parent / module).resolve()
         candidates = [Path(f"{base}{suffix}") for suffix in _APPENDED] + [base.with_suffix(twin) for twin in _TS_TWINS.get(base.suffix, ())]
         resolved = next((candidate for candidate in candidates if candidate.is_file()), None)
@@ -548,7 +599,11 @@ def spec_findings(frontend: Path, spec: str, grep: str | None, grep_invert: str 
         for match in LEAD_STATE_WRITE.finditer(text):
             findings.append(f"{module.relative_to(frontend)}:{_line_of(text, match.start())}: {match.group()} in a module {spec} imports")
         if module.is_relative_to(frontend / "tests"):
-            more, unresolved = _relative_imports(module, text)
+            try:
+                more, unresolved = _relative_imports(module, text)
+            except LexError as error:
+                findings.append(f"{module.relative_to(frontend)}: source this scan cannot lex ({error})")
+                continue
             todo.extend(more)
             findings += [f"{module.relative_to(frontend)}: imports {name}, which resolves to no file this scan can read" for name in unresolved]
     return findings, sorted(set(writers))
