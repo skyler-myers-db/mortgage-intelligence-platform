@@ -6,15 +6,19 @@ with no restart, and that only the migration job's revoke takes it back. So
 the step files record the send (``APP_ROLE_REGRANT_OWED``) and the migration
 block runs that job inside the same window, after the binding update, even
 when the migration plan has nothing to change; a skip with a send recorded
-refuses. A description-only difference is applied online in the no-window
-branch, after the resource diff proved the bindings equal. The harness is
-``tests/unit/test_quiesce_window_shell.py``'s: the real libraries and step
-lines, a fake ``$PYTHON`` that records each call.
+refuses. Resources are sent only in a WR1 window (or an ungoverned run): a
+run with no WR1, a window opened for WR4 included, proves the bindings equal
+and applies a description-only difference online, with no send and so no
+re-grant. The harness is ``tests/unit/test_quiesce_window_shell.py``'s: the
+real libraries and step lines, a fake ``$PYTHON`` that records each call.
 """
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tests.unit.test_quiesce_window_shell import LIB, _has, _migration_block, _run
@@ -79,7 +83,7 @@ def test_the_step_text_records_every_send_and_applies_a_description_only_differe
     def at(needle: str, start: int = step) -> int:
         return text.index(needle, start)
 
-    no_window = at('step "prove the serving App\'s resource bindings already equal the bundle (no window)"')
+    no_window = at('step "prove the App\'s resource bindings already equal the bundle (no WR1, no resources send)"')
     diff = at("tools.databricks.app_resource_bindings diff", no_window)
     fixup = at("tools.databricks.app_description_fixup", diff)
     otherwise = at("\n  else\n", fixup)
@@ -96,3 +100,81 @@ def test_the_step_text_records_every_send_and_applies_a_description_only_differe
     first_install = at("databricks apps create", text.index('step "create stopped Databricks App'))
     assert at("APP_ROLE_REGRANT_OWED=1", first_install) < step, "the first install's create records it too"
     assert "APP_ROLE_REGRANT_OWED=0" in (LIB.parent / "deploy.sh").read_text(encoding="utf-8")
+
+
+def _binding_branch() -> str:
+    """The step file's real lines from the no-WR1 test through the send branch's end."""
+
+    text = (LIB / "deploy_step_bundle_apply.sh").read_text(encoding="utf-8")
+    start = text.index('  if [[ -n "${QUIESCE_WINDOW_STATE:-}" ]] && ! quiesce_window_has_reason WR1; then\n')
+    end = text.index("\n  fi\nfi\n", start) + len("\n  fi\n")
+    return text[start:end]
+
+
+_BINDING_STUBS = """APP_RESOURCE_BINDING_PAYLOAD="$TMPDIR/payload.json"; APP_RESOURCE_BINDING_BEFORE="$TMPDIR/before.json"
+APP_RESOURCE_BINDING_AFTER="$TMPDIR/after.json"; APP_ROLE_REGRANT_OWED=0
+assert_expected_app_identity() { echo "identity $1" >> "$CALLS"; }
+databricks() { echo "databricks $*" >> "$CALLS"; }
+binding_python() {
+  printf '%s\\n' "$*" >> "$CALLS"
+  case "$*" in *"app_resource_bindings diff"*) return "${DIFF_RC:-0}" ;; esac
+}
+PYTHON=binding_python
+"""
+
+
+def _binding_step(
+    tmp_path: Path, state: str, reasons: str, **env: str
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    return _run(
+        tmp_path,
+        f"QUIESCE_WINDOW_STATE={state}; QUIESCE_WINDOW_REASONS={reasons}\n"
+        + _BINDING_STUBS
+        + _binding_branch()
+        + 'echo "owed=$APP_ROLE_REGRANT_OWED"\n',
+        **env,
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "reasons"),
+    (("blue_serving", "-"), ("window_open", "WR4"), ("window_open", "WR2,WR4"), ("blue_degraded", "-")),
+    ids=("no-window", "wr4-window", "wr2-wr4-window", "blue-degraded"),
+)
+def test_a_run_with_no_wr1_never_sends_resources_and_owes_no_revoke(
+    tmp_path: Path, state: str, reasons: str
+) -> None:
+    """Review of #337: a WR4 window used to send an equal set and re-grant CREATE ON DATABASE."""
+
+    result, calls = _binding_step(tmp_path, state, reasons)
+
+    assert result.returncode == 0, result.stderr
+    assert not _has(calls, "apps update") and not _has(calls, "app_resource_bindings verify")
+    assert _has(calls, "app_resource_bindings diff") == 1 and _has(calls, "app_description_fixup") == 1
+    assert "owed=0" in result.stdout
+
+
+def test_a_binding_diff_with_no_wr1_refuses_and_sends_nothing(tmp_path: Path) -> None:
+    result, calls = _binding_step(tmp_path, "window_open", "WR4", DIFF_RC="3")
+
+    assert result.returncode == 2
+    assert "No resources were sent" in result.stderr
+    assert not _has(calls, "apps update") and not _has(calls, "app_description_fixup")
+    assert "owed=" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("state", "reasons"),
+    (("window_open", "WR1"), ("window_open", "WR1,WR4"), ("", "")),
+    ids=("wr1-window", "wr1-wr4-window", "ungoverned"),
+)
+def test_a_wr1_window_or_an_ungoverned_run_sends_and_records_the_re_grant(
+    tmp_path: Path, state: str, reasons: str
+) -> None:
+    result, calls = _binding_step(tmp_path, state, reasons)
+
+    assert result.returncode == 0, result.stderr
+    assert _has(calls, "databricks apps update mip-app --json @") == 1
+    assert _has(calls, "app_resource_bindings verify") == 1
+    assert not _has(calls, "app_resource_bindings diff") and not _has(calls, "app_description_fixup")
+    assert "owed=1" in result.stdout

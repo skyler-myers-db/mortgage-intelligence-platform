@@ -350,23 +350,24 @@ PYEOF
     # state as the authoritative pre-mutation baseline.
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
   fi
-  if [[ -n "${QUIESCE_WINDOW_STATE:-}" && "$QUIESCE_WINDOW_STATE" != "window_open" ]]; then
-    # No window reason: the bindings must already equal the bundle's as a set
+  if [[ -n "${QUIESCE_WINDOW_STATE:-}" ]] && ! quiesce_window_has_reason WR1; then
+    # No WR1 (no window, or a window opened for another reason such as WR4):
+    # resources are sent only for a binding diff (spike S2: every send, an
+    # identical array included, re-grants CREATE ON DATABASE to the App's
+    # Lakebase role). The bindings must already equal the bundle's as a set
     # (an order-only difference is equal), read again now under the lease
-    # (time of check, time of use). A diff refuses with blue still serving;
-    # resources are never sent outside the window (spike S2: every send
-    # re-grants CREATE ON DATABASE to the App's Lakebase role).
-    step "prove the serving App's resource bindings already equal the bundle (no window)"
+    # (time of check, time of use). A diff refuses and sends nothing.
+    step "prove the App's resource bindings already equal the bundle (no WR1, no resources send)"
     if ! "$PYTHON" -m tools.databricks.app_resource_bindings diff \
       --expected "$APP_RESOURCE_BINDING_PAYLOAD" \
       --live "$APP_RESOURCE_BINDING_BEFORE"; then
-      echo "${RED}[deploy] the App's bindings drifted after the window plan; re-run to plan the window. Blue keeps serving.${RST}" >&2
+      echo "${RED}[deploy] the App's bindings drifted after the window plan; re-run to plan the window. No resources were sent.${RST}" >&2
       exit 2
     fi
     # A description-only difference is the one online fix-up (spikes S2 and
     # S2b): a create-update masked to description restarts nothing, makes no
-    # deployment and leaves the App's role alone. Blue keeps serving.
-    step "apply the bundle's App description online when it differs (description only, no window)"
+    # deployment and leaves the App's role alone, in a window or not.
+    step "apply the bundle's App description online when it differs (description only, no resources)"
     assert_expected_app_identity "$_GRANTS_APP_NAME"
     run "$PYTHON" -m tools.databricks.app_description_fixup \
       --app-name "$_GRANTS_APP_NAME" \
@@ -379,9 +380,10 @@ PYEOF
     assert_expected_app_identity "$_GRANTS_APP_NAME"
     run databricks apps update "$_GRANTS_APP_NAME" \
       --json "@$APP_RESOURCE_BINDING_PAYLOAD"
-    # Spike S2: this send, an identical array included, grants CREATE ON
-    # DATABASE to the App's Lakebase role again. Only the migration job's
-    # revoke takes it back, and step 4b runs that job below, in this window.
+    # A WR1 window or an ungoverned run. Spike S2: this send, an identical
+    # array included, grants CREATE ON DATABASE to the App's Lakebase role
+    # again. Only the migration job's revoke takes it back, and step 4b runs
+    # that job below, in this window.
     APP_ROLE_REGRANT_OWED=1
     assert_expected_app_identity "$_GRANTS_APP_NAME"
     if [[ "$DRY_RUN" -eq 0 ]]; then
