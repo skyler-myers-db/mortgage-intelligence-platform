@@ -7,8 +7,10 @@ at a word's start, and the control operators (``;`` ``&`` ``|`` ``&&`` ``||``
 ``(`` ``)`` and a newline) end a command. A redirection is no word: the file a
 ``<`` reads, the text of a ``<<<`` and a ``<<`` here-document are kept on the
 command. The commands inside ``$( )``, backquotes and ``<( )`` are commands
-too, and the word that holds one keeps ``$(...)`` in its place, so it never
-reads as a file name. Text this module cannot split raises ``ShellSyntaxError``.
+too (``substituted``), and the word that holds one keeps ``$(...)`` in its
+place, so it never reads as a file name. Each command records the ``( )``
+subshells that hold it (``scope``, one id per subshell), so a ``cd`` inside
+one ends with it. Text this module cannot split raises ``ShellSyntaxError``.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ class Command:
     heredoc: bool = False  # a ``<<`` here-document feeds it
     piped_in: bool = False  # a ``|`` before it
     pipes_out: bool = False  # a ``|`` after it
+    scope: tuple[int, ...] = (0,)  # the ``( )`` subshells around it, outermost first, each its own id
+    substituted: bool = False  # it runs inside a ``$( )``, backquotes or ``<( )``
 
 
 _REDIRECTS = ("<<<", "<<-", "<<", "<>", "<&", ">>", ">&", ">|", "&>>", "&>", "<", ">")
@@ -43,6 +47,8 @@ class _Splitter:
         self.word: list[str] = []
         self.in_word = False  # a quote opens a word even when it is empty
         self.redirect: str | None = None
+        self.scope = [0]
+        self.subshells = 0
 
     # -------------------------------------------------------------- words and commands
 
@@ -70,7 +76,7 @@ class _Splitter:
         self.commands.append(self.command)
         self.commands.extend(self.inner)
         self.inner = []
-        self.command = Command(piped_in=pipe)
+        self.command = Command(piped_in=pipe, scope=tuple(self.scope))
 
     # -------------------------------------------------------------- balanced spans
 
@@ -117,7 +123,9 @@ class _Splitter:
     def substitution(self, start: int, end: int) -> None:
         """The commands of ``text[start:end]`` run too; the word keeps a placeholder."""
 
-        self.inner.extend(commands(self.text[start:end]))
+        for command in commands(self.text[start:end]):
+            command.substituted = True
+            self.inner.append(command)
         self.word.append("$(...)")
         self.in_word = True
 
@@ -194,6 +202,11 @@ class _Splitter:
             return True
         for control in ("&&", "||", ";;", "|&", ";", "&", "|", "(", ")", "\n"):
             if text.startswith(control, i):
+                if control == "(":
+                    self.subshells += 1
+                    self.scope.append(self.subshells)
+                elif control == ")" and len(self.scope) > 1:  # a case pattern's ``)`` closes none
+                    self.scope.pop()
                 self.end_command(pipe=control in ("|", "|&"))
                 self.i += len(control)
                 return True

@@ -497,6 +497,7 @@ def _step_scan(root: Path, run: str, **context: str) -> list[str]:
 
 READ_SUITE = {"tests/integration/test_reads.py": "def test_reads():\n    pass\n"}
 JS_WRITE = "export const write = (request) => request.post('/api/leads/B/outcome');\n"
+WRITER_SPEC = {"frontend/tests/e2e/planted.spec.ts": SPEC_HEAD + "test('writes', async ({ request }) => { await request.post('/api/leads/B/assign'); });\n"}
 PLANTED = {"scripts/planted.py": TOOL_WRITE}
 PLANTED_TOOL = {"tools/planted.py": TOOL_WRITE}
 WRITER_SUITE = {"tests/integration/test_planted_live.py": 'def test_writes():\n    post("/api/leads/B/outcome")\n'}
@@ -562,6 +563,16 @@ def _case(run: str, files: dict[str, str], expected: str, id: str, **context: st
         _case("Write-Output reads\n", {}, "runs under shell pwsh, which this scan cannot read", "another-shell", shell="pwsh"),
         _case("node ../tools/planted.mjs\n", {"tools/planted.mjs": JS_WRITE}, "tools/planted.mjs:1", "a-frontend-step-runs-a-repo-tool", working_directory="frontend"),
         _case("python3 ../../outside.py\n", {}, "python3 runs ../../outside.py, which this scan cannot read", "a-path-outside-the-repo", working_directory="frontend"),
+        _case("cd frontend && node ../tools/planted.mjs\n", {"tools/planted.mjs": JS_WRITE}, "tools/planted.mjs:1", "cd-then-a-repo-tool"),
+        _case("(cd frontend && python3 ../tools/reads.py)\n(python3 ../tools/reads.py)\n", {"tools/reads.py": ""}, "python3 runs ../tools/reads.py, which this scan cannot read", "cd-ends-with-its-subshell"),
+        _case('cd "$RUNNER_TEMP"\npython scripts/planted.py\n', PLANTED, "python runs scripts/planted.py, which this scan cannot read", "cd-somewhere-unknown"),
+        _case('(cd frontend && echo "$(node ../tools/planted.mjs)")\n', {"tools/planted.mjs": JS_WRITE}, "tools/planted.mjs:1", "cd-then-a-command-substitution"),
+        _case('"$VIRTUAL_ENV/bin/python" scripts/planted.py\n', PLANTED, "scripts/planted.py:5", "an-interpreter-in-a-variable-directory"),
+        _case("npx --yes playwright@1.50.0 test tests/e2e/planted.spec.ts\n", WRITER_SPEC, "/assign in a test the step runs", "npx-a-versioned-playwright", working_directory="frontend"),
+        _case("npx @playwright/test test tests/e2e/planted.spec.ts\n", WRITER_SPEC, "/assign in a test the step runs", "npx-the-playwright-package", working_directory="frontend"),
+        _case("yarn e2e\n", {}, "yarn runs package scripts or programs this scan does not read", "another-package-manager"),
+        # Playwright's --project is variadic: the filter after it is a project name, so every spec runs.
+        _case("npx playwright test --project chromium tests/e2e/reads.spec.ts\n", {"frontend/tests/e2e/reads.spec.ts": ""}, "playwright test names no spec", "playwright-project-swallows-the-filter", working_directory="frontend"),
         # The package.json scripts an npm command runs, and npm's own pre/post and lifecycle scripts.
         _case("npm --prefix frontend run probe\n", {**_package(probe="node ../scripts/planted.mjs"), "scripts/planted.mjs": JS_WRITE}, "scripts/planted.mjs:1", "npm-run"),
         _case("npm run probe\n", {**_package(preprobe="python ../scripts/planted.py", probe="echo ok"), **PLANTED}, "scripts/planted.py:5", "npm-pre-script", working_directory="frontend"),

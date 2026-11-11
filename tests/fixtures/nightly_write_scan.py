@@ -19,7 +19,8 @@ imported module, a conftest) is a finding, whether or not a test reaches it.
   ``test(...)`` call the step's ``--grep``/``--grep-invert`` leaves out,
   matched the way Playwright matches, against ``" <project> <file>
   <describe...> <title>"``. A relative import that holds one is a finding,
-  and so is one that resolves to no file.
+  and so is one that resolves to no file. Imports are read from the code's
+  tokens, so a comment or a string that names a module is no import.
 
 A UI control that posts one of these paths is not a literal in the spec;
 nightly's specs drive none today, and the docs list what they write.

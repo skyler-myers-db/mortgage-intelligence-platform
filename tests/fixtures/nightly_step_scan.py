@@ -7,9 +7,12 @@ env value) is scanned for a write path. A step's ``run:`` text is read in the
 step's shell and directory (``shell`` and ``working-directory``, or the job's
 or workflow's ``defaults.run``): under ``python`` it is a Python script, under
 bash or sh it is split into simple commands (``shell_commands``), and under
-any other shell it is a finding. Each command is read by its program, after
-assignments and the wrappers ``env``, ``sudo``, ``timeout``, ``nohup``,
-``exec``, ``nice``, ``coverage run`` and ``uv run``:
+any other shell it is a finding. A ``cd`` or ``pushd`` moves the commands
+after it until its subshell ends; after one to a directory this module cannot
+name, every path is a finding. Each command is read by its program's name
+(``"$VENV/bin/python"`` is python), after assignments and the wrappers
+``env``, ``sudo``, ``timeout``, ``nohup``, ``exec``, ``nice``, ``coverage run``
+and ``uv run``:
 
 * python (any ``python3.N``): inline code (``-c``, a here-document, a
   here-string) is parsed and its imports followed, and code that does not
@@ -22,9 +25,10 @@ assignments and the wrappers ``env``, ``sudo``, ``timeout``, ``nohup``,
 * pytest (or ``python -m pytest``): every operand must be a suite file under
   tests/integration; a directory, a module, ``@file`` or no operand at all
   (testpaths, ``-k`` or ``-m`` alone) is a finding. Its ``-p`` plugins load.
-* ``playwright test`` (also through ``npx`` or ``npm exec``) runs from
-  frontend, and every file filter must end in ``.spec.ts`` and select a spec
-  under tests/e2e (a filter is a regex on the spec's path, so it may select
+* ``playwright test`` (also through ``npx`` or ``npm exec``, as
+  ``playwright@<version>`` or ``@playwright/test``) runs from frontend, and
+  every file filter must end in ``.spec.ts`` and select a spec under
+  tests/e2e (a filter is a regex on the spec's path, so it may select
   several); no filter at all is a finding.
 * npm: the package.json scripts a command runs (``run``, ``test``, an
   install's lifecycle scripts unless ``--ignore-scripts``), with their
@@ -32,8 +36,9 @@ assignments and the wrappers ``env``, ``sudo``, ``timeout``, ``nohup``,
 * a repo file run by path or sourced (``.``, ``source``), the text ``eval`` and
   ``trap`` run, and a program one program hands another after ``--``.
 
-A program named by a variable, a file outside the repo or in node_modules,
-``make``, and text this module cannot split are findings. Each repo file a
+A program whose name is a variable (``"$pybin"``), a file outside the repo,
+``make``, yarn, pnpm and bun, and text this module cannot split are findings;
+an installed program in node_modules is read by its name. Each repo file a
 step runs goes to ``nightly_write_scan.whole_module_findings``, which follows
 its own imports and scripts. Not read: a program that builds its own command
 line (``xargs``, ``find -exec``), an installed program's config file, and an
@@ -83,6 +88,8 @@ _SHELL_VALUE = frozenset("oO")
 _NODE_PRELOAD = frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"})
 _NODE_INLINE = frozenset({"-e", "--eval", "-p", "--print"})
 _NODE_VALUE = frozenset({"--env-file", "-C", "--conditions", "--input-type", "--title", "--test-reporter", "--test-reporter-destination"})
+# Package managers other than npm (the repo pins npm): what they run is not read.
+_OTHER_PACKAGE_MANAGERS = frozenset({"yarn", "pnpm", "pnpx", "bun", "bunx"})
 # Programs a ``--`` may hand the rest of a command line to (``validation_session operators -- python -m ...``).
 _HANDOFF = frozenset({"bash", "sh", "dash", "node", "pytest", "py.test", "npx", "npm", "playwright", "coverage", "uv"})
 # What a step may run with -m that is not repo code: the installer, and stdlib utilities that run none.
@@ -262,6 +269,13 @@ def _node_args(words: list[str]) -> _Code:
     return _Code("stdin", preloads=tuple(preloads))
 
 
+def _npx_program(package: str) -> str:
+    """The program ``npx <package>`` runs: ``playwright@1.50`` and ``@playwright/test`` run playwright."""
+
+    name = package[: package.rfind("@")] if package.rfind("@") > 0 else package
+    return "playwright" if name == "@playwright/test" else name
+
+
 def _is_interpreter(base: str) -> bool:
     return bool(_PYTHON.fullmatch(base)) or base in _SHELLS or base == "node"
 
@@ -312,6 +326,14 @@ class _Scan:
             return None
         return path
 
+    def change_directory(self, wd: str | None, words: list[str]) -> str:
+        """The directory after ``cd``/``pushd`` (repo-relative), or an unknown one every path then fails to resolve in."""
+
+        operands = [word for word in words[1:] if not word.startswith("-")]
+        target = operands[0] if words[0] != "popd" and operands else None
+        path = self.resolve(target, wd) if target is not None else None
+        return path.relative_to(self.root).as_posix() if path is not None else "$UNKNOWN_DIRECTORY"
+
     def run_file(self, program: str, operand: str, wd: str | None) -> None:
         path = self.resolve(operand, wd)
         if path is not None and path.is_file():
@@ -336,11 +358,24 @@ class _Scan:
             self.finding(f"shell text this scan cannot split ({error})")
             return
         fed = False  # a here-document feeds this pipeline
+        # The directory each subshell moved to: a ``cd`` holds until its own subshell ends, and a
+        # command runs where its innermost subshell, or the one around that, last moved.
+        directories: dict[tuple[int, ...], str | None] = {(0,): wd}
+        opened_in: list[str | None] = []
+        here = wd
         for command in commands:
             fed = command.heredoc or (fed and command.piped_in)
-            self.command(command, wd, fed)
-        for opening, body in documents:
-            self.document(opening, body, wd)
+            if not command.substituted:  # a $( ) command runs where the command that holds it does
+                here = next(directories[command.scope[:k]] for k in range(len(command.scope), 0, -1) if command.scope[:k] in directories)
+            words = _program(command.words)
+            if words[:1] in (["cd"], ["pushd"], ["popd"]) and not command.substituted:
+                directories[command.scope] = self.change_directory(here, words)
+            if command.heredoc:
+                opened_in.append(here)
+            self.command(command, here, fed)
+        # Each here-document runs where its opening line does (one per line, in order); else where the step starts.
+        for (opening, body), here in zip(documents, opened_in if len(opened_in) == len(documents) else [wd] * len(documents), strict=True):
+            self.document(opening, body, here)
 
     def document(self, opening: str, body: str, wd: str | None) -> None:
         """A here-document is the code of the interpreter that reads it, through a pipe too; else it is data."""
@@ -375,7 +410,7 @@ class _Scan:
         if not words:
             return
         program, base = words[0], PurePosixPath(words[0]).name
-        if "$" in program:
+        if "$" in base:
             self.finding(f"runs {program}, which this scan cannot resolve")
         elif _is_interpreter(base):
             self.interpreter(command, base, words[1:], wd, fed)
@@ -385,6 +420,8 @@ class _Scan:
             self.playwright(words[2:], wd)
         elif base in ("npm", "npx"):
             self.npm(words[1:] if base == "npm" else ["exec", *words[1:]], wd)
+        elif base in _OTHER_PACKAGE_MANAGERS:
+            self.finding(f"{base} runs package scripts or programs this scan does not read")
         elif base == "coverage" and words[1:2] == ["run"]:
             rest = _skip_options(words[2:], _COVERAGE_VALUE, keep="-m")
             if rest[:1] == ["-m"]:
@@ -400,8 +437,8 @@ class _Scan:
             self.shell_text(" ".join(words[1:2] if base == "trap" else words[1:]), wd)
         elif base == "make":
             self.finding("make runs recipes this scan does not read")
-        elif "/" in program:
-            self.run_file("the step", program, wd)
+        elif "/" in program and "node_modules" not in PurePosixPath(program).parts:
+            self.run_file("the step", program, wd)  # an installed program in node_modules is read by name, above
         if base not in ("npm", "npx", "pytest", "py.test", "playwright") and "--" in words[1:]:
             rest = words[words.index("--", 1) + 1 :]
             if rest and (PurePosixPath(rest[0]).name in _HANDOFF or _PYTHON.fullmatch(PurePosixPath(rest[0]).name)):
@@ -492,7 +529,7 @@ class _Scan:
             if parsed.call is not None:
                 self.shell_text(parsed.call, wd)
             elif parsed.script is not None:
-                self.command(sh.Command([parsed.script, *parsed.args]), wd, False)
+                self.command(sh.Command([_npx_program(parsed.script), *parsed.args]), wd, False)
             return
         if parsed.command is None or parsed.command in runners.NPM_NO_SCRIPTS or (parsed.command in runners.NPM_RUN and parsed.script is None):
             return
