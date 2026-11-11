@@ -1,7 +1,7 @@
 """An adopted core blue the core release can restore, offline (M2-PR7b).
 
 ``CoreWorld`` is adopt-live's World (tests/fixtures/adopt_live_world.py)
-after its adoption, with an Apps API that can also deploy, start and update,
+after its adoption, with an Apps API that can also deploy, start, stop and update,
 in the shape spike S7 measured (tests/fixtures/measured_apps.py): a deploy
 records the payload and becomes the active deployment from the payload's own
 source and env-name set, its ``/src/`` snapshot a byte copy of that source at
@@ -10,10 +10,11 @@ deployment and snapshots the default source (the last active deployment's
 folder) with the newest deployment's env-name set into a new deployment
 that shows only ``HIDDEN_READS`` reads later, pending for one GET, then
 active IN_PROGRESS until its first poll settles it (``start_final``; a
-FAILED one stays active). A STOPPED App's GET has no active deployment, and
-an update replaces the bindings only. Every call is recorded in
-``apps.mutations``. ``serves`` and ``converge_treatment`` are the injected checks the
-core tools take, recording what they were asked. Every value is synthetic.
+FAILED one stays active). A STOPPED App's GET has no active deployment, a
+stop leaves the App STOPPED, and an update replaces the bindings only. Every
+mutation is recorded in ``apps.mutations``. ``serves`` and
+``converge_treatment`` are the injected checks the core tools take, recording
+what they were asked. Every value is synthetic.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ GREEN_RELEASE = f"{GREEN_SHA[:12]}-{'d' * 12}"
 
 
 class CoreApps:
-    """The Apps API of one App that can deploy, start and update."""
+    """The Apps API of one App that can deploy, start, stop and update."""
 
     def __init__(self, world: CoreWorld, reads: Any) -> None:
         self.world = world
@@ -92,6 +93,26 @@ class CoreApps:
     def get_deployment(self, name: str, deployment_id: str) -> SimpleNamespace:
         self.world.settle(deployment_id)
         return self.reads.get_deployment(name, deployment_id)
+
+    def list(self) -> list[SimpleNamespace]:
+        return [self.reads.get(rr.APP_NAME)]
+
+    def stop(self, name: str) -> SimpleNamespace:
+        """STOPPED (S7: about 40-45 s, and a STOPPED GET has no active deployment).
+
+        Not measured, as in tests/fixtures/quiesce_window_estate.py: a start
+        stopped before its deployment showed never shows; one that showed
+        had become the App's last active deployment.
+        """
+
+        assert name == rr.APP_NAME
+        self.mutations.append("stop")
+        world = self.world
+        if world.in_flight is not None and world.pending_start is None:
+            world.active = world.in_flight.deployment_id
+        world.pending_start, world.in_flight, world.pending = None, None, None
+        world.compute = "STOPPED"
+        return SimpleNamespace(response=self.reads.get(name))
 
     def update(self, name: str, app: Any) -> None:
         """Bindings only: a default_source_code_path in the App is ignored (S7-2)."""

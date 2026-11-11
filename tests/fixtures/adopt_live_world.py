@@ -114,6 +114,7 @@ class SpyApps:
         serving = world.compute not in {"STOPPED", "STARTING"}
         return SimpleNamespace(
             name=name,
+            id="app-object-id",
             url="https://mip-app.example.invalid",
             compute_status=SimpleNamespace(state=world.compute),
             active_deployment=world.deployment(world.active) if serving else None,

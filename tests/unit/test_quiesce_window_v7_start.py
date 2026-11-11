@@ -303,7 +303,7 @@ def test_the_dead_man_restarts_a_stopped_core_blue_and_the_next_run_re_pins_it(
         clock["now"] += seconds
 
     argv = [
-        "--app", rr.APP_NAME, "--app-id", "", "--journal", journal.journal_path(rr.APP_NAME),
+        "--app", rr.APP_NAME, "--app-id", "app-object-id", "--journal", journal.journal_path(rr.APP_NAME),
         "--marker", deadman.marker_path(rr.APP_NAME, token), "--armed-marker", deadman.armed_path(rr.APP_NAME, token),
         "--token", token, "--window-sha256", opened["window_sha256"], "--blue-deployment-id", BLUE,
         "--restore-source", opened["restore_source"], "--deadline", str(int(now) + 600),

@@ -2012,7 +2012,15 @@ verifier, the agent runtime or the Supervisor proxy:
   would not rerun blue (its newest deployment of any state or its default
   source is not blue's) refuses (`tier_a_refused`): the pre-stop clause
   predicts it before the lease (`rollback_record_drift`), and step 0a itself
-  refuses it before any binding repair.
+  refuses it before any binding repair. A start snapshots the folder's
+  CURRENT bytes, so before any start step 0a re-hashes the folder against the
+  record's signed `source_tree_sha256` and checks blue's env names: a folder
+  that is no longer blue's is tier b's (restored from the immutable copy, or
+  refused before any start, `no_restore_payload`, when the record has no
+  restore payload; the pre-stop clause predicts both). A start that then
+  fails its proof never keeps serving: tier b replaces it, or, with no
+  restore payload, it is stopped, pinned to the App's id and the record's
+  identity, and the refusal raised.
 - **The tier gate.** A core release stands on a core blue. An agentic blue (a
   v5, v6 or v7 agentic record) under a core profile refuses
   (`blue_tier_mismatch`) and no ack lifts it: its restore needs the Gateway
@@ -2925,7 +2933,9 @@ to the dead-man;
 lease. The rollback's
 `ensure` and `restore` re-pin the same way when they start a stopped blue
 (tier a, only while blue is the App's last deployment); `restore` redeploys
-the signed snapshot (tier b) otherwise.
+the signed snapshot (tier b) otherwise, and `ensure` hands a start that fails
+its proof (a changed folder's included: a start snapshots its CURRENT bytes)
+to that same tier b, which starts a stopped App itself before its redeploy.
 
 **Catalog bootstrap skip rule** (attack O12,
 `tools/databricks/catalog_bootstrap_skip_rule.py`). `mip_init_catalog_schemas`

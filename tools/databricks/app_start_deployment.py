@@ -41,6 +41,11 @@ So this module proves everything from what the API shows:
 * ``last_deployment_is`` (tier a) judges a stopped App by its newest
   deployment of any state and its default source, since its GET has no
   active deployment.
+* ``start_reruns_blue`` (tier a, before any start) re-hashes that folder
+  against blue's signed digest and checks blue's env-name set: a start
+  snapshots the folder's CURRENT bytes, so anyone editing it silently
+  changes what a start runs, and step 0a never starts bytes it already
+  knows are not blue.
 
 Every refusal is a ``StartProofError`` with a reviewed code, and no message
 names a path, an id or a value.
@@ -57,13 +62,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks.app_deployment_state import (
     active_deployment_id,
     deployment_state,
     immutable_source,
     newest_deployment,
 )
-from tools.databricks.app_release_contract import api_path
+from tools.databricks.app_release_contract import ReleaseContractError, api_path
 from tools.databricks.app_release_retry import RATE_LIMIT_RETRY, RateLimitRetry
 from tools.databricks.app_release_source import remote_files
 from tools.databricks.app_rollback_record_contract import _text
@@ -390,6 +396,39 @@ def last_deployment_is(workspace: Any, *, app_name: str, deployment_id: str) -> 
         return True
     blue_source = _text(getattr(workspace.apps.get_deployment(app_name, deployment_id), "source_code_path", None))
     return bool(blue_source) and default_source == blue_source
+
+
+def start_reruns_blue(
+    workspace: Any,
+    *,
+    app_name: str,
+    deployment_id: str,
+    tree_sha256: str,
+    names: frozenset[str],
+    folder: str | None = None,
+    digest: Callable[[Any, str], str] = tree_digest,
+) -> bool:
+    """True when a start of the stopped App would snapshot exactly blue: its bytes and env set.
+
+    Tier a's proof before any start (spike S7). ``last_deployment_is`` proved
+    the folder a start snapshots is blue's deployment's own and that blue is
+    the newest deployment, whose env-name set a start carries. This re-hashes
+    that folder against blue's signed full-tree digest and checks blue's env
+    names, and (``folder``) that it is the folder the signed record names. A
+    folder gone or unreadable, another folder, another env set or other bytes
+    is False: the caller takes tier b and never starts it.
+    """
+
+    blue = workspace.apps.get_deployment(app_name, deployment_id)
+    source = _text(getattr(blue, "source_code_path", None))
+    if not source or not tree_sha256 or (folder is not None and source != folder):
+        return False
+    try:
+        if env_names(blue) != names:
+            return False
+        return digest(workspace, source) == tree_sha256
+    except (StartProofError, NotFound, ResourceDoesNotExist, ReleaseContractError):
+        return False
 
 
 def prove_start_deployment(
