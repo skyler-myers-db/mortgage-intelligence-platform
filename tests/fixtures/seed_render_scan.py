@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 import fnmatch
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 _RENDERERS = frozenset({"render_seed_sql", "_render_seed_sql"})
@@ -38,6 +38,7 @@ class SeedScan:
     reads: int  # seed reads the scan followed
     executes: bool  # whether the module executes SQL
     enumerations: list[tuple[int, str]]  # (line, call) of each enumeration that can list the seed
+    exports: frozenset[str]  # top-level names that hand another module the raw seed's path or text
 
 
 def _call_name(node: ast.AST) -> str | None:
@@ -263,15 +264,21 @@ def scan_seed_uses(source: str) -> SeedScan:
     render_seed_sql's first argument, or be bound inside a function to a name
     whose every load is; a bound path's every load must be such a read.
     Anything else is a raw use: open(), an alias, a helper taking the name, a
-    subprocess argument, a return, or a module- or class-level binding another
-    module could import. Prose (a docstring, an assert message, an exception's
-    text) may name the file. Comments are not code.
+    subprocess argument, a return, a module- or class-level binding another
+    module could import, or a ``global`` / ``nonlocal`` one. Prose (a
+    docstring, an assert message, an exception's text) may name the file.
+    Comments are not code.
 
     An enumeration (glob, rglob, iterdir, listdir, scandir, os.walk) can list
     the seed unless its pattern cannot match it or the directory it lists is
     proven, from literals in this module, to be one not named lakebase; a
     directory from a helper, a parameter, an attribute or an import is not
     proven. Those land in ``enumerations``, for the guard's reviewed set.
+
+    ``exports`` is what an inspector (a module allowed to read the raw text)
+    hands any module that imports it: each top-level binding whose value holds
+    the seed's path or text, a ``global`` one, and each function or class whose
+    ``return`` / ``yield`` or class body holds it.
     """
 
     tree = ast.parse(source)
@@ -280,15 +287,16 @@ def scan_seed_uses(source: str) -> SeedScan:
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             loads.setdefault(node.id, []).append(node)
+    escaping = {name for node in ast.walk(tree) if isinstance(node, ast.Global | ast.Nonlocal) for name in node.names}
 
     def rendered(node: ast.AST) -> bool:
         call = parent.get(node)
         return isinstance(call, ast.Call) and _call_name(call) in _RENDERERS and call.args[:1] == [node]
 
     def local(node: ast.AST, names: list[str] | None) -> bool:
-        """Whether binding ``names`` at ``node`` stays inside a function call, not a module or class."""
+        """Whether binding ``names`` at ``node`` stays inside a function call, not a module, class or global."""
 
-        if names is None:
+        if names is None or escaping.intersection(names):
             return False
         up = parent.get(node)
         while up is not None:
@@ -374,7 +382,7 @@ def scan_seed_uses(source: str) -> SeedScan:
             enumerations.append((node.lineno, ast.unparse(node)))
 
     executes = any(_call_name(node) in _EXECUTORS for node in ast.walk(tree))
-    return SeedScan(sorted(raw), reads, executes, enumerations)
+    return SeedScan(sorted(raw), reads, executes, enumerations, _exports(tree, parent, values, escaping, rendered))
 
 
 def raw_seed_uses(source: str) -> tuple[list[int], int, bool]:
@@ -387,3 +395,115 @@ def raw_seed_uses(source: str) -> tuple[list[int], int, bool]:
     scan = scan_seed_uses(source)
     return sorted(scan.raw + [line for line, _call in scan.enumerations]), scan.reads, scan.executes
 
+
+def _exports(
+    tree: ast.Module,
+    parent: Mapping[ast.AST, ast.AST],
+    values: set[ast.AST],
+    escaping: set[str],
+    rendered: Callable[[ast.AST], bool],
+) -> frozenset[str]:
+    """The top-level names through which the seed's raw path or text leaves the module."""
+
+    exports: set[str] = set()
+
+    def carries(node: ast.AST) -> bool:
+        return any(
+            inner in values
+            or (
+                isinstance(inner, ast.Name)
+                and isinstance(inner.ctx, ast.Load)
+                and inner.id in exports
+                and not rendered(inner)
+            )
+            for inner in ast.walk(node)
+        )
+
+    while True:
+        found: set[str] = set()
+        for statement in tree.body:
+            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                handed = [
+                    node.value
+                    for node in ast.walk(statement)
+                    if isinstance(node, ast.Return | ast.Yield | ast.YieldFrom) and node.value is not None
+                ]
+                if isinstance(statement, ast.ClassDef):
+                    handed += [
+                        node.value
+                        for node in statement.body
+                        if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign) and node.value is not None
+                    ]
+                if any(carries(value) for value in handed):
+                    found.add(statement.name)
+            elif carries(statement):  # a binding, or a with / for / if whose body binds module names
+                found |= _module_names(statement)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None and carries(node.value):
+                found |= escaping.intersection(_bound_names(node) or [])
+        if found <= exports:
+            return frozenset(exports)
+        exports |= found
+
+
+def _module_names(statement: ast.stmt) -> set[str]:
+    """The module-level names a top-level statement binds (not those inside a function, class or comprehension)."""
+
+    names: set[str] = set()
+    pending: list[ast.AST] = [statement]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            names.add(node.id)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+            continue
+        if isinstance(node, ast.Lambda | ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def inspector_reaches(source: str, exports: Mapping[str, frozenset[str]]) -> list[int]:
+    """Lines of ``source`` that can reach an inspector's raw seed: ``exports`` maps each inspector's stem to its own.
+
+    A from-import of one of its exports, of ``*`` or of a dunder is a reach;
+    so is any use of the inspector's module object other than reading an
+    attribute it does not export, and any string that is the module's dotted
+    name or file path (importlib, runpy, sys.modules, pytest_plugins). Text
+    that only mentions the module (a comment, prose, an embedded script's
+    comment) is not.
+    """
+
+    tree = ast.parse(source)
+    parent = _parents(tree)
+
+    def denied(stem: str, name: str) -> bool:
+        return name == "*" or name.startswith("__") or name in exports[stem]
+
+    hits: list[int] = []
+    modules: dict[str, str] = {}  # how this source spells an inspector's module object -> the inspector's stem
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            stem = (node.module or "").rsplit(".", 1)[-1]
+            if stem in exports:
+                hits.extend(node.lineno for alias in node.names if denied(stem, alias.name))
+            else:  # from tests.unit import <inspector>
+                modules.update({alias.asname or alias.name: alias.name for alias in node.names if alias.name in exports})
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if (stem := alias.name.rsplit(".", 1)[-1]) in exports:
+                    modules[alias.asname or alias.name] = stem
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if any(re.fullmatch(rf"[\w./\\:-]*\b{re.escape(stem)}(?:\.py)?", node.value.strip()) for stem in exports):
+                hits.append(node.lineno)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name | ast.Attribute) and isinstance(node.ctx, ast.Load)):
+            continue
+        inspector = modules.get(ast.unparse(node))
+        if inspector is None:
+            continue
+        up = parent.get(node)
+        if not (isinstance(up, ast.Attribute) and up.value is node and not denied(inspector, up.attr)):
+            hits.append(node.lineno)
+    return sorted(hits)

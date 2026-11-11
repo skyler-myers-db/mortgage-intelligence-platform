@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.seed_render_scan import ENUMERATION, raw_seed_uses, scan_seed_uses
+from tests.fixtures.seed_render_scan import (
+    ENUMERATION,
+    inspector_reaches,
+    raw_seed_uses,
+    scan_seed_uses,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -122,6 +127,11 @@ def _in_function(body: str) -> str:
         ("for p in Path('lakebase').glob('*.sql'):\n    client.execute(p.read_text())\n", 0),
         ("LAKEBASE = ROOT / 'lakebase'\nfor p in sorted(LAKEBASE.rglob('*')):\n    client.execute(p.read_text())\n", 0),
         ("for name in os.listdir(ROOT / 'lakebase'):\n    client.execute(name)\n", 0),
+        # Bound in a function to a module name another module can import (round 3).
+        (f"def _init():\n    global SEED_SQL\n    SEED_SQL = {_READ}\n_init()\n", 1),
+        (f"def _init():\n    global SEED_PATH\n    SEED_PATH = Path({_SEED_LITERAL})\n_init()\n", 0),
+        (_in_function(f"seed = ''\ndef load():\n    nonlocal seed\n    seed = {_READ}\nload()\n"
+                      "client.execute(render_seed_sql(seed))"), 1),
         # The directory reaches the enumeration some way other than a literal (round 3).
         ("def _lakebase_dir():\n    return Path('lakebase')\nfor p in sorted(_lakebase_dir().glob('s*.sql')):\n"
          "    client.execute(p.read_text())\n", 0),
@@ -143,6 +153,7 @@ def _in_function(body: str) -> str:
         "path_name", "kwarg", "open_read", "with_open", "io_open", "path_open", "unbound_read_text",
         "importlib_resources", "getattr", "alias", "helper_by_name", "returned", "psql_argv", "psql_shell",
         "module_text", "module_path", "class_text", "glob", "glob_through_a_name", "listdir",
+        "global_text", "global_path", "nonlocal_text",
         "glob_via_dir_helper", "glob_via_parameter", "glob_via_attribute", "glob_via_imported_dir",
         "glob_via_a_rebound_name", "glob_module_form", "rglob_from_an_unknown_root", "os_walk", "pattern_escapes",
     ],
@@ -201,7 +212,7 @@ def test_the_raw_template_reaches_only_render_seed_sql() -> None:
     An enumeration that can list the seed is red unless its directory is
     proven another or it is reviewed in _REVIEWED_ENUMERATIONS. Only a
     reviewed inspector, which executes nothing, may read it raw to look at its
-    text.
+    text, and no other module may import that text from it (the next test).
     What it cannot see: a module that never spells the seed's name in code,
     nor the lakebase directory as a path (a whole-repo rglob, a name built
     from pieces, a helper module handed the directory by another);
@@ -248,3 +259,110 @@ def _tracked_python(*pathspecs: str) -> list[str]:
     ).stdout.decode("utf-8")
     return [rel for rel in listed.split("\0") if rel.endswith(".py")]
 
+
+# --- An inspector's raw text stays in the inspector (round 3) -------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "exports"),
+    [
+        (f"TEMPLATE = {_READ}\n", {"TEMPLATE"}),
+        ("SEED = ROOT / 'lakebase' / 'seed_campaigns.sql'\n", {"SEED"}),
+        (f"TEMPLATE = {_READ}\nALIAS = TEMPLATE\n", {"TEMPLATE", "ALIAS"}),
+        (f"def _template():\n    return {_READ}\n", {"_template"}),
+        (f"TEMPLATE = {_READ}\n@pytest.fixture\ndef template():\n    yield TEMPLATE\n", {"TEMPLATE", "template"}),
+        (f"class Seeds:\n    TEXT = {_READ}\n", {"Seeds"}),
+        (f"def _init():\n    global SEED_SQL\n    SEED_SQL = {_READ}\n", {"SEED_SQL"}),
+        (f"with open({_SEED_LITERAL}) as fh:\n    SEED = fh.read()\n", {"fh", "SEED"}),
+        ("TEXTS = [p.read_text() for p in Path('lakebase').glob('*.sql')]\n", {"TEXTS"}),
+        # What an inspector keeps to itself.
+        (f"_SEED = render_seed_sql({_READ})\nOPERATOR = 'demo.operator@summit.example'\n", set()),
+        (f"def test_the_seed_archives_campaigns():\n    seed = {_READ}\n    assert 'archived' in seed\n", set()),
+        ("def found(node):\n    pending = [n for n in node if 'seed_campaigns' in n]\n    return len(pending)\n", set()),
+    ],
+    ids=[
+        "module_text", "module_path", "alias", "returned", "fixture", "class_attribute", "global",
+        "module_with", "enumeration", "rendered_and_unrelated", "local_inspection", "a_scanner",
+    ],
+)
+def test_an_inspectors_exports_are_every_name_that_hands_out_the_raw_seed(source: str, exports: set[str]) -> None:
+    assert scan_seed_uses(source).exports == exports
+
+
+_EXPORTS = {
+    "test_campaign_treatment_contracts": frozenset({"SEED"}),
+    "test_lakebase_seed_contract": frozenset({"SEED"}),
+    "test_lakebase_seed_operator": frozenset({"TEMPLATE"}),
+}
+_OPERATOR_MODULE = "tests.unit.test_lakebase_seed_operator"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Round 3's tree mutations MA1 and MA2: the raw text imported and applied.
+        "from tests.unit.test_campaign_treatment_contracts import SEED as _RAW_SEED\n"
+        "_run_transaction((pre_seed, _RAW_SEED, post_seed), kwargs)\n",
+        f"from {_OPERATOR_MODULE} import TEMPLATE\nlakebase_migrate._run_transaction((pre, TEMPLATE, post), kwargs)\n",
+        "from tests.unit.test_lakebase_seed_contract import SEED\nclient.execute(SEED.read_text())\n",
+        f"from {_OPERATOR_MODULE} import *\n",
+        "from .test_lakebase_seed_operator import TEMPLATE\n",
+        f"import {_OPERATOR_MODULE} as m\nclient.execute(m.TEMPLATE)\n",
+        f"import {_OPERATOR_MODULE}\nclient.execute({_OPERATOR_MODULE}.TEMPLATE)\n",
+        "import test_lakebase_seed_operator\nclient.execute(test_lakebase_seed_operator.TEMPLATE)\n",
+        "from tests.unit import test_lakebase_seed_operator as m\nclient.execute(getattr(m, 'TEMPLATE'))\n",
+        f"import {_OPERATOR_MODULE} as m\nclient.execute(m.__dict__['TEMPLATE'])\n",
+        f"module = importlib.import_module('{_OPERATOR_MODULE}')\n",
+        "namespace = runpy.run_path(str(ROOT / 'tests/unit/test_lakebase_seed_operator.py'))\n",
+        f"pytest_plugins = ['{_OPERATOR_MODULE}']\n",
+    ],
+    ids=[
+        "ma1_campaign_seed", "ma2_operator_template", "contract_path", "star", "relative", "module_alias",
+        "dotted_module", "bare_module", "getattr", "namespace", "import_module", "run_path", "pytest_plugins",
+    ],
+)
+def test_importing_an_inspectors_raw_seed_is_found(source: str) -> None:
+    assert inspector_reaches(source, _EXPORTS), source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        f"from {_OPERATOR_MODULE} import OPERATOR\n",
+        f"import {_OPERATOR_MODULE} as m\nassert m.OPERATOR.endswith('.example')\n",
+        "from tests.unit.test_campaign_treatment_contracts import DDL\n",
+        "# The strip rule is pinned in tests/unit/test_lakebase_seed_operator.py.\nx = 1\n",
+        '"""Pinned in test_lakebase_seed_operator.py."""\n',
+        'PRELUDE = """set -euo pipefail\n# its strip rule is pinned in test_lakebase_seed_operator.py\n"""\n',
+    ],
+    ids=["a_constant", "a_module_attribute", "another_name", "comment", "docstring", "an_embedded_script"],
+)
+def test_importing_anything_else_from_an_inspector_is_not(source: str) -> None:
+    assert inspector_reaches(source, _EXPORTS) == []
+
+
+def test_no_module_imports_an_inspectors_raw_seed() -> None:
+    """An inspector may hold the raw template at module level; no other module may take it from there.
+
+    Each inspector's exports are computed from its source, so a new one is
+    covered as soon as it is written; a module that imports one, or reaches
+    the inspector's module some way the scan cannot read, is red.
+    """
+
+    exports = {
+        Path(rel).stem: scan_seed_uses((ROOT / rel).read_text(encoding="utf-8")).exports
+        for rel in _TEMPLATE_INSPECTORS
+    }
+    # The scan sees what the inspectors hold today, so the check below is not vacuous.
+    assert exports["test_campaign_treatment_contracts"] >= {"SEED"}
+    assert exports["test_lakebase_seed_operator"] >= {"TEMPLATE"}
+    assert exports["test_lakebase_seed_contract"] >= {"SEED"}
+    for rel in _tracked_python():
+        if rel in _TEMPLATE_INSPECTORS:
+            continue
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        if any(stem in text for stem in exports):
+            assert not inspector_reaches(text, exports), (
+                f"{rel}:{inspector_reaches(text, exports)} takes the raw seed from an inspector: render it "
+                "there with render_seed_sql, or read the file here the way the scan follows"
+            )
