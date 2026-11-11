@@ -1,4 +1,9 @@
-"""The quiesce window over a v7 core blue: no reason passes, a window refuses before the lease (M2-PR7b)."""
+"""The quiesce window plan over a v7 core blue: no reason passes; a reason plans a window (M2-PR7b, S7).
+
+Spike S7 is recorded, so a v7 core blue that needs a window is planned like a
+v5/v6 one (its start-and-re-pin: tests/unit/test_quiesce_window_v7_start.py),
+never refused as ``window_over_v7_blue``. A v7 agentic record stays refused.
+"""
 
 from __future__ import annotations
 
@@ -75,15 +80,21 @@ def test_a_core_blue_with_no_reason_plans_no_window_from_the_records_own_env_nam
         ({"gate_report": {"verdict": "passed", "instance_update_sha256": "f" * 64}}, "WR4"),
     ],
 )
-def test_a_core_blue_that_needs_a_window_refuses_before_the_lease(
+def test_a_core_blue_that_needs_a_window_plans_one_against_the_records_tree(
     world: CoreWorld, override: dict[str, Any], reason: str
 ) -> None:
-    with pytest.raises(facts.V7WindowOwed, match=reason) as refused:
-        _facts(world, **override)
-    assert refused.value.code == "window_over_v7_blue" and world.apps.mutations == []
+    record = world.record()
+    assert record is not None
+    found = _facts(world, **override)
+    assert found.reasons() == (reason,) and found.blue_current
+    assert found.artifact_tree_sha256 == record["source_tree_sha256"] == found.source_tree_sha256
+    first = window_plan(found, position="pre-apply", acknowledgement="")
+    plan = window_plan(found, position="pre-apply", acknowledgement=first.sha256)
+    assert plan.code == "window" and plan.refusals == () and plan.tier == "a"
+    assert world.apps.mutations == [], "planning is read-only"
 
 
-def test_the_window_plan_command_refuses_with_exit_2(
+def test_the_window_plan_command_asks_for_the_exact_ack_never_refuses_a_v7_blue(
     world: CoreWorld, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     report, migration = tmp_path / "gate.json", tmp_path / "migration.json"
@@ -98,7 +109,8 @@ def test_the_window_plan_command_refuses_with_exit_2(
     ]  # fmt: skip
 
     assert quiesce_window.main(argv, workspace_factory=lambda: world) == 2
-    assert "REFUSED window_over_v7_blue" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "REFUSED window_unacked" in err and "window_over_v7_blue" not in err
 
 
 def test_an_agentic_v7_record_is_still_refused_and_assert_serving_reads_a_core_blue(world: CoreWorld) -> None:

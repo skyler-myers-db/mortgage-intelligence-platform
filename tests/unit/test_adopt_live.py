@@ -304,8 +304,8 @@ def test_the_s7_switch_is_off_and_refuses(world: World) -> None:
         adopt_live.point_default_source_at_copy(
             world, app_name=rr.APP_NAME, restore_source_path="/x"
         )
-    assert refused.value.code == "s7_owed"
-    assert _plan(world)["s7_default_source"] == "owed"
+    assert refused.value.code == "default_source_not_settable", "spike S7: refused for good"
+    assert _plan(world)["s7_default_source"] == "not_settable"
     lines = Path(adopt_live.__file__).read_text(encoding="utf-8").splitlines()
     assert "S7_DEFAULT_SOURCE_SETTABLE = False" in lines, "a code constant a reviewed PR flips"
     assert not [

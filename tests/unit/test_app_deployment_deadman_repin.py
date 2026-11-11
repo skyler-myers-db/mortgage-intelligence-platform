@@ -316,15 +316,16 @@ def test_an_open_window_without_a_restart_still_refuses_before_the_lease() -> No
     assert plan.public_summary()["deadman_recovery"] is False
 
 
-def test_a_recovering_run_that_also_needs_a_window_refuses_it_at_the_recheck() -> None:
+def test_a_recovering_run_that_also_needs_a_window_keeps_its_pre_lease_ack() -> None:
     # The pre-lease plan's digest names the old blue; the re-pin moves blue to
-    # the dead-man's start, so the pre-apply recheck no longer matches the ack.
+    # the dead-man's start (its predecessor the old blue), so the pre-apply
+    # recheck matches the ack through the re-pin and nothing else (round 2 of #334).
     from tests.unit.test_quiesce_window_start_repin import MIGRATION_APPLY
 
     estate = _estate()
     _dead_runner(estate)
 
-    def plan(position: str, ack: str) -> Any:
+    def plan(position: str, ack: str, migration: dict[str, Any] = MIGRATION_APPLY) -> Any:
         facts = window.collect_facts(
             estate.workspace,
             app_name=APP_NAME,
@@ -335,7 +336,7 @@ def test_a_recovering_run_that_also_needs_a_window_refuses_it_at_the_recheck() -
             role_state="exact",
             verifier_role_state="exact",
             jobs_reader_role_state="exact",
-            migration_plan=MIGRATION_APPLY,
+            migration_plan=migration,
             rebase_unverified_app=False,
         )
         return window.window_plan(facts, position=position, acknowledgement=ack)
@@ -345,5 +346,8 @@ def test_a_recovering_run_that_also_needs_a_window_refuses_it_at_the_recheck() -
     assert lease.code == "window" and lease.public_summary()["deadman_recovery"] is True
     _repin(estate)
     recheck = plan("pre-apply", digest)
-    assert recheck.code == "refused" and recheck.refusals == ("window_unacked",)
-    assert recheck.canonical["blue_deployment_id"] == "deployment-start-1"
+    assert recheck.code == "window" and recheck.ack == "matched", recheck.refusals
+    assert recheck.canonical["blue_deployment_id"] == "deployment-start-1" and recheck.sha256 != digest
+    another = {**MIGRATION_APPLY, "migrations": {"pending": ["0042", "0099"], "pending_contract": []}}
+    moved = plan("pre-apply", digest, another)  # any other fact that moved still refuses
+    assert moved.code == "refused" and "window_unacked" in moved.refusals

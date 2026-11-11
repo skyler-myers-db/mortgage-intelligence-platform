@@ -4,8 +4,10 @@ Restore tiers (plan §4.7):
 
 * **tier a** (start-only) is valid only while blue is still the App's last
   deployment, i.e. inside a pre-activation window. ``assert_tier_a`` refuses
-  once the active deployment is no longer blue: a start would then snapshot
-  green's source.
+  once blue is not the newest deployment of ANY state (on a running App also
+  its active one; on a stopped App, whose GET has none, its default source
+  must be blue's): a start would then snapshot green's source, a FAILED green
+  included (spike S7: it becomes active and moves the default source).
 * **tier b** redeploys blue's restore payload from the immutable,
   digest-verified copy. ``tier_b_payload`` refuses a record whose tier is not
   the profile's (``blue_tier_mismatch``), re-hashes the copy (a tampered or
@@ -64,7 +66,6 @@ from pathlib import Path
 from typing import Any
 
 from tools.databricks import app_release_contract as release_contract
-from tools.databricks.app_deployment_state import active_deployment_id
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
     _payload_digest,
@@ -80,7 +81,11 @@ from tools.databricks.app_rollback_record_v7 import (
     validated_v7_record,
 )
 from tools.databricks.app_rollback_resource_contract import app_resource_contract
-from tools.databricks.app_start_deployment import last_deployment_is, tree_digest
+from tools.databricks.app_start_deployment import (
+    current_deployment_id,
+    last_deployment_is,
+    tree_digest,
+)
 from tools.databricks.blue_tier_gate import BlueTierRefused, assert_blue_tier
 from tools.databricks.operation_ack import AckRefused, ack_digest, require_ack
 
@@ -250,7 +255,9 @@ def prepare_activation(
         raise RestoreProofRefused(exc.code, str(exc)) from exc
     if record["version"] != V7_RECORD_VERSION:
         return "the signed v5/v6 record's own payload is blue's tier-b restore payload"
-    if active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:
+    # A contract window keeps the App stopped through activation: its GET has
+    # no active deployment, and the newest one is blue's (spike S7).
+    if current_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:
         raise RestoreProofRefused(
             "blue_not_active",
             "blue is not the active deployment: the proof must precede activation",

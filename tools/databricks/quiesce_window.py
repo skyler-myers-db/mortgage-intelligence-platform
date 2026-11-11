@@ -22,16 +22,19 @@ wait until that run is RUNNING and wrote its armed marker),
 admits and re-checks blue again after that arm, journals ``window_open`` and
 only then stops the App, identity-pinned.
 ``cancel-deadman`` cancels that run once the journal is closed. ``start`` journals
-``window_starting``, starts, and records the deployment the start created
-(a rerun resumes from the App's pending deployment, never a second start).
+``window_starting`` with the App's deployment ids (the baseline), starts,
+finds the one new id the start created (it shows about 100 s later, spike S7)
+and records it (a rerun finds it against the journaled baseline, never a
+second start).
 ``await`` waits for exactly that
 deployment to be terminal, requires SUCCEEDED and proves blue's restore
 source, the folder's unchanged full-tree digest, the snapshot's equal digest
 and the signed record's env-name set. Any failure after the start call, a
 failed proof or anything else that raises, stops the App again and journals
 ``window_refused`` for the dead-man. ``app_deployment_rollback repin --to <id>``
-then re-signs the record and checks health against the re-pinned id, and
-``close`` closes the journal.
+(``app_core_rollback repin`` for a v7 core blue, whose env names and tree are
+the record's own) then re-signs the record and checks health against the
+re-pinned id, and ``close`` closes the journal.
 
 ``plan-wr5`` and ``await-wr5`` plan the Lakebase ownership handover's WR5
 window and prove its start, both read-only (tools/databricks/quiesce_window_wr5.py);
@@ -57,9 +60,10 @@ from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks import quiesce_window_deadman as deadman
 from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_release_contract import ReleaseContractError
-from tools.databricks.app_rollback_record_contract import _load_record, _text
+from tools.databricks.app_rollback_record_contract import V7_RECORD_VERSION, _load_record, _text
 from tools.databricks.app_start_deployment import (
     StartProofError,
+    deployment_ids,
     env_names,
     last_deployment_is,
     prove_start_deployment,
@@ -76,13 +80,13 @@ from tools.databricks.quiesce_window_budget import (
     require_admitted,
 )
 from tools.databricks.quiesce_window_facts import (
-    V7WindowOwed,
     app_or_none,
     collect_facts,
     takes_unsigned_rebase,
 )
 from tools.databricks.quiesce_window_plan import (
     ACK_ENV,
+    acknowledged_digests,
     body_sha256,
     window_plan,
     with_admission,
@@ -114,7 +118,11 @@ def _validated_plan(plan: dict[str, Any], *, acknowledgement: str) -> dict[str, 
         raise RuntimeError("only a passed pre-apply window plan can open a window")
     if not isinstance(canonical, dict) or body_sha256(canonical) != plan.get("window_sha256"):
         raise RuntimeError("the window plan's canonical body does not match its digest")
-    if acknowledgement != plan["window_sha256"]:
+    # The pre-apply plan's own digest, or the pre-lease one step 0a's tier-a re-pin moved.
+    predecessor = str((plan.get("facts") or {}).get("blue_predecessor_deployment_id") or "")
+    if acknowledgement not in acknowledged_digests(
+        canonical, position="pre-apply", predecessor=predecessor
+    ):
         raise RuntimeError(f"{ACK_ENV} is not the exact window digest")
     if plan.get("reasons") != canonical.get("reasons") or not canonical.get("reasons"):
         raise RuntimeError("the window plan's reasons are not its canonical reasons")
@@ -258,9 +266,10 @@ def start_window(
 ) -> str:
     """Journal the intent, start the App, journal the deployment the start created.
 
-    ``window_starting`` is written before ``apps start``, so a start whose id
-    was never journaled is not mistaken for "never started": a rerun resumes
-    from the App's pending deployment and never starts a second time. Within
+    ``window_starting`` is written before ``apps start``, with the App's
+    deployment ids, so a start whose id was never journaled is not mistaken
+    for "never started": a rerun finds it as the one id outside that
+    baseline and never starts a second time. Within
     ``DEADMAN_GUARD_S`` of the job deadline (the start and re-pin budgets
     and a slack) the dead-man owns the start (M0-PR9): the run journals no
     intent and leaves the window open for it, so the two never both start
@@ -277,15 +286,19 @@ def start_window(
     if not resumed and deadline is not None and clock() >= deadline - DEADMAN_GUARD_S:
         raise RuntimeError("the job deadline is too close: the dead-man owns this window's start")
     if not resumed:
+        baseline = deployment_ids(workspace, app_name=app_name)
         current = journal.write(
             workspace,
             app_name=app_name,
             expected=current,
-            changes={"state": "window_starting"},
+            changes={"state": "window_starting", "start_baseline_ids": sorted(baseline)},
             assert_lease_held=assert_lease_held,
         )
+    baseline = frozenset((current or {}).get("start_baseline_ids") or ())
     try:
-        created = (resume_start if resumed else start_app)(workspace, app_name=app_name)
+        created = (resume_start if resumed else start_app)(
+            workspace, app_name=app_name, baseline=baseline
+        )
         journal.write(
             workspace,
             app_name=app_name,
@@ -322,9 +335,7 @@ def await_window(
     if journal.state_of(current) != "window_started" or current is None:
         raise RuntimeError("no started window to await")
     try:
-        record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-        )
+        record = _window_record(workspace, app_name, scope, lakebase_instance)
         if record["deployment_id"] != current["blue_deployment_id"]:
             raise StartProofError(
                 "start_record_changed",
@@ -349,7 +360,9 @@ def await_window(
             deployment=deployment,
             restore_source=current["restore_source"],
             expected_tree_sha256=current["source_tree_sha256"],
-            expected_env_names=env_names(record["payload"]),
+            expected_env_names=(
+                frozenset(record["env_names"]) if _is_v7(record) else env_names(record["payload"])
+            ),
             digest=digest,
         )
         wait_active(workspace, app_name=app_name)
@@ -369,6 +382,25 @@ def await_window(
         assert_lease_held=assert_lease_held,
     )
     return proof.deployment_id
+
+
+def _is_v7(record: Mapping[str, Any]) -> bool:
+    return record.get("version") == V7_RECORD_VERSION
+
+
+def _window_record(workspace: Any, app_name: str, scope: str, lakebase_instance: str) -> dict[str, Any]:
+    """The signed record a window governs: v5/v6, or a v7 core blue (spike S7); never v7 agentic."""
+
+    record = _load_record(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=lakebase_instance,
+        accept_v7=True,
+    )
+    if _is_v7(record) and record.get("tier") != "core":
+        raise StartProofError("start_record_changed", "the signed record is a v7 agentic blue")
+    return record
 
 
 def close_window(
@@ -393,9 +425,7 @@ def close_window(
         # and the App's active deployment, never the window's blue.
         from tools.databricks.app_deployment_state import active_deployment_id
 
-        record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-        )
+        record = _window_record(workspace, app_name, scope, lakebase_instance)
         if record["deployment_id"] == current["blue_deployment_id"] or (
             active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]
         ):
@@ -406,9 +436,7 @@ def close_window(
     else:
         if journal.state_of(current) != "window_proven" or current is None:
             raise RuntimeError("only a proven window closes on its re-pin")
-        record = _load_record(
-            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-        )
+        record = _window_record(workspace, app_name, scope, lakebase_instance)
         if (
             repinned != current["start_deployment_id"]
             or record["deployment_id"] != repinned
@@ -661,23 +689,19 @@ def main(
         print(f"{_PREFIX} applicable: App {'present' if app is not None else 'absent'}")
         return 0
     if args.command == "plan":
-        try:
-            facts = collect_facts(
-                workspace,
-                app_name=app_name,
-                scope=args.scope,
-                lakebase_instance=args.lakebase_instance,
-                gate_report=_load_json(args.plan_gate_report),
-                binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
-                role_state=args.role_check,
-                verifier_role_state=args.verifier_role_check,
-                jobs_reader_role_state=args.jobs_reader_role_check,
-                migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
-                rebase_unverified_app=args.rebase_unverified_app == "1",
-            )
-        except V7WindowOwed as exc:
-            print(f"{_PREFIX} REFUSED {exc.code}: {exc}", file=sys.stderr)
-            return 2
+        facts = collect_facts(
+            workspace,
+            app_name=app_name,
+            scope=args.scope,
+            lakebase_instance=args.lakebase_instance,
+            gate_report=_load_json(args.plan_gate_report),
+            binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
+            role_state=args.role_check,
+            verifier_role_state=args.verifier_role_check,
+            jobs_reader_role_state=args.jobs_reader_role_check,
+            migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
+            rebase_unverified_app=args.rebase_unverified_app == "1",
+        )
         result = window_plan(
             facts, position=args.position, acknowledgement=os.environ.get(ACK_ENV, "").strip()
         )

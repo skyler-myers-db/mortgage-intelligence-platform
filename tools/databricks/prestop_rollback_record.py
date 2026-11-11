@@ -32,11 +32,27 @@ App still serves:
   ``rollback_record_absent``; a record of the other tier (a v5, v6 or agentic
   v7 record) as ``rollback_record_present``; a failed signature as
   ``rollback_record_tampered``; a drifted identity or binding as
-  ``rollback_record_drift``. An active deployment that is not the record's is
-  a note, as above: the core step 0a restores the record's over it. A stopped
-  App over the record's own deployment refuses as ``rollback_record_drift``
-  (``blue_stopped``): the core step 0a never starts a core blue, so it would
-  refuse under the lease after quiescing blue's treatment; here nothing is.
+  ``rollback_record_drift``. An active or newest deployment that is not the
+  record's is a note when the record carries a restore payload (the core
+  step 0a restores the record's over it, tier b) and refuses as
+  ``rollback_record_drift`` (``no_restore_payload``) when it does not, since
+  step 0a would refuse it under the lease after quiescing blue's treatment.
+  The one exception is an earlier tier-a start of blue's own folder the
+  record was never re-pinned onto (``CORE_STRANDED``, step 0a's own reader):
+  step 0a re-pins it or starts blue's folder again (tier a), so it is a note.
+  A stopped App over the record's own deployment is a note too (step 0a
+  starts and re-pins it, tier a), unless its next start would not rerun blue
+  (its default source is not blue's folder, spike S7): that refuses as
+  ``rollback_record_drift`` (``tier_a_refused``), which the core step 0a
+  would refuse under the lease after quiescing blue's treatment; here
+  nothing is. A start snapshots the folder's CURRENT bytes, so the folder is
+  re-hashed against the record's signed tree here too
+  (``CORE_START_RERUNS``, step 0a's own check): a changed folder is a note
+  when the record carries a restore payload (step 0a restores blue from the
+  immutable copy, tier b, whose own start runs the folder's current bytes
+  until blue's copy replaces them) and refuses as ``rollback_record_drift``
+  (``no_restore_payload``) when it does not, since step 0a would refuse it
+  under the lease, before any start.
 
 * **adopt phase** (``--phase adopt|unadopt``, M2-PR7): the record is judged
   the way adopt-live will judge it, with the tier-aware reader. No record (or
@@ -58,7 +74,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tools.databricks.app_deployment_rollback import verified_signed_last_good_contract
-from tools.databricks.app_deployment_state import active_deployment_id, latest_succeeded
+from tools.databricks.app_deployment_state import latest_succeeded
 from tools.databricks.app_rollback_bootstrap_gate import assert_rollback_record_absent
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
@@ -70,10 +86,15 @@ from tools.databricks.app_rollback_secret_scope import (
     expected_app_rollback_scope,
 )
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
-from tools.databricks.app_start_deployment import is_stopped
+from tools.databricks.app_start_deployment import (
+    current_deployment_id,
+    is_stopped,
+    last_deployment_is,
+)
 from tools.databricks.blue_tier_gate import BlueTierRefused
 from tools.databricks.core_blue import CoreBlueRefused, load_core_blue, verify_core_blue
-from tools.databricks.core_blue_restore import BLUE_STOPPED
+from tools.databricks.core_blue_repin import STRANDED_REPIN, STRANDED_RESTART, stranded_start
+from tools.databricks.core_blue_restore import TIER_A_REFUSED, start_reruns_record
 from tools.databricks.prestop_refusals import (
     ROLLBACK_RECORD_ABSENT,
     ROLLBACK_RECORD_DRIFT,
@@ -85,12 +106,17 @@ from tools.databricks.prestop_refusals import (
 # The very functions step 0a runs after the lease (identity, not copies).
 ASSERT_SIGNED = verified_signed_last_good_contract
 ASSERT_ABSENT = assert_rollback_record_absent
-ACTIVE_DEPLOYMENT = active_deployment_id
+# A stopped App's GET has no active deployment (spike S7): both step 0a paths
+# read the newest deployment there, the one a start reruns.
+ACTIVE_DEPLOYMENT = current_deployment_id
 # The core tier's step-0a reads (app_core_rollback ensure, M2-PR7b).
 CORE_LOAD = load_core_blue
 CORE_VERIFY = verify_core_blue
 CORE_LATEST = latest_succeeded
 CORE_STOPPED = is_stopped
+CORE_TIER_A = last_deployment_is
+CORE_START_RERUNS = start_reruns_record
+CORE_STRANDED = stranded_start
 
 # First-install journal states whose App the recovery under the lease deletes.
 JOURNAL_OWNED_STATES = frozenset({"recover", "unclaimed"})
@@ -276,25 +302,95 @@ def _core_signed_verdict(
         active = ACTIVE_DEPLOYMENT(workspace, app_name=app_name)
         latest = str(getattr(CORE_LATEST(workspace, app_name=app_name), "deployment_id", "") or "")
         # The core step 0a's own branch: over the record's deployment it proves
-        # blue in place, and refuses a stopped one before any repair.
+        # blue in place, and starts and re-pins a stopped one only when its
+        # next start reruns blue (tier a), refusing it before any repair otherwise.
+        # An earlier tier-a start it never re-pinned is tier a's again; any
+        # other deployment is tier b's, which needs blue's restore payload.
         in_place = active == record["deployment_id"] and latest == active
-        stopped = in_place and CORE_STOPPED(workspace, app_name=app_name)
+        stranded = "" if in_place else CORE_STRANDED(workspace, record, app_name=app_name)
+        stopped = bool(in_place or stranded) and CORE_STOPPED(workspace, app_name=app_name)
+        tier_a = stopped and in_place and CORE_TIER_A(workspace, app_name=app_name, deployment_id=active)
+        starts = tier_a or stranded == STRANDED_RESTART
+        reruns = starts and CORE_START_RERUNS(workspace, record, app_name=app_name)
     except Exception as exc:  # noqa: BLE001 - the core step 0a reads it the same way
         return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_DRIFT, str(exc)),), ())
-    if stopped:
+    payload = record.get("restore_payload") is not None
+    if not in_place and not stranded and not payload:
         return RollbackRecordVerdict(
             (
                 PrestopRefusal(
                     ROLLBACK_RECORD_DRIFT,
-                    "the signed core blue is stopped, so the core step 0a would refuse it "
-                    f"(blue_stopped) under the lease after quiescing its treatment: {BLUE_STOPPED}",
+                    "the App's active or newest deployment is not the signed core record's "
+                    "and the record has no restore payload, so the core step 0a would "
+                    "refuse it (no_restore_payload) under the lease after quiescing its "
+                    "treatment; restore blue's deployment with the owner break-glass, or "
+                    "re-sign the adopted record onto the live deployment (--phase adopt with "
+                    "MIP_ADOPT_LIVE_SUPERSEDE), then re-run",
                 ),
             ),
             (),
         )
-    where = "is the record's" if active == record["deployment_id"] else (
-        "is not the record's, so the core step 0a restores the record's deployment over it"
+    if in_place and stopped and not tier_a:
+        return RollbackRecordVerdict(
+            (
+                PrestopRefusal(
+                    ROLLBACK_RECORD_DRIFT,
+                    "the signed core blue's App is stopped and its next start would not rerun "
+                    "blue, so the core step 0a would refuse it (tier_a_refused) under the lease "
+                    f"after quiescing its treatment: {TIER_A_REFUSED}",
+                ),
+            ),
+            (),
+        )
+    if starts and not reruns and not payload:
+        return RollbackRecordVerdict(
+            (
+                PrestopRefusal(
+                    ROLLBACK_RECORD_DRIFT,
+                    "the signed core blue's App needs a start and its source folder is not the "
+                    "record's signed tree, and the record has no restore payload, so the core "
+                    "step 0a would refuse it (no_restore_payload) under the lease after "
+                    "quiescing its treatment, before any start; put blue's bytes back in the "
+                    "folder or use the owner break-glass, then re-run",
+                ),
+            ),
+            (),
+        )
+    # Databricks deploys only to a running App: tier b over a stopped one starts it first.
+    tier_b_start = (
+        ": Databricks deploys only to a running App, so tier b's start runs that folder's "
+        "current bytes until blue's copy replaces them"
+        if stopped
+        else ""
     )
+    if stranded == STRANDED_REPIN:
+        where = (
+            "is an earlier start of blue's folder the record was never re-pinned onto, so step "
+            "0a proves it is blue's signed tree and re-pins it (tier a), or "
+            + ("replaces it from the immutable copy (tier b)" if payload else "stops it")
+        )
+    elif stranded and reruns:
+        where = (
+            "is an earlier unproven start of blue's folder, so step 0a "
+            + ("" if stopped else "stops it, ")
+            + "starts blue's folder again and re-pins the start (tier a)"
+        )
+    elif stranded:
+        where = (
+            "is an earlier unproven start of blue's folder, which is no longer the record's "
+            f"signed tree, so step 0a restores blue from the immutable copy (tier b){tier_b_start}"
+        )
+    elif not in_place:
+        where = "is not the record's, so the core step 0a restores the record's deployment over it"
+    elif reruns:
+        where = "is the record's; the App is stopped, so step 0a starts it and re-pins the start (tier a)"
+    elif tier_a:
+        where = (
+            "is the record's; the App is stopped and its source folder is not the record's signed "
+            f"tree, so step 0a restores blue from the immutable copy (tier b){tier_b_start}"
+        )
+    else:
+        where = "is the record's"
     return RollbackRecordVerdict(
         (),
         (
