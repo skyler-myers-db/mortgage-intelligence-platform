@@ -355,7 +355,10 @@ def test_no_doc_claims_an_approval_the_pin_does_not_carry() -> None:
 
     root = Path(__file__).resolve().parents[2]
     workflows = "\n".join(path.read_text(encoding="utf-8") for path in sorted((root / ".github").rglob("*.yml")))
-    assert "MIP_LENDER_NAME" in workflows, "positive control: the workflows carry the legacy lender name"
+    # Positive control: the scan reads the workflows. M1-PR8 retired the last
+    # workflow that carried the legacy lender name (the parked nightly.yml);
+    # deploy-dev.yml names the record's pin.
+    assert "MIP_LENDER_IDENTITY_SHA256" in workflows, "positive control: the workflows name the lender identity pin"
     deployment = (root / "docs" / "deployment.md").read_text(encoding="utf-8")
     section = deployment[deployment.index("## Customer lender identity") :]
     docs = {
