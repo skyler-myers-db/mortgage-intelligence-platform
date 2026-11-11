@@ -750,6 +750,22 @@ def test_a_configured_connector_with_the_switch_unset_refuses_rather_than_drop_i
     build_payload(source_code_path="/Workspace/app/files", install_class="customer")
 
 
+def test_the_cli_prints_the_unset_switch_refusal_and_exits_2_with_no_payload(monkeypatch, capsys) -> None:
+    """Round 2 of #337: the refusal escaped ``main`` as a traceback (exit 1)."""
+
+    for name, value in _CONFIGURED_SALESFORCE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("MIP_SALESFORCE_BINDINGS", raising=False)
+
+    status = app_deploy_payload.main(["--source-code-path", "/Workspace/app/files", "--install-class", "customer"])
+
+    captured = capsys.readouterr()
+    assert status == 2 and captured.out == ""
+    assert f"app_deploy_payload: refused: {app_deploy_payload.SALESFORCE_SWITCH_UNSET_REFUSAL}" in captured.err
+    assert "Traceback" not in captured.err
+    assert not any(value in captured.err for value in _CONFIGURED_SALESFORCE.values())
+
+
 def test_the_switch_on_binds_all_three_and_an_unreviewed_value_refuses(monkeypatch) -> None:
     for name, value in _CONFIGURED_SALESFORCE.items():
         monkeypatch.setenv(name, value)

@@ -190,6 +190,12 @@ SALESFORCE_SWITCH_UNSET_REFUSAL = (
     "to bind the connector's three secrets (a WR1 window adds the bindings) or to off to leave "
     "the connector unbound"
 )
+
+
+class SalesforceSwitchRefused(ValueError):
+    """``SALESFORCE_SWITCH_UNSET_REFUSAL``: ``main`` prints it as a refusal and exits 2, no payload."""
+
+
 PREVIOUS_SECRET_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_SECRET_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 
@@ -610,7 +616,7 @@ def build_payload(
     # unset switch refuses a configured connector rather than drop it.
     salesforce_bound = salesforce_bindings_on(_env_value(SALESFORCE_BINDINGS_ENV, dotenv))
     if refusal := salesforce_switch_refusal(dotenv):
-        raise ValueError(refusal)
+        raise SalesforceSwitchRefused(refusal)
     if salesforce_configured and not salesforce_bound:
         print(SALESFORCE_UNBOUND_NOTICE, file=sys.stderr)
     if salesforce_configured and salesforce_bound:
@@ -698,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
             otel_header_resource=args.otel_header_resource,
             agentic_tier=args.agentic_tier,
         )
-    except LenderIdentityRefused as refusal:
+    except (LenderIdentityRefused, SalesforceSwitchRefused) as refusal:
         # A fixed sentence that names the field and the rule, never a value.
         print(f"app_deploy_payload: refused: {refusal}", file=sys.stderr)
         return 2

@@ -557,12 +557,19 @@ DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.converge_static_a
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
   --release-id <release-id> --release-manifest <manifest> --expected-git-sha <sha> \
   --expected-principal <owner> --expected-target dev --expected-root-leaf dev
-MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
+MIP_GIT_SHA=<sha> MIP_SALESFORCE_BINDINGS=<salesforce-bindings> python -m tools.databricks.app_deploy_payload \
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
   --install-class demo --app-env sandbox --catalog mip --schema gold \
   --lakebase-instance <lakebase-instance> > <payload>
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
+
+`<salesforce-bindings>` is the profile's `MIP_SALESFORCE_BINDINGS` for the
+live App: `off` unless that App already binds the three Salesforce secrets,
+then `on`. The recipe never changes the App's bindings, so it must match
+them. The payload builder refuses an unset switch when every connector
+input is set (`app_deploy_payload: refused:`, exit 2, no payload), so the
+recipe always names it.
 
 **The freeze marker (M2-PR7).** During the cutover the owner freezes this
 recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
