@@ -11,6 +11,14 @@ taking it fails here. So does switching the job off while it still exists: a
 job or step ``if``, a ``continue-on-error``, a ``needs`` that can skip it, an
 environment that can change what pytest collects, or a pytest command that
 deselects, stops early or swallows the exit status (review of #330).
+
+The job's steps are pinned whole, not by their keys (round 2 of that
+review): a step that writes ``$GITHUB_ENV`` (``PYTEST_ADDOPTS=--collect-only``
+for the proof step), rewrites the proof module or checks out another ref
+changes the pinned list. So does a trigger filter (``paths``,
+``paths-ignore``, ``branches``) that would skip the workflow, a
+workflow-wide ``defaults`` shell, and a workflow-wide variable that changes
+what the shell or pytest runs.
 """
 
 from __future__ import annotations
@@ -31,6 +39,15 @@ STEP_KEYS = {"name", "uses", "with", "run"}
 # The proof's pytest command, token for token: no -k, --deselect, -x, --lf or
 # shell operator, so every collected test runs and its status is the step's.
 PYTEST = ("pytest", "-rfE", "-p", "no:cacheprovider", "--durations=10", *PROOF)
+# The job's steps, whole: what each one runs and how (review of #330, round 2).
+STEPS = [
+    {"uses": "actions/checkout@v6"},
+    {"uses": "actions/setup-python@v6", "with": {"python-version": "${{ env.PYTHON_VERSION }}", "cache": "pip"}},
+    {"name": "Install dependencies", "run": "python -m pip install --upgrade pip\npip install -r requirements-dev.txt\n"},
+    {"name": "pytest (the portability proof)", "run": " ".join(PYTEST)},
+]
+# Workflow-wide variables that change what a run step's shell or pytest runs.
+SHELL_OR_PYTEST_ENV = ("PYTEST", "PYTHON", "BASH", "ENV", "PATH", "SHELLOPTS", "LD_", "DYLD_")
 
 
 def _workflow() -> dict[str, Any]:
@@ -83,4 +100,24 @@ def test_the_proof_job_cannot_be_switched_off_while_it_stays_in_the_file() -> No
     (pytest_run,) = [run for run in _runs(job) if run.lstrip().startswith("pytest")]
     assert tuple(pytest_run.split()) == PYTEST
     # Nothing workflow-wide reshapes what pytest collects or how it exits.
-    assert [name for name in workflow.get("env", {}) if name.startswith(("PYTEST", "PYTHON")) and name != "PYTHON_VERSION"] == []
+    assert [name for name in workflow.get("env", {}) if name.startswith(SHELL_OR_PYTEST_ENV) and name != "PYTHON_VERSION"] == []
+
+
+def test_the_proof_jobs_steps_are_pinned_whole() -> None:
+    """Review of #330, round 2: an allowlisted step key can still carry a step that switches the proof off."""
+
+    job = _jobs()["client-portability-proof"]
+
+    assert job["steps"] == STEPS
+
+
+def test_the_workflow_runs_on_every_pull_request_and_main_push() -> None:
+    """No trigger filter or workflow-wide shell can skip or hollow out the proof job (review of #330, round 2)."""
+
+    workflow = _workflow()
+    # PyYAML reads the bare key ``on`` as the boolean True.
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert set(workflow) <= {"name", "on", True, "concurrency", "env", "permissions", "jobs"}, sorted(map(str, workflow))
+    assert triggers["pull_request"] in (None, {}), triggers["pull_request"]
+    assert set(triggers["push"]) == {"branches"} and "main" in triggers["push"]["branches"], triggers["push"]

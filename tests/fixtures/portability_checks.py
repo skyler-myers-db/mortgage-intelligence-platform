@@ -14,8 +14,12 @@ planted defects, so each check is shown to find what it looks for:
   run, read from a tree; ``AGENTIC_ONLY_MODULES`` is the same set committed,
   since a set read from the tree under test shrinks when a core file starts
   calling an agentic tool (review of #330);
-* ``account_api_reach``: the modules in a tool's import closure that name an
-  account API, the check behind tests/fixtures/role_ledger.py's table;
+* ``agentic_only_modules`` reads a tool named either way, ``-m tools.x`` or
+  ``tools/x.py`` (review of #330); tests/fixtures/role_ledger.py has
+  ``account_api_reach``, the check behind its table;
+* ``core_deploy_tools``: every tool a core-tier deploy file names, either way,
+  which tests/unit/test_client_portability_integrity.py holds to the reviewed
+  tables and to ``LIVE_ONLY_MODULES``;
 * ``default_install_render``: client #1's render, read from the sql/ sources
   themselves rather than from tools/render_sql.py;
 * ``checkout_state``: the real checkout's status and the build artifacts a
@@ -27,8 +31,6 @@ planted defects, so each check is shown to find what it looks for:
 
 from __future__ import annotations
 
-import ast
-import functools
 import hashlib
 import json
 import os
@@ -76,7 +78,8 @@ AGENTIC_LIBRARIES = (
 )
 # Build artifacts a dry run, a render or a validate would write in the checkout it runs in.
 ARTIFACTS = ("sql/_rendered", ".databricks", ".env.local", "genie/space_id.txt")
-_MODULE = re.compile(r"-m (tools(?:\.[A-Za-z0-9_]+)+)")
+# A tool named in a deploy file: ``-m tools.x`` or ``tools/x.py``.
+_MODULE = re.compile(r"-m (tools(?:\.[A-Za-z0-9_]+)+)|(?<![\w./-])(tools(?:/[A-Za-z0-9_]+)+)\.py(?![\w-])")
 # agentic_only_modules() of the reviewed tree, committed: a test holds the
 # tree to it, so a core file that starts calling one of these fails both ways.
 AGENTIC_ONLY_MODULES = frozenset(
@@ -102,9 +105,6 @@ AGENTIC_ONLY_MODULES = frozenset(
         "tools.verify_deployed_app_contract",
     }
 )
-# An account API in source: the SDK's account client, its account-level
-# service classes or an accounts REST path.
-ACCOUNT_API = re.compile(r"\bAccountClient\b|\bAccount[A-Z]\w*API\b|/api/2\.[0-9]/accounts\b")
 # The demo switch, the one token client #1's render (catalog mip, the demo
 # feeds on, the canonical share, no pinned lender) changes in a source file.
 DEMO_SWITCH = "{{mip_enable_demo_first_party_feeds}}"
@@ -178,55 +178,31 @@ def literal_hits(
     ]
 
 
+def _named_tools(text: str) -> set[str]:
+    return {module or path.replace("/", ".") for module, path in _MODULE.findall(text)}
+
+
+def _deploy_files(scripts: Path) -> list[tuple[Path, bool]]:
+    """Each deploy file and whether it is one of the agentic slices or their libraries."""
+
+    files = sorted([scripts / "deploy.sh", *(scripts / "lib").glob("*.sh")])
+    return [(path, AGENTIC_MARKER in path.read_text(encoding="utf-8") or path.name in AGENTIC_LIBRARIES) for path in files]
+
+
 def agentic_only_modules(scripts: Path = REPO / "scripts") -> frozenset[str]:
-    """The ``-m`` tools only the agentic slices name, never another deploy script."""
+    """The tools only the agentic slices name (``-m`` or by path), never another deploy script."""
 
     agentic: set[str] = set()
     elsewhere: set[str] = set()
-    for path in sorted([scripts / "deploy.sh", *(scripts / "lib").glob("*.sh")]):
-        text = path.read_text(encoding="utf-8")
-        is_agentic = AGENTIC_MARKER in text or path.name in AGENTIC_LIBRARIES
-        (agentic if is_agentic else elsewhere).update(_MODULE.findall(text))
+    for path, is_agentic in _deploy_files(scripts):
+        (agentic if is_agentic else elsewhere).update(_named_tools(path.read_text(encoding="utf-8")))
     return frozenset(agentic - elsewhere)
 
 
-def _module_files(module: str, repo: Path) -> tuple[Path, ...]:
-    """A module's source files; a package's ``__init__`` and ``__main__`` (``-m`` runs both)."""
+def core_deploy_tools(scripts: Path = REPO / "scripts") -> frozenset[str]:
+    """Every tool a core-tier deploy file names (``-m`` or by path), whether a dry run reaches it or not."""
 
-    base = repo.joinpath(*module.split("."))
-    if base.with_suffix(".py").is_file():
-        return (base.with_suffix(".py"),)
-    return tuple(path for path in (base / "__init__.py", base / "__main__.py") if path.is_file())
-
-
-@functools.cache
-def _imports(module: str, repo: Path) -> frozenset[str]:
-    """The repository modules one module imports, at any depth of its code (lazy imports too)."""
-
-    found: set[str] = set()
-    for path in _module_files(module, repo):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                found.add(node.module)
-                found.update(f"{node.module}.{alias.name}" for alias in node.names)
-            elif isinstance(node, ast.Import):
-                found.update(alias.name for alias in node.names)
-    return frozenset(name for name in found if name.split(".")[0] in {"tools", "backend"} and _module_files(name, repo))
-
-
-def account_api_reach(module: str, repo: Path = REPO) -> list[str]:
-    """The modules in ``module``'s import closure whose source names an account API."""
-
-    seen: set[str] = set()
-    todo = [module]
-    while todo:
-        name = todo.pop()
-        if name not in seen:
-            seen.add(name)
-            todo.extend(_imports(name, repo))
-    return sorted(
-        name for name in seen if any(ACCOUNT_API.search(path.read_text(encoding="utf-8")) for path in _module_files(name, repo))
-    )
+    return frozenset().union(*(_named_tools(path.read_text(encoding="utf-8")) for path, agentic in _deploy_files(scripts) if not agentic))
 
 
 def default_install_render(dest: Path, sql: Path = REPO / "sql") -> Path:

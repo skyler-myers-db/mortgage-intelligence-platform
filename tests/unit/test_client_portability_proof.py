@@ -34,12 +34,19 @@ here signs anything or verifies a signature.
 
 Positive controls (a dispatch with planted defects, and the checks applied to
 inputs that must fail them) prove each check can fail: account-admin calls in
-the shapes the deploy really uses (a Python tool, the account identity's
-wrapper, a CLI call behind a global flag, the human bootstrap by path), an
-agentic tool called from a core file, a bundle call by path to another
-target, a log and a summary leak, a client-#1 literal and an identifying value
-in the tree. The ci.yml job ``client-portability-proof`` runs this module and
-the integrity one.
+the shapes the deploy really uses, planned and executed (a Python tool by
+``-m``, behind an interpreter flag or by path, inline ``-c`` code and a
+heredoc, the account identity's wrapper, a CLI call behind a global flag, an
+account rule-set update through ``databricks api``, the human bootstrap by
+path), agentic tools called from a core file (planned, executed by path and
+imported inline), bundle calls to another target (planned by path, executed
+through the CLI and through the wrapper), a log and a summary leak, a
+client-#1 literal and an identifying value in the tree. The ci.yml job
+``client-portability-proof`` runs this module and the integrity one.
+
+What the proof covers is what the plan and release dry runs plan or run; a
+tool only a live run or another phase reaches is outside it, and the
+integrity module keeps those listed (role_ledger.OUTSIDE_PROOF_MODULES).
 """
 
 from __future__ import annotations
@@ -65,7 +72,11 @@ from tests.fixtures.lakeflow_pipeline_stub import exec_pipeline
 from tests.fixtures.role_ledger import (
     ACCOUNT_PRINCIPAL,
     REVIEWED_MODULES,
+    WORKSPACE,
+    Execution,
     account_admin_needs,
+    executed_role,
+    inline_imports,
     planned_role,
 )
 from tests.fixtures.role_recording_cli import tree_sha256
@@ -92,12 +103,23 @@ TARGET = re.compile(r"(?:^|\s)(?:-t|--target)(?:\s+|=)(\S+)")
 
 
 # The planted account-admin needs, each in a shape the deploy really uses
-# (review of #330): a CLI call run behind a global flag; and planned, a CLI
-# call behind a global flag, an unreviewed Python tool, an unreviewed tool
-# under the account identity's wrapper, a reviewed workspace tool under it and
-# the human bootstrap by path.
+# (review of #330). Run: a CLI call behind a global flag, an account rule-set
+# update through ``databricks api`` on the workspace proxy path, the human
+# bootstrap by path, an unreviewed tool behind an interpreter flag, inline
+# code and a heredoc importing what reaches an account API, an agentic tool by
+# path. Planned: a CLI call behind a global flag, the rule-set update, an
+# unreviewed Python tool, an unreviewed tool under the account identity's
+# wrapper, a reviewed workspace tool under it and the human bootstrap by path.
 PLANTED_NEEDS = (
     "cli (account_admin): databricks -p account-admin account service-principals list",
+    "cli (account_admin): databricks api put /api/2.0/preview/accounts/00000000-0000-0000-0000-000000000000"
+    "/access-control/rule-sets",
+    "executed (account_admin): tools/clients/bootstrap_account.py --help",
+    "executed (unclassified): -P -m tools.databricks.account_admin_grant --help",
+    "executed (account_admin): -c raise SystemExit(0); import tools.clients.bootstrap_account planted-inline",
+    "executed (unclassified): - planted-heredoc (script on stdin)",
+    "executed (unclassified): tools/databricks/read_agent_tool_probe_expectation.py --help",
+    "planned (account_admin): databricks api put /api/2.0/preview/accounts/access-control/rule-sets",
     "planned (account_admin): databricks --profile account-admin account groups list",
     "planned (unclassified): $PY -m tools.databricks.account_admin_grant --grant account_admin --principal deployer",
     "planned (unclassified): $PY -m tools.databricks.account_sp_create --create-service-principal planted"
@@ -107,10 +129,12 @@ PLANTED_NEEDS = (
     "planned (unclassified): $PY -m tools.databricks.provision_agentic_resources --plan-only",
 )
 PLANTED_AGENTIC = "tools.databricks.provision_agentic_resources"
+EXECUTED_AGENTIC = "tools.databricks.read_agent_tool_probe_expectation"
+IMPORTED_AGENTIC = "tools.databricks.agent_proxy_access"
 
 
 def _planted(values: dict[str, str]) -> tuple[cp.Plant, ...]:
-    """The positive controls: account-admin needs, an agentic tool, a stray bundle target, a literal, two leaks, a tree value."""
+    """The positive controls: account-admin needs, agentic tools, stray bundle targets, a literal, two leaks, a tree value."""
 
     shell = (
         "# The portability proof's positive controls, planted in its sandbox clone only.\n"
@@ -122,6 +146,18 @@ def _planted(values: dict[str, str]) -> tuple[cp.Plant, ...]:
         'run "$PYTHON" tools/clients/bootstrap_account.py --apply\n'
         f'run "$PYTHON" -m {PLANTED_AGENTIC} --plan-only\n'
         'run "$PYTHON" tools/databricks/bundle_env.py validate -t dev\n'
+        "run databricks api put /api/2.0/preview/accounts/access-control/rule-sets\n"
+        # Executed, never planned: the interpreter and the CLI really run these.
+        # The inline code exits before its import; the ledger reads the code.
+        "databricks api put /api/2.0/preview/accounts/00000000-0000-0000-0000-000000000000/access-control/rule-sets"
+        " >/dev/null 2>&1 || true\n"
+        "databricks bundle validate -t dev >/dev/null 2>&1 || true\n"
+        '"$PYTHON" tools/clients/bootstrap_account.py --help >/dev/null 2>&1 || true\n'
+        '"$PYTHON" -P -m tools.databricks.account_admin_grant --help >/dev/null 2>&1 || true\n'
+        '"$PYTHON" -m tools.databricks.bundle_env --help -t dev >/dev/null 2>&1 || true\n'
+        "\"$PYTHON\" -c 'raise SystemExit(0); import tools.clients.bootstrap_account' planted-inline || true\n"
+        f"\"$PYTHON\" - planted-heredoc <<'PYEOF' || true\nraise SystemExit(0)\nimport {IMPORTED_AGENTIC}\nPYEOF\n"
+        f'MIP_PLANTED=1 "$PYTHON" {EXECUTED_AGENTIC.replace(".", "/")}.py --help >/dev/null 2>&1 || true\n'
         'run "$PYTHON" -m tools.databricks.active_deployment_pin digest --app-name mip-app\n'
         "echo \"  lender: $(printf '%s' \"$MIP_LENDER_NAME\" | tr '[:lower:]' '[:upper:]')\"\n"
         "printf 'lender %s\\n' \"$MIP_LENDER_NAME\" >> \"${GITHUB_STEP_SUMMARY:-/dev/null}\"\n"
@@ -223,6 +259,33 @@ def test_every_planned_bundle_call_addresses_the_client_target(
     if phase == "release":
         assert any("--expected-root-leaf" in c for c in planned)
         assert any(f"deployment bind mip_app {acme_profile.app_name} -t client" in c for c in planned)
+
+
+def _stray_targets(planned: list[str], cli: list[list[str]], executed: list[Execution]) -> list[str]:
+    """Every bundle call that addresses another target than ``client``: planned, through the CLI or the wrapper."""
+
+    stray = [command for command in planned if BUNDLE_CALL.search(command) and TARGET.findall(command) != ["client"]]
+    stray += [f"cli: databricks {' '.join(argv)}" for argv in cli if "bundle" in argv and TARGET.findall(" ".join(argv)) != ["client"]]
+    stray += [
+        f"executed: {call.shown()}"
+        for call in executed
+        if call.tool() == "tools.databricks.bundle_env" and TARGET.findall(" ".join(call.argv)) != ["client"]
+    ]
+    return stray
+
+
+def test_every_bundle_call_the_dispatches_run_addresses_the_client_target(
+    dispatches: dict[str, cp.Dispatch], validated: dict[str, cp.Validated]
+) -> None:
+    """Review of #330: the calls a dry run really makes, not only the ones it plans."""
+
+    cli = [call["argv"] for done in dispatches.values() for call in done.record.cli_calls()]
+    cli += [call["argv"] for result in validated.values() for call in result.calls]
+    executed = [call for done in dispatches.values() for call in done.record.executions()]
+
+    assert _stray_targets([], cli, executed) == []
+    # Not vacuous: the validate's call is a bundle call through the CLI.
+    assert any("bundle" in argv for argv in cli)
 
 
 def test_the_validate_hands_the_cli_acmes_variables_and_root_leaf(
@@ -428,12 +491,25 @@ def test_the_analytics_battery_stays_allowed_with_acmes_names(
 # --- the tier and the refresh ------------------------------------------------------------
 
 
-def _modules(done: cp.Dispatch) -> set[str]:
-    """Every tool the dispatch plans (``-m`` or by path) or its interpreter really ran."""
+def _planned_tools(done: cp.Dispatch) -> set[str]:
+    """Every tool the dispatch plans, ``-m`` or by path."""
 
     planned = {module for command in done.planned for module in re.findall(r"-m (tools(?:\.\w+)+)", command)}
-    planned |= {path.replace("/", ".") for command in done.planned for path in re.findall(r"(?:^|[\s/=])(tools(?:/\w+)+)\.py(?!\w)", command)}
-    return planned | set(done.record.modules())
+    return planned | {
+        path.replace("/", ".") for command in done.planned for path in re.findall(r"(?:^|[\s/=])(tools(?:/\w+)+)\.py(?!\w)", command)
+    }
+
+
+def _modules(done: cp.Dispatch) -> set[str]:
+    """Every tool the dispatch plans or its interpreter really ran, ``-m`` or by path, behind any flag."""
+
+    return _planned_tools(done) | {tool for call in done.record.executions() if (tool := call.tool()) is not None}
+
+
+def _imported(done: cp.Dispatch) -> set[str]:
+    """Every repository module the inline code the interpreter ran (``-c`` or a heredoc) imports."""
+
+    return {module for call in done.record.executions() for module in inline_imports(call.code())}
 
 
 @pytest.mark.parametrize("phase", PHASES)
@@ -443,7 +519,7 @@ def test_no_agentic_step_is_planned_or_run(dispatches: dict[str, cp.Dispatch], p
     done = dispatches[phase]
     modules = _modules(done)
 
-    assert modules & checks.AGENTIC_ONLY_MODULES == set()
+    assert (modules | _imported(done)) & checks.AGENTIC_ONLY_MODULES == set()
     # The reviewed core allowlist (tests/fixtures/role_ledger.py): a tool no core run was reviewed for fails here.
     assert modules - REVIEWED_MODULES == set()
     assert [c for c in done.planned if re.search(r"--identity-role (verifier|agent_runtime|agent_proxy)|--role-contract verifier", c)] == []
@@ -466,11 +542,16 @@ def test_no_ci_step_needs_account_admin(dispatches: dict[str, cp.Dispatch], vali
     cli = [call["argv"] for done in dispatches.values() for call in done.record.cli_calls()]
     cli += [call["argv"] for result in validated.values() for call in result.calls]
     planned = [command for done in dispatches.values() for command in done.planned]
-    executed = [module for done in dispatches.values() for module in done.record.modules()]
+    executed = [call for done in dispatches.values() for call in done.record.executions()]
 
     assert account_admin_needs(cli=cli, planned=planned, executed=executed) == []
-    # Not vacuous: the bounded account principal is planned, and classed as such.
+    # Not vacuous: the bounded account principal is planned, and classed as
+    # such; the interpreter ran tools and inline code, a heredoc among it,
+    # each classed by the ledger.
     assert any(planned_role(command) == ACCOUNT_PRINCIPAL for command in planned)
+    assert {executed_role(call) for call in executed} == {WORKSPACE}
+    assert any(call.tool() for call in executed) and any(call.stdin for call in executed)
+    assert any(call.code() and call.stdin is None for call in executed), "inline -c code"
 
 
 # --- the public log and the step summary --------------------------------------------------
@@ -579,24 +660,38 @@ def test_planted_account_admin_calls_are_found(planted: cp.Dispatch) -> None:
     needs = account_admin_needs(
         cli=[call["argv"] for call in planted.record.cli_calls()],
         planned=planted.planned,
-        executed=planted.record.modules(),
+        executed=planted.record.executions(),
     )
     python = re.compile(r"\S*/deploy-python(?=\s)")
 
     assert sorted(python.sub("$PY", need) for need in needs) == sorted(PLANTED_NEEDS)
 
 
-def test_a_planted_agentic_tool_is_found_though_the_tree_stops_calling_it_agentic_only(planted: cp.Dispatch) -> None:
-    """Review of #330: a core file calling an agentic tool drops it from a set read from that tree."""
+def test_planted_agentic_tools_are_found_though_the_tree_stops_calling_them_agentic_only(planted: cp.Dispatch) -> None:
+    """Review of #330: a core file calling an agentic tool drops it from a set read from that tree.
 
-    assert PLANTED_AGENTIC in _modules(planted) & checks.AGENTIC_ONLY_MODULES
-    assert PLANTED_AGENTIC not in checks.agentic_only_modules(planted.replay.checkout / "scripts")
+    Planned with ``-m``, executed by path, and imported by a heredoc: each is
+    found, the first two though the planted tree stops naming them agentic-only.
+    """
+
+    executed = {call.tool() for call in planted.record.executions()}
+    found = (_modules(planted) | _imported(planted)) & checks.AGENTIC_ONLY_MODULES
+
+    assert found == {PLANTED_AGENTIC, EXECUTED_AGENTIC, IMPORTED_AGENTIC}
+    assert EXECUTED_AGENTIC in executed - _planned_tools(planted)
+    assert IMPORTED_AGENTIC not in _modules(planted)
+    assert not {PLANTED_AGENTIC, EXECUTED_AGENTIC} & checks.agentic_only_modules(planted.replay.checkout / "scripts")
 
 
-def test_a_planted_bundle_call_by_path_to_another_target_is_found(planted: cp.Dispatch) -> None:
-    stray = [command for command in planted.planned if BUNDLE_CALL.search(command) and TARGET.findall(command) != ["client"]]
+def test_planted_bundle_calls_to_another_target_are_found(planted: cp.Dispatch) -> None:
+    """Planned by path, and executed through the CLI and through the wrapper (review of #330)."""
 
-    assert len(stray) == 1 and "tools/databricks/bundle_env.py validate -t dev" in stray[0], stray
+    cli = [call["argv"] for call in planted.record.cli_calls()]
+    stray = _stray_targets(planted.planned, cli, planted.record.executions())
+
+    assert len(stray) == 3, stray
+    assert "tools/databricks/bundle_env.py validate -t dev" in stray[0], stray
+    assert stray[1:] == ["cli: databricks bundle validate -t dev", "executed: -m tools.databricks.bundle_env --help -t dev"]
 
 
 def test_planted_log_and_summary_leaks_are_found(planted: cp.Dispatch, values: dict[str, str]) -> None:

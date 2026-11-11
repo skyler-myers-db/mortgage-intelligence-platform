@@ -12,7 +12,9 @@ Four ledgers are classed here:
   (tests/fixtures/role_recording_cli.py), by its argv;
 * each command a dry run plans (its ``$ <command>`` lines), the calls a live
   run would make;
-* each ``-m`` module the dry run's interpreter really ran;
+* each call the dry run's interpreter really ran (``Execution``): a tool, run
+  with ``-m`` or by path behind any interpreter flag, by the table below, and
+  inline code, ``-c`` or a script on stdin (a heredoc), by what it reaches;
 * each account or workspace SDK call the stub account API answers
   (``FakeEstate.calls`` in tests/fixtures/fake_databricks_account.py, which
   records every call the bootstrap makes).
@@ -26,7 +28,15 @@ it, an unknown executable or an unknown CLI command group or global flag.
 ``account_admin_needs`` reports ``unclassified`` like an account-admin need:
 the map fails closed. tests/unit/test_client_portability_integrity.py checks
 the table against the code: no tool reviewed as ``workspace`` reaches an
-account API through its imports.
+account API through its imports (``account_api_reach``).
+
+Inline code has no table entry, so it is held to that same rule directly
+(review of #330): it is ``workspace`` only when its text names no account
+API, every repository module it imports exists and none of them reaches an
+account API, and it neither loads code dynamically nor starts a process;
+otherwise it is ``unclassified`` (``account_admin`` when it imports the human
+bootstrap). A ``databricks api`` call is ``workspace`` only on a reviewed
+workspace path, and any path with an ``accounts`` segment is an account call.
 
 A read is ``read``: the human bootstrap reads the account under the account
 admin's own fresh login (tools/clients/bootstrap_session.py), and no CI step
@@ -37,9 +47,14 @@ Standard library only: the stub CLI imports it from the sandbox clone.
 
 from __future__ import annotations
 
+import ast
+import functools
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[2]
 NONE = "none"
 READ = "read"
 WORKSPACE = "workspace"  # at most the deployer's workspace authority
@@ -99,6 +114,81 @@ ACCOUNT_PRINCIPAL_MODULES = frozenset({"tools.clients.live_checks"})
 # The account admin's own work, human-run under a fresh login.
 HUMAN_ONLY_MODULES = frozenset({"tools.clients.bootstrap_account", "tools.clients.bootstrap_session"})
 REVIEWED_MODULES = WORKSPACE_MODULES | ACCOUNT_IDENTITY_MODULES | ACCOUNT_PRINCIPAL_MODULES
+# Named by a core-tier deploy file, but neither planned nor run by the plan
+# and release dry runs the proof replays: a live-only branch (``DRY_RUN -eq
+# 0``), another phase, or a mention in a message. Outside the proof (review
+# of #330), and unclassified should a dry run ever reach one; listed so that
+# no tool joins a deploy file unclassed (the integrity module checks it).
+OUTSIDE_PROOF_MODULES = frozenset(
+    {
+        "tools.clients.estate_inventory",
+        "tools.clients.install_checks",
+        "tools.clients.lakebase_handover",
+        "tools.clients.policy",
+        "tools.databricks.adopt_live",
+        "tools.databricks.agent_proxy_credential_bundle",
+        "tools.databricks.app_core_rollback",
+        "tools.databricks.app_deployment_freeze",
+        "tools.databricks.app_deployment_lease",
+        "tools.databricks.app_deployment_rollback",
+        "tools.databricks.app_first_install_journal",
+        "tools.databricks.app_release_contract",
+        "tools.databricks.app_resource_bindings",
+        "tools.databricks.app_rollback_bootstrap_gate",
+        "tools.databricks.app_rollback_secret_scope",
+        "tools.databricks.audit_agent_runtime_foreign_uc_access",
+        "tools.databricks.audit_global_m2m_access",
+        "tools.databricks.bundle_state",
+        "tools.databricks.catalog_bootstrap_skip_rule",
+        "tools.databricks.converge_app_release_access",
+        "tools.databricks.core_blue",
+        "tools.databricks.core_blue_capture",
+        "tools.databricks.cutover_agent_runtime_supervisor",
+        "tools.databricks.data_phase_app_identity",
+        "tools.databricks.deploy_prestop_probes",
+        "tools.databricks.estate.inventory",
+        "tools.databricks.estate.inventory_check",
+        "tools.databricks.first_install_bootstrap",
+        "tools.databricks.gateway_model_archival_cli",
+        "tools.databricks.genie_space_pin",
+        "tools.databricks.install_state_adopt",
+        "tools.databricks.job_phase_runner",
+        "tools.databricks.m2m_identity_contract",
+        "tools.databricks.oauth_credential_recovery_cli",
+        "tools.databricks.pii_salt_scope",
+        "tools.databricks.plan_report_publish",
+        "tools.databricks.provision_agent_proxy_secret",
+        "tools.databricks.quiesce_window",
+        "tools.databricks.quiesce_window_plan",
+        "tools.databricks.quiesce_window_watchdog",
+        "tools.databricks.stop_app_fail_closed",
+        "tools.databricks.stop_primitive_map",
+        "tools.databricks.verify_agent_runtime_uc_boundary_dual_authority",
+        "tools.databricks.verify_market_rate_alignment",
+        "tools.frontend_deps_check",
+        "tools.oauth_m2m_mint",
+        "tools.sync_lifecycle_warehouse",
+    }
+)
+# The ones that reach an account API through their imports: their live
+# authority is unproven here, and a tool joins this list only by review.
+OUTSIDE_PROOF_ACCOUNT_REACH = frozenset(
+    {
+        "tools.clients.estate_inventory",
+        "tools.clients.install_checks",
+        "tools.databricks.adopt_live",
+        "tools.databricks.app_core_rollback",
+        "tools.databricks.app_deployment_rollback",
+        "tools.databricks.audit_agent_runtime_foreign_uc_access",
+        "tools.databricks.audit_global_m2m_access",
+        "tools.databricks.core_blue_capture",
+        "tools.databricks.deploy_prestop_probes",
+        "tools.databricks.first_install_bootstrap",
+        "tools.databricks.oauth_credential_recovery_cli",
+        "tools.databricks.provision_agent_proxy_secret",
+        "tools.databricks.verify_agent_runtime_uc_boundary_dual_authority",
+    }
+)
 
 # The account API's changes, by (plane, api, method), as the fake account
 # names them. Anything else that is not a read is unclassified.
@@ -123,7 +213,13 @@ READ_METHODS = frozenset({"list", "get", "get_rule_set", "current", "get_workspa
 CLI_VALUE_FLAGS = frozenset({"-p", "--profile", "-o", "--output", "-t", "--target", "--log-level", "--log-file", "--log-format"})
 CLI_BARE_FLAGS = frozenset({"--debug"})
 WORKSPACE_CLI_GROUPS = frozenset({"apps", "bundle"})
-_WORKSPACE_API_PATH = re.compile(r"/api/2\.[0-9]/(?!accounts(?:/|$))\S+")
+# ``databricks api <verb> <path>``: the workspace REST paths the deploy calls,
+# reviewed (the SQL Statement Execution API). Any other path is unclassified,
+# and a path or argument with an ``accounts`` segment anywhere
+# (``/api/2.0/accounts/...``, ``/api/2.0/preview/accounts/...``) is an
+# account call (review of #330).
+WORKSPACE_API_PATHS = (re.compile(r"/api/2\.0/sql/statements(?:/[A-Za-z0-9_-]+)*/?"),)
+_ACCOUNTS_SEGMENT = re.compile(r"(?:^|/)accounts(?:/|$)")
 
 # The planned-command label of run_with_account_identity
 # (scripts/lib/deploy_identity_lifecycle.sh); a module is read from the front
@@ -159,24 +255,48 @@ def cli_role(argv: Sequence[str]) -> str:
     if rest[0] == "account":
         return ACCOUNT_ADMIN
     if rest[0] == "api":
-        # ``api <verb> <path>``: an accounts path, or any path but a workspace API, is no workspace call.
-        if len(rest) >= 3 and _WORKSPACE_API_PATH.fullmatch(rest[2]):
-            return WORKSPACE
-        return ACCOUNT_ADMIN if any("/accounts" in token for token in rest[1:]) else UNCLASSIFIED
+        if any(_ACCOUNTS_SEGMENT.search(token) for token in rest[1:]):
+            return ACCOUNT_ADMIN
+        reviewed = len(rest) >= 3 and any(path.fullmatch(rest[2]) for path in WORKSPACE_API_PATHS)
+        return WORKSPACE if reviewed else UNCLASSIFIED
     return WORKSPACE if rest[0] in WORKSPACE_CLI_GROUPS else UNCLASSIFIED
 
 
-def _module(tokens: Sequence[str]) -> str | None:
-    """The tool a Python invocation runs (``-m tools.x`` or ``tools/x.py``), or ``None``."""
+def _target(args: Sequence[str]) -> tuple[str, str | None]:
+    """What an interpreter's arguments run, past the reviewed flags.
 
-    index = 1
-    while index < len(tokens) and tokens[index] in _PY_FLAGS:
+    ``("module", name)``, ``("path", script)``, ``("code", text)`` for ``-c``,
+    ``("stdin", None)`` for ``-`` or no script at all, or ``("unknown", flag)``
+    for a flag the map does not know.
+    """
+
+    index = 0
+    while index < len(args) and args[index] in _PY_FLAGS:
         index += 1
-    if index + 1 < len(tokens) and tokens[index] == "-m":
-        return tokens[index + 1]
-    if index < len(tokens) and (match := _TOOL_PATH.fullmatch(tokens[index])) is not None:
+    if index >= len(args) or args[index] == "-":
+        return "stdin", None
+    head, value = args[index], args[index + 1] if index + 1 < len(args) else None
+    if head == "-m":
+        return "module", value
+    if head == "-c":
+        return "code", value
+    return ("unknown", head) if head.startswith("-") else ("path", head)
+
+
+def _tool(kind: str, value: str | None) -> str | None:
+    """The tool a target runs (``-m tools.x`` or ``tools/x.py``), or ``None``."""
+
+    if kind == "module":
+        return value
+    if kind == "path" and value is not None and (match := _TOOL_PATH.fullmatch(value)) is not None:
         return match.group(1).replace("/", ".")
     return None
+
+
+def _module(tokens: Sequence[str]) -> str | None:
+    """The tool a planned Python invocation runs, its interpreter first, or ``None``."""
+
+    return _tool(*_target(tokens[1:]))
 
 
 def module_role(module: str, *, account_identity: bool = False) -> str:
@@ -207,6 +327,168 @@ def planned_role(command: str) -> str:
     return UNCLASSIFIED if module is None else module_role(module, account_identity=account_identity)
 
 
+# --- what a module reaches through its imports ----------------------------------------
+
+# An account API in source: the SDK's account client, its account-level
+# service classes or an accounts REST path (``/api/2.0/accounts/...`` and
+# the workspace proxies under ``/api/2.0/preview/accounts/...``).
+ACCOUNT_API = re.compile(r"\bAccountClient\b|\bAccount[A-Z]\w*API\b|/api/2\.[0-9]/(?:[\w.-]+/)*accounts\b")
+REPO_PACKAGES = frozenset({"tools", "backend"})
+
+
+def module_files(module: str, repo: Path = REPO) -> tuple[Path, ...]:
+    """A module's source files; a package's ``__init__`` and ``__main__`` (``-m`` runs both)."""
+
+    base = repo.joinpath(*module.split("."))
+    if base.with_suffix(".py").is_file():
+        return (base.with_suffix(".py"),)
+    return tuple(path for path in (base / "__init__.py", base / "__main__.py") if path.is_file())
+
+
+def _import_names(tree: ast.AST) -> set[str]:
+    """Every module name a tree imports, at any depth (lazy imports too), with each ``from`` name."""
+
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            found.add(node.module)
+            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+    return found
+
+
+@functools.cache
+def _imports(module: str, repo: Path) -> frozenset[str]:
+    """The repository modules one module imports."""
+
+    found: set[str] = set()
+    for path in module_files(module, repo):
+        found |= _import_names(ast.parse(path.read_text(encoding="utf-8")))
+    return frozenset(name for name in found if name.split(".")[0] in REPO_PACKAGES and module_files(name, repo))
+
+
+def account_api_reach(module: str, repo: Path = REPO) -> list[str]:
+    """The modules in ``module``'s import closure whose source names an account API."""
+
+    return list(_reach(module, repo))
+
+
+@functools.cache
+def _reach(module: str, repo: Path) -> tuple[str, ...]:
+    seen: set[str] = set()
+    todo = [module]
+    while todo:
+        name = todo.pop()
+        if name not in seen:
+            seen.add(name)
+            todo.extend(_imports(name, repo))
+    return tuple(
+        sorted(name for name in seen if any(ACCOUNT_API.search(path.read_text(encoding="utf-8")) for path in module_files(name, repo)))
+    )
+
+
+# --- what the deploy interpreter really ran -----------------------------------------------
+
+# Inline code that loads code by name or starts a process runs what no
+# reading of its imports can see: it is unclassified.
+DYNAMIC_MODULES = frozenset({"importlib", "runpy", "subprocess", "multiprocessing", "pty", "code", "ctypes"})
+DYNAMIC_BUILTINS = frozenset({"__import__", "exec", "eval", "compile", "breakpoint"})
+_SPAWN = re.compile(r"(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*)")
+
+
+@dataclass(frozen=True)
+class Execution:
+    """One call the deploy interpreter really ran: its arguments and, for a script read from stdin, that script."""
+
+    argv: tuple[str, ...]
+    stdin: str | None = None
+
+    def code(self) -> str | None:
+        """The inline code it ran (``-c`` or stdin), or ``None`` for a tool or an unknown shape."""
+
+        kind, value = _target(self.argv)
+        return value if kind == "code" else self.stdin if kind == "stdin" else None
+
+    def tool(self) -> str | None:
+        """The tool it ran (``-m`` or by path, behind any reviewed flag), or ``None``."""
+
+        return _tool(*_target(self.argv))
+
+    def shown(self) -> str:
+        return " ".join(self.argv) + (" (script on stdin)" if _target(self.argv)[0] == "stdin" else "")
+
+
+def _repo_import_resolves(node: ast.Import | ast.ImportFrom, repo: Path) -> bool:
+    """Whether every repository module an import statement names exists (a ``from`` name may be an attribute)."""
+
+    def exists(name: str) -> bool:
+        return bool(module_files(name, repo)) or repo.joinpath(*name.split(".")).is_dir()
+
+    if isinstance(node, ast.Import):
+        return all(exists(a.name) for a in node.names if a.name.split(".")[0] in REPO_PACKAGES)
+    module = node.module or ""
+    if node.level or module.split(".")[0] not in REPO_PACKAGES:
+        return node.level == 0
+    return exists(module) and all(
+        exists(f"{module}.{a.name}") or bool(module_files(module, repo)) for a in node.names
+    )
+
+
+def _loads_or_spawns(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+            if any(name.split(".")[0] in DYNAMIC_MODULES for name in names):
+                return True
+            if isinstance(node, ast.ImportFrom) and node.module == "os" and any(_SPAWN.fullmatch(a.name) for a in node.names):
+                return True
+        elif isinstance(node, ast.Name) and node.id in DYNAMIC_BUILTINS:
+            return True
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os":
+            if _SPAWN.fullmatch(node.attr):
+                return True
+    return False
+
+
+def inline_imports(code: str | None, repo: Path = REPO) -> frozenset[str]:
+    """The repository modules inline code imports (none when it does not parse)."""
+
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return frozenset()
+    names = _import_names(tree)
+    return frozenset(name for name in names if name.split(".")[0] in REPO_PACKAGES and module_files(name, repo))
+
+
+def inline_role(code: str | None, repo: Path = REPO) -> str:
+    """The class of inline code: ``workspace`` only when neither it nor a repository module it imports reaches an account API."""
+
+    if code is None:
+        return UNCLASSIFIED
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return UNCLASSIFIED
+    imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
+    if ACCOUNT_API.search(code) or _loads_or_spawns(tree) or not all(_repo_import_resolves(n, repo) for n in imports):
+        return UNCLASSIFIED
+    modules = inline_imports(code, repo)
+    if modules & HUMAN_ONLY_MODULES:
+        return ACCOUNT_ADMIN
+    return UNCLASSIFIED if any(account_api_reach(module, repo) for module in modules) else WORKSPACE
+
+
+def executed_role(call: Execution, repo: Path = REPO) -> str:
+    """The class of one call the deploy interpreter ran: a tool by the table, inline code by what it reaches."""
+
+    if _target(call.argv)[0] in ("code", "stdin"):
+        return inline_role(call.code(), repo)
+    tool = call.tool()
+    return UNCLASSIFIED if tool is None else module_role(tool)
+
+
 def sdk_role(plane: str, api: str, method: str) -> str:
     """The class of one SDK call the stub account API answered."""
 
@@ -219,14 +501,14 @@ def account_admin_needs(
     *,
     cli: Iterable[Sequence[str]] = (),
     planned: Iterable[str] = (),
-    executed: Iterable[str] = (),
+    executed: Iterable[Execution] = (),
     sdk: Iterable[tuple[str, str, str]] = (),
 ) -> list[str]:
     """Every call that needs account-admin authority or that the map cannot class."""
 
     needs = [f"cli ({role}): databricks {' '.join(argv)}" for argv in cli if (role := cli_role(argv)) in NEEDS]
     needs += [f"planned ({role}): {command}" for command in planned if (role := planned_role(command)) in NEEDS]
-    needs += [f"executed ({role}): -m {module}" for module in executed if (role := module_role(module)) in NEEDS]
+    needs += [f"executed ({role}): {call.shown()}" for call in executed if (role := executed_role(call)) in NEEDS]
     for plane, api, method in sdk:
         role = sdk_role(plane, api, method)
         if role in NEEDS:

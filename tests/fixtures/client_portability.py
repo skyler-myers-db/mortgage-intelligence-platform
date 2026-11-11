@@ -19,9 +19,11 @@ two recorders in place:
 
 * the role-recording stub CLI (tests/fixtures/role_recording_cli.py) as
   ``databricks``;
-* a deploy interpreter (``MIP_DEPLOY_PYTHON``) that runs the real one and
-  keeps a copy of every App deployment payload ``app_deploy_payload`` emits,
-  which the deploy deletes on exit.
+* a deploy interpreter (``MIP_DEPLOY_PYTHON``) that runs the real one,
+  records every call's arguments (and the script, when Python reads it from
+  stdin: a heredoc) for tests/fixtures/role_ledger.py to class, and keeps a
+  copy of every App deployment payload ``app_deploy_payload`` emits, which
+  the deploy deletes on exit.
 
 ``validate`` then executes, in that same clone, the ``bundle_env validate -t
 client`` a dry run only plans, against the stub CLI. The checks that read the
@@ -53,6 +55,7 @@ from tests.fixtures.client_profiles import (
 )
 from tests.fixtures.deploy_sandbox import ANSI, planned_commands
 from tests.fixtures.dispatch_replay import Job, Replay, replay, run
+from tests.fixtures.role_ledger import Execution
 from tools.clients import dispatch_acks
 from tools.clients import profile as views
 from tools.clients.ci_profile import env_local_text
@@ -80,8 +83,26 @@ SANDBOX_SECRETS = {
     "DATABRICKS_ACCOUNT_CLIENT_SECRET": "acme-account-secret-EXAMPLE",
     "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": base64.urlsafe_b64encode(bytes(range(96, 128))).decode("ascii").rstrip("="),
 }
+# Each call is one file: its argument count and arguments, NUL-separated, and
+# beside it the script when Python reads one from stdin (``-``, or no script
+# after the flags). A flag that takes a value leaves the stdin unread here,
+# and role_ledger classes that call unclassified.
 _INTERPRETER = """#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$PROOF_PY_LOG"
+call="$(mktemp "$PROOF_PY_CALLS/call.XXXXXX")"
+printf '%s\\0' "$#" "$@" > "$call"
+from_stdin=1
+for arg in "$@"; do
+  case "$arg" in
+    -) break ;;
+    -c|-m) from_stdin=0; break ;;
+    -*) ;;
+    *) from_stdin=0; break ;;
+  esac
+done
+if [[ "$from_stdin" -eq 1 ]]; then
+  cat > "$call.stdin"
+  exec < "$call.stdin"
+fi
 if [[ "${1:-}" == "-m" && "${2:-}" == "tools.databricks.app_deploy_payload" ]]; then
   captured="$(mktemp "$PROOF_PAYLOAD_DIR/payload.XXXXXX")"
   set +e
@@ -188,14 +209,14 @@ class Recorders:
     """Where the stubs write: the CLI's ledger, the interpreter's calls and the payload copies."""
 
     cli_ledger: Path
-    py_log: Path
+    py_calls: Path
     payload_dir: Path
     interpreter: Path
 
     def env(self) -> dict[str, str]:
         return {
             "PROOF_CLI_LEDGER": str(self.cli_ledger),
-            "PROOF_PY_LOG": str(self.py_log),
+            "PROOF_PY_CALLS": str(self.py_calls),
             "PROOF_PAYLOAD_DIR": str(self.payload_dir),
             "MIP_DEPLOY_PYTHON": str(self.interpreter),
         }
@@ -208,19 +229,25 @@ class Recorders:
     def payloads(self) -> list[dict[str, Any]]:
         return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(self.payload_dir.glob("payload.*"))]
 
-    def modules(self) -> list[str]:
-        """The module of every ``-m`` call the deploy interpreter really ran."""
+    def executions(self) -> list[Execution]:
+        """Every call the deploy interpreter really ran, in any shape: ``-m``, by path, ``-c`` or a heredoc."""
 
-        if not self.py_log.exists():
-            return []
-        calls = [line.split() for line in self.py_log.read_text(encoding="utf-8").splitlines()]
-        return [call[1] for call in calls if len(call) > 1 and call[0] == "-m"]
+        calls = []
+        for path in sorted(self.py_calls.glob("call.*")):
+            if path.name.endswith(".stdin"):
+                continue
+            count, *argv = path.read_bytes().decode("utf-8", "surrogateescape").split("\0")
+            assert len(argv) == int(count) + 1 and argv[-1] == "", path
+            stdin = path.with_name(path.name + ".stdin")
+            calls.append(Execution(tuple(argv[:-1]), stdin.read_text(encoding="utf-8") if stdin.exists() else None))
+        return calls
 
 
 def recorders(tmp_path: Path, name: str = "dry-run") -> Recorders:
-    payload_dir = tmp_path / f"{name}-payloads"
+    payload_dir, py_calls = tmp_path / f"{name}-payloads", tmp_path / f"{name}-python-calls"
     payload_dir.mkdir(exist_ok=True)
-    return Recorders(tmp_path / f"{name}-cli.jsonl", tmp_path / f"{name}-python.log", payload_dir, tmp_path / "deploy-python")
+    py_calls.mkdir(exist_ok=True)
+    return Recorders(tmp_path / f"{name}-cli.jsonl", py_calls, payload_dir, tmp_path / "deploy-python")
 
 
 def prepare(record: Recorders, plants: Sequence[Plant] = ()) -> Callable[[Path, dict[str, str]], None]:

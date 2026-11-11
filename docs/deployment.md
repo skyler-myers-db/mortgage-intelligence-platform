@@ -4301,12 +4301,18 @@ The proof fails in any of these cases:
 - an agentic step runs (held to a committed list of the agentic-only tools,
   and to a reviewed list of the tools a core run may use), or the refresh is
   not PAUSED;
-- a CI step needs account-admin authority, or plans or runs a tool, a CLI
-  command group or a CLI flag that the reviewed role table
-  (`tests/fixtures/role_ledger.py`) does not class: an unclassified call
-  counts as an account-admin need, and a tool reviewed as workspace-only may
-  not reach an account API through its imports;
-- a bundle call, in any form, addresses another target than `client`, or a
+- a call the dry runs plan or run needs account-admin authority, or is one
+  the reviewed role table (`tests/fixtures/role_ledger.py`) does not class:
+  a tool (by `-m` or by path, behind any interpreter flag), a CLI command
+  group or flag, or a `databricks api` path other than the reviewed SQL
+  statements path (any `accounts` path segment is an account call). An
+  unclassified call counts as an account-admin need. A tool reviewed as
+  workspace-only may not reach an account API through its imports, and inline
+  Python the interpreter runs (`-c` or a heredoc) is held to that same rule
+  directly: it may not name an account API, import a module that reaches
+  one, load code by name or start a process;
+- a bundle call addresses another target than `client`, whether it is
+  planned, run through the CLI or run through the `bundle_env` wrapper, or a
   bundle variable databricks.yml declares resolves to a client-#1 default;
 - an identifying value reaches the public log or the step summary in any
   letter case;
@@ -4321,13 +4327,25 @@ the sql/ sources with only the demo feeds switched on, a reference read from
 the sources rather than from the renderer. A dispatch with planted defects
 proves that each check can fail.
 
+The proof covers what the `plan` and `release` dry runs plan or run. A tool
+that only a live run (`DRY_RUN -eq 0`) or another phase reaches is outside
+it. `tests/unit/test_client_portability_integrity.py` therefore holds every
+tool a core-tier deploy file names to a list: the reviewed role table, the
+human-only bootstrap, or `OUTSIDE_PROOF_MODULES`. It also pins the tools on
+that last list that reach an account API through their imports
+(`OUTSIDE_PROOF_ACCOUNT_REACH`), so a new one cannot join unnoticed. Their
+live authority is not proven here.
+
 The owner attestation layer is deferred (M1-PR5). So the integrity it
 exercises is main's: the record's exact-digest pin and the dispatch's exact
 digest acks. Nothing signs anything. backend-tests ignores both modules, so
-they run once per push; `tests/unit/test_ci_client_portability_job.py` pins
-both sides, and refuses a job or step that is switched off (`if`,
-`continue-on-error`, `needs`) or a pytest command that deselects or swallows
-a failure. The job is advisory until the owner makes it a required check.
+they run once per push. `tests/unit/test_ci_client_portability_job.py` pins
+both sides and the proof job's steps whole. It refuses a job or step that is
+switched off (`if`, `continue-on-error`, `needs`), a step that writes
+`$GITHUB_ENV` or checks out another ref, a pytest command that deselects or
+swallows a failure, a trigger filter that skips the workflow, and a
+workflow-wide shell or variable that changes what the shell or pytest runs.
+The job is advisory until the owner makes it a required check.
 
 ## Jobs identity and pinned job parameters (M2-PR5)
 
