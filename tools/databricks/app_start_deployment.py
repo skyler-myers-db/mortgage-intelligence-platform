@@ -1,28 +1,53 @@
-"""The deployment ``apps start`` creates: start, wait, prove (attack O1, M0-PR8).
+"""The deployment ``apps start`` creates: start, find, wait, prove (attack O1, M0-PR8).
 
-``apps start`` does not resume the stopped deployment. The SDK pinned in
-``uv.lock`` (databricks-sdk 0.103.0, ``databricks/sdk/service/apps.py``)
-documents ``AppsAPI.start`` as "Start the last active deployment of the app"
-and ``App.default_source_code_path`` as "the workspace source code path of the
-last active deployment", and ``start`` returns the App (``Wait`` over
-``wait_get_app_active``, compute ACTIVE only, never a deployment state). The
-Databricks CLI v1.10.0 ``apps start NAME`` waits for compute ACTIVE unless
-``--no-wait``. A governed run's log (``run_30417008206``) showed the start
-creating a ``pending_deployment`` with a fresh ``deployment_id`` in SNAPSHOT
-mode. Spike S7 (a throwaway App) is still owed for the rest: whether the env
-config carries over, and the bookkeeping of a start on a FAILED-active App.
+``apps start`` does not resume the stopped deployment. Spike S7 (a throwaway
+App, 2026-11-06 and 2026-11-10, CLI v1.10.0, the SDK pinned in ``uv.lock``)
+measured what it does instead:
 
-Until then this module assumes the worst case and proves everything:
+* every start creates a NEW deployment (SNAPSHOT mode) whose ``/src/``
+  snapshot is the CURRENT bytes of the App's ``default_source_code_path``,
+  with exactly the env-name set of the App's newest deployment;
+* neither the start response nor an ``apps.get`` right after it shows the
+  new deployment, as ``pending_deployment`` or as ``active_deployment``: the
+  compute is STARTING. It turns ACTIVE after 96-108 s (three samples, a
+  trivial App); only then does the new id appear, in ``pending_deployment``
+  for about 1 s, then as ``active_deployment`` IN_PROGRESS, then SUCCEEDED or
+  FAILED (3-6 s later for the trivial App; the real App installs and serves a
+  whole tree, so its own deploy time comes on top). ``list_deployments``
+  shows it from the same moment;
+* a STOPPED App's GET omits ``active_deployment`` entirely;
+* a FAILED deployment does become active and does move
+  ``default_source_code_path`` to its folder, so a start on a FAILED-active
+  App reruns the failed folder and env set: the newest deployment in ANY
+  state decides what a start runs, never the newest SUCCEEDED one;
+* ``default_source_code_path`` is not settable (create-update rejects the
+  mask, update ignores the field); only a deployment moves it.
 
-* ``start_app`` starts without waiting and returns the id of the deployment
-  the start created: the start response's ``pending_deployment``, else the
-  App's ``pending_deployment`` read right after. No readable id refuses; a
-  changed ``active_deployment`` is never taken as that id.
+So this module proves everything from what the API shows:
+
+* ``start_app`` lists the App's deployment ids BEFORE the start (the
+  baseline; the window journals it so a resume finds the same start), starts
+  without waiting and polls, at most every 5 s within
+  ``START_WAIT_TIMEOUT_S``, until exactly ONE id outside the baseline shows
+  in ``pending_deployment``, ``active_deployment`` or ``list_deployments``.
+  Two refuse (``start_ambiguous``), none by the deadline refuses
+  (``start_timeout``); an id in the baseline, an active deployment that
+  changed to an older one included, is never the start's.
 * ``wait_for_terminal`` polls ``get_deployment`` for that id until SUCCEEDED,
   FAILED or CANCELLED. It never reads the active deployment.
 * ``prove_start_deployment`` requires SUCCEEDED, the source path blue's own
   deployment named, a ``/src/`` snapshot whose full-tree digest equals the
   expected one, and the exact env-name set of the signed record's payload.
+* ``last_deployment_is`` (tier a) judges a stopped App by its newest
+  deployment of any state and its default source, since its GET has no
+  active deployment.
+* ``start_reruns_blue`` (tier a, before any start) re-hashes that folder
+  against blue's signed digest and checks blue's env-name set: a start
+  snapshots the folder's CURRENT bytes, so anyone editing it silently
+  changes what a start runs, and tier a never starts bytes it already
+  knows are not blue. (Tier b over a stopped App still starts it first,
+  since Databricks deploys only to a running App: that start runs the
+  folder's current bytes until blue's immutable copy replaces them.)
 
 Every refusal is a ``StartProofError`` with a reviewed code, and no message
 names a path, an id or a value.
@@ -39,8 +64,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from tools.databricks.app_deployment_state import deployment_state, immutable_source
-from tools.databricks.app_release_contract import api_path
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks.app_deployment_state import (
+    active_deployment_id,
+    deployment_state,
+    immutable_source,
+    newest_deployment,
+)
+from tools.databricks.app_release_contract import ReleaseContractError, api_path
 from tools.databricks.app_release_retry import RATE_LIMIT_RETRY, RateLimitRetry
 from tools.databricks.app_release_source import remote_files
 from tools.databricks.app_rollback_record_contract import _text
@@ -48,6 +79,9 @@ from tools.databricks.app_rollback_record_contract import _text
 TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 START_WAIT_TIMEOUT_S = 20 * 60.0
 START_POLL_INTERVAL_S = 10.0
+# The start's new id shows in pending_deployment for about 1 s (spike S7), and
+# in active_deployment and list_deployments after it: poll at most every 5 s.
+START_ID_POLL_INTERVAL_S = 5.0
 TREE_DIGEST_WORKERS = 4
 _TREE_DOMAIN = "mip-app-source-tree-v1"
 _CHUNK = 1 << 20
@@ -55,6 +89,7 @@ _CHUNK = 1 << 20
 PROOF_CODES = frozenset(
     {
         "start_unreadable",
+        "start_ambiguous",
         "start_timeout",
         "start_not_succeeded",
         "start_source_path",
@@ -96,35 +131,105 @@ def _pending_id(app: object) -> str:
     return _text(getattr(getattr(app, "pending_deployment", None), "deployment_id", None))
 
 
-def start_app(workspace: Any, *, app_name: str) -> str:
-    """Start the App without waiting and return the id of the deployment it created."""
-
-    waiter = workspace.apps.start(app_name)
-    created = _pending_id(getattr(waiter, "response", None))
-    if not created:
-        created = _pending_id(workspace.apps.get(app_name))
-    if not created:
-        raise StartProofError(
-            "start_unreadable",
-            "the start returned no pending deployment id, and the App shows none",
-        )
-    return created
+def _active_id(app: object) -> str:
+    return _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
 
 
-def resume_start(workspace: Any, *, app_name: str) -> str:
-    """The deployment an earlier, unjournaled start created: the App's pending one.
+def deployment_ids(workspace: Any, *, app_name: str) -> frozenset[str]:
+    """Every deployment id the App lists: the baseline a start's new id is found against."""
 
-    Never a new start: the journal says a start may have run, and a second one
-    would hide the first. No readable pending id refuses (the caller stops the
-    App and journals the refusal).
+    ids = [_text(getattr(item, "deployment_id", None)) for item in workspace.apps.list_deployments(app_name)]
+    if any(not deployment_id for deployment_id in ids):
+        raise StartProofError("start_unreadable", "a listed deployment has no immutable id")
+    return frozenset(ids)
+
+
+def find_start_deployment(
+    workspace: Any,
+    *,
+    app_name: str,
+    baseline: frozenset[str],
+    resumed: bool = False,
+    timeout_s: float = START_WAIT_TIMEOUT_S,
+    interval_s: float = START_ID_POLL_INTERVAL_S,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
+) -> str:
+    """The one deployment id outside ``baseline`` the App shows, polled until the deadline.
+
+    A start's id shows only once the compute is ACTIVE, about 100 s after the
+    start (spike S7), in ``pending_deployment``, ``active_deployment`` or
+    ``list_deployments``. Two new ids refuse (``start_ambiguous``), none by the
+    deadline refuses (``start_timeout``). A resumed start whose App is still
+    STOPPED with nothing new never started: it refuses at once, never waits.
     """
 
-    created = _pending_id(workspace.apps.get(app_name))
-    if not created:
-        raise StartProofError(
-            "start_unreadable", "the journaled start has no readable pending deployment"
-        )
-    return created
+    if not baseline:
+        raise StartProofError("start_unreadable", "there is no deployment baseline to find the start against")
+    sleep, clock = sleep or time.sleep, clock or time.monotonic
+    deadline = clock() + timeout_s
+    while True:
+        app = workspace.apps.get(app_name)
+        shown = {_pending_id(app), _active_id(app)} | deployment_ids(workspace, app_name=app_name)
+        created = sorted(shown - baseline - {""})
+        if len(created) > 1:
+            raise StartProofError("start_ambiguous", "more than one new deployment appeared after the start")
+        if created:
+            return created[0]
+        if resumed and _state(app) == "STOPPED":
+            raise StartProofError(
+                "start_unreadable", "the journaled start never ran: the App is stopped with no new deployment"
+            )
+        if clock() >= deadline:
+            raise StartProofError("start_timeout", "no new deployment appeared after the start")
+        sleep(min(interval_s, START_ID_POLL_INTERVAL_S))
+
+
+def start_app(
+    workspace: Any, *, app_name: str, baseline: frozenset[str] | None = None, **poll: Any
+) -> str:
+    """Start the App without waiting and return the id of the deployment it created.
+
+    ``baseline`` is the App's deployment ids read before the start (the window
+    journals it first); without one it is read here.
+    """
+
+    before = deployment_ids(workspace, app_name=app_name) if baseline is None else baseline
+    if not before:
+        raise StartProofError("start_unreadable", "the App lists no deployment before the start")
+    workspace.apps.start(app_name)  # the Wait is never awaited: compute ACTIVE is no deployment
+    return find_start_deployment(workspace, app_name=app_name, baseline=before, **poll)
+
+
+def resume_start(workspace: Any, *, app_name: str, baseline: frozenset[str], **poll: Any) -> str:
+    """The deployment an earlier, unjournaled start created, found against its journaled baseline.
+
+    Never a new start: the journal says a start may have run, and a second one
+    would hide the first. No baseline, an App still stopped with nothing new,
+    two new ids or none by the deadline refuse (the caller stops the App and
+    journals the refusal).
+    """
+
+    return find_start_deployment(workspace, app_name=app_name, baseline=baseline, resumed=True, **poll)
+
+
+def current_deployment_id(workspace: Any, *, app_name: str) -> str:
+    """The deployment a running App serves, or the one a STOPPED App's start reruns (spike S7).
+
+    A stopped App's GET has no active deployment: its newest deployment of any
+    state, nothing pending, is the one whose folder and env set a start
+    snapshots. Any other state reads the active deployment, fail-closed.
+    """
+
+    app = workspace.apps.get(app_name)
+    if _state(app) != "STOPPED":
+        return active_deployment_id(workspace, app_name=app_name)
+    if getattr(app, "pending_deployment", None) is not None:
+        raise RuntimeError("App has a pending deployment; rollback identity is not stable")
+    newest = newest_deployment(workspace.apps.list_deployments(app_name))
+    if newest is None:
+        raise RuntimeError("the stopped App has no deployment to bind")
+    return _text(getattr(newest, "deployment_id", None))
 
 
 def wait_for_terminal(
@@ -260,39 +365,72 @@ def digest_entries(entries: Iterable[tuple[str, int, str]]) -> str:
 
 
 def last_deployment_is(workspace: Any, *, app_name: str, deployment_id: str) -> bool:
-    """True when ``deployment_id`` is the App's last active deployment (tier a).
+    """True when ``deployment_id`` is what the App runs and what its next start reruns (tier a).
 
-    Active, the newest SUCCEEDED, nothing pending, and the App's default source
-    (when the API returns one) is that deployment's own source: the source a
-    start snapshots. A FAILED later attempt never became active, so it never
-    moved the default source; the post-start proofs catch any other drift.
+    Nothing pending, and the App's newest deployment of ANY state is that one
+    and SUCCEEDED: a FAILED later deployment becomes active and moves the
+    default source, so a start would rerun it (spike S7). A running App must
+    serve it as its active deployment, and its default source (when returned)
+    must be that deployment's own source. A STOPPED App's GET has no active
+    deployment, so there the default source must equal it, always: the folder
+    a start snapshots. The post-start proofs catch any byte drift in it.
     """
 
     app = workspace.apps.get(app_name)
-    if _pending_id(app):
+    if getattr(app, "pending_deployment", None) is not None or _pending_id(app):
         return False
-    active = _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
-    succeeded = [
-        item
-        for item in workspace.apps.list_deployments(app_name)
-        if deployment_state(item) == "SUCCEEDED" and _text(getattr(item, "deployment_id", None))
-    ]
-    succeeded.sort(
-        key=lambda item: (
-            _text(getattr(item, "create_time", None)),
-            _text(getattr(item, "update_time", None)),
-            _text(getattr(item, "deployment_id", None)),
-        )
-    )
-    if active != deployment_id or not succeeded:
+    stopped = _state(app) == "STOPPED"
+    active = _active_id(app)
+    if active != deployment_id and (not stopped or active):
         return False
-    if _text(getattr(succeeded[-1], "deployment_id", None)) != deployment_id:
+    try:
+        newest = newest_deployment(workspace.apps.list_deployments(app_name))
+    except RuntimeError:
+        return False
+    if (
+        newest is None
+        or _text(getattr(newest, "deployment_id", None)) != deployment_id
+        or deployment_state(newest) != "SUCCEEDED"
+    ):
         return False
     default_source = _text(getattr(app, "default_source_code_path", None))
-    if default_source:
-        blue = workspace.apps.get_deployment(app_name, deployment_id)
-        return default_source == _text(getattr(blue, "source_code_path", None))
-    return True
+    if not default_source and not stopped:
+        return True
+    blue_source = _text(getattr(workspace.apps.get_deployment(app_name, deployment_id), "source_code_path", None))
+    return bool(blue_source) and default_source == blue_source
+
+
+def start_reruns_blue(
+    workspace: Any,
+    *,
+    app_name: str,
+    deployment_id: str,
+    tree_sha256: str,
+    names: frozenset[str],
+    folder: str | None = None,
+    digest: Callable[[Any, str], str] = tree_digest,
+) -> bool:
+    """True when a start of the stopped App would snapshot exactly blue: its bytes and env set.
+
+    Tier a's proof before any start (spike S7). ``last_deployment_is`` proved
+    the folder a start snapshots is blue's deployment's own and that blue is
+    the newest deployment, whose env-name set a start carries. This re-hashes
+    that folder against blue's signed full-tree digest and checks blue's env
+    names, and (``folder``) that it is the folder the signed record names. A
+    folder gone or unreadable, another folder, another env set or other bytes
+    is False: the caller takes tier b and never starts it.
+    """
+
+    blue = workspace.apps.get_deployment(app_name, deployment_id)
+    source = _text(getattr(blue, "source_code_path", None))
+    if not source or not tree_sha256 or (folder is not None and source != folder):
+        return False
+    try:
+        if env_names(blue) != names:
+            return False
+        return digest(workspace, source) == tree_sha256
+    except (StartProofError, NotFound, ResourceDoesNotExist, ReleaseContractError):
+        return False
 
 
 def prove_start_deployment(

@@ -35,10 +35,12 @@ run-name: nightly client=${{ inputs.client }} sha=${{ github.sha }}
 # so. Lead outcomes, call dispositions, snoozes and loan-officer assignments
 # are never written: on every install the suite test and the browser tests
 # that write them are deselected (listed gaps), and
-# tests/unit/test_nightly_workflow_writes.py scans every test nightly runs for
-# those writes. What needs more runs in scripts/deploy.sh at
-# deploy time, with an operator, or is a listed gap (docs/deployment.md, "Live
-# validation per client"): the silver, gold and FRED refreshes (data phase);
+# tests/unit/test_nightly_workflow_writes.py reads what each step's commands
+# run (tests, scripts, inline and npm scripts) for those writes, and fails on
+# what it cannot read (docs/deployment.md lists both). What needs more runs in
+# scripts/deploy.sh at deploy time, with an operator, or is a listed gap
+# (docs/deployment.md, "Live validation per client"): the silver, gold and
+# FRED refreshes (data phase);
 # the verifier boundary and the Growth Agent evaluation (release phase,
 # agentic tier); the delayed AI Gateway inference-table grant retry and the
 # rolling exact-proof refresh (gaps); the real-infra kill drill (operator-run,

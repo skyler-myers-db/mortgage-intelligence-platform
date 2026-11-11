@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.measured_apps import VirtualClock
 from tools.databricks import quiesce_window_plan as release
 from tools.databricks import quiesce_window_wr5 as wr5
 from tools.databricks import stop_primitive_map as stops
@@ -111,12 +112,21 @@ def test_the_digest_pins_the_app_the_start_folder_and_the_remainder(field: str) 
     assert wr5.window_plan(changed, acknowledgement="")["public"]["window_sha256"] != wr5.window_plan(FACTS, acknowledgement="")["public"]["window_sha256"]
 
 
-def _workspace(*, active: str = "deployment-started", pending: str = "") -> SimpleNamespace:
+def _workspace(*, active: str = "deployment-started", pending: str = "", blind_reads: int = 0) -> SimpleNamespace:
+    """The App after the CLI start returned: ``blind_reads`` GETs see nothing yet (spike S7)."""
+
     app = SimpleNamespace(
         active_deployment=SimpleNamespace(deployment_id=active),
         pending_deployment=SimpleNamespace(deployment_id=pending) if pending else None,
     )
-    return SimpleNamespace(apps=SimpleNamespace(get=lambda _name: app))
+    blind = SimpleNamespace(active_deployment=None, pending_deployment=None)
+    reads = iter([blind] * blind_reads)
+    return SimpleNamespace(apps=SimpleNamespace(get=lambda _name: next(reads, app)))
+
+
+def _clocked() -> dict[str, object]:
+    clock = VirtualClock()
+    return {"sleep": clock.sleep, "clock": clock.monotonic}
 
 
 def _deployment(state: str = "SUCCEEDED", source: str = FACTS.default_source) -> SimpleNamespace:
@@ -133,6 +143,13 @@ def test_the_start_proof_needs_a_new_succeeded_deployment_from_the_planned_folde
 
     created = wr5.prove_start(_workspace(pending="deployment-new"), app_name="mip-app", plan=plan, wait=wait, wait_active=lambda *_a, **_k: None)
     assert created == "deployment-new" and waited == ["deployment-new"]
+    # S7: the CLI start returns at compute ACTIVE, a moment before the id shows: polled, not refused.
+    clock = VirtualClock()
+    late = wr5.prove_start(
+        _workspace(pending="deployment-late", blind_reads=2), app_name="mip-app", plan=plan, wait=wait,
+        wait_active=lambda *_a, **_k: None, sleep=clock.sleep, clock=clock.monotonic,
+    )  # fmt: skip
+    assert late == "deployment-late" and clock.sleeps == [5.0, 5.0]
     cases = [
         (_workspace(active="deployment-serving"), _deployment(), "start_unreadable"),
         (_workspace(), _deployment(state="FAILED"), "start_not_succeeded"),
@@ -140,7 +157,7 @@ def test_the_start_proof_needs_a_new_succeeded_deployment_from_the_planned_folde
     ]
     for workspace, deployment, code in cases:
         with pytest.raises(StartProofError) as refused:
-            wr5.prove_start(workspace, app_name="mip-app", plan=plan, wait=lambda *_a, _d=deployment, **_k: _d, wait_active=lambda *_a, **_k: None)
+            wr5.prove_start(workspace, app_name="mip-app", plan=plan, wait=lambda *_a, _d=deployment, **_k: _d, wait_active=lambda *_a, **_k: None, **_clocked())
         assert refused.value.code == code
     tampered = {**plan, "canonical": {**plan["canonical"], "start_source": "/Workspace/elsewhere"}}
     with pytest.raises(StartProofError, match="not a passed, intact plan"):

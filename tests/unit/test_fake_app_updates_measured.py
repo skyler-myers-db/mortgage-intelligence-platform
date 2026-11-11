@@ -22,12 +22,8 @@ from databricks.sdk.service.apps import App
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.core_blue_world import CoreApps
-from tests.fixtures.measured_app_updates import (
-    InvalidUpdateMask,
-    MissingSecretKey,
-    UpdateLedger,
-    apply_patch,
-)
+from tests.fixtures.measured_app_updates import MissingSecretKey, UpdateLedger, apply_patch
+from tests.fixtures.measured_apps import InvalidUpdateMask
 from tests.fixtures.quiesce_window_estate import FakeApps, FakeFiles
 from tools.databricks.app_rollback_resource_contract import (
     BINDING_DESCRIPTION_NOTICE,
@@ -52,8 +48,13 @@ def _window_estate_apps() -> tuple[Any, Any]:
 
 
 def _core_world_apps() -> tuple[Any, Any]:
+    # No start in flight (measured_apps): CoreApps' reads tick the world first (S7).
     world = SimpleNamespace(
-        resources=copy.deepcopy(CANDIDATE), description=DESCRIPTION, update_ledger=UpdateLedger()
+        resources=copy.deepcopy(CANDIDATE),
+        description=DESCRIPTION,
+        update_ledger=UpdateLedger(),
+        in_flight=None,
+        tick=lambda *, is_get: None,
     )
 
     def get(_name: str) -> SimpleNamespace:

@@ -56,28 +56,54 @@ def test_the_paychex_case_an_adopted_core_blue_passes_the_core_clause(
 def test_a_green_left_active_is_a_note_the_core_step_0a_restores_over(
     world: CoreWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    world.prove_restore_payload()  # a release proves blue's payload before it activates green
     world.activate_green()
 
     verdict = _verdict(world, monkeypatch)
     assert verdict.refusals == () and "restores the record's deployment over it" in verdict.notes[0]
 
 
-def test_a_stopped_core_blue_refuses_before_the_lease_as_step_0a_would(
+def test_another_active_deployment_over_an_adopted_blue_with_no_payload_refuses(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 2 of #334: step 0a's tier b would refuse no_restore_payload under the lease."""
+
+    world.redeploy("deployment-emergency")  # a peer's deployment from another folder
+
+    verdict = _verdict(world, monkeypatch)
+    assert [refusal.code for refusal in verdict.refusals] == [codes.ROLLBACK_RECORD_DRIFT]
+    assert "no_restore_payload" in verdict.refusals[0].message
+    assert world.apps.mutations == []
+
+
+def test_a_stopped_core_blue_is_a_note_step_0a_starts_and_re_pins(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.compute = "STOPPED"  # spike S7: its GET has no active deployment
+
+    verdict = _verdict(world, monkeypatch)
+    assert verdict.refusals == () and "starts it and re-pins the start (tier a)" in verdict.notes[0]
+    assert world.apps.mutations == []
+
+
+def test_a_stopped_core_app_whose_start_would_not_rerun_blue_refuses_before_the_lease(
     world: CoreWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Review of #319: predicted here, nothing is quiesced or repaired under the lease."""
 
     world.compute = "STOPPED"
+    world.active = "deployment-old"  # the default source follows the last active deployment
 
     verdict = _verdict(world, monkeypatch)
     assert [refusal.code for refusal in verdict.refusals] == [codes.ROLLBACK_RECORD_DRIFT]
-    assert "blue_stopped" in verdict.refusals[0].message and "owner break-glass" in verdict.refusals[0].message
+    assert "tier_a_refused" in verdict.refusals[0].message and "owner break-glass" in verdict.refusals[0].message
     assert world.apps.mutations == []
 
 
 def test_a_stopped_app_over_a_green_left_active_is_the_restores_note(
     world: CoreWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    world.prove_restore_payload()
     world.activate_green()
     world.compute = "STOPPED"  # a killed run's candidate, stopped: step 0a's restore starts it
 

@@ -81,6 +81,7 @@ from tools.databricks.app_rollback_resource_contract import (
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
 from tools.databricks.app_start_deployment import (
     StartProofError,
+    current_deployment_id,
     ensure_started,
     is_stopped,
     last_deployment_is,
@@ -482,12 +483,8 @@ def ensure_current(
             record=record,
             require_resources=False,
         )
-        active_id = _active_deployment_id(workspace, app_name=app_name)
-        latest = _latest_succeeded(workspace, app_name=app_name)
-        if (
-            active_id != record["deployment_id"]
-            or _text(getattr(latest, "deployment_id", None)) != record["deployment_id"]
-        ):
+
+        def tier_b() -> str:
             restore_last_good(
                 workspace,
                 app_name=app_name,
@@ -507,6 +504,15 @@ def ensure_current(
                 expected_lakebase_instance=expected_lakebase_instance,
             )
             return _rollback_gateway_endpoint(refreshed)
+
+        # A stopped App has no active deployment: its newest one is what a start reruns (S7).
+        active_id = current_deployment_id(workspace, app_name=app_name)
+        latest = _latest_succeeded(workspace, app_name=app_name)
+        if (
+            active_id != record["deployment_id"]
+            or _text(getattr(latest, "deployment_id", None)) != record["deployment_id"]
+        ):
+            return tier_b()
         restore_signed_app_resource_contract(
             workspace,
             app_name=app_name,
@@ -514,7 +520,7 @@ def ensure_current(
         )
         _assert_record_app_identity(workspace, app_name=app_name, record=record)
         _stored_resource_proof(workspace, record=record)
-        if _active_deployment_id(workspace, app_name=app_name) != active_id:
+        if current_deployment_id(workspace, app_name=app_name) != active_id:
             raise RuntimeError("App active deployment changed during signed resource repair")
         # Tier a only while blue is the App's last deployment: the start then
         # snapshots blue's own source, and the record is re-pinned to it.
@@ -522,19 +528,23 @@ def ensure_current(
             workspace, app_name=app_name, deployment_id=active_id
         ):
             raise RuntimeError("stopped App's last deployment is not blue; tier a refused")
-        started = ensure_started(workspace, app_name=app_name)
-        if started:
-            record = repin_started_deployment(
-                workspace,
-                app_name=app_name,
-                scope=scope,
-                deployment_id=started,
-                expected_rollback_deployment_id=active_id,
-                base_url=base_url,
-                bearer_token=bearer_token,
-                deployment_lease_id=deployment_lease_id,
-                deployment_source_git_sha=deployment_source_git_sha,
-            )
+        # An unproven start (S7: a changed folder included) never serves: tier b replaces it.
+        try:
+            started = ensure_started(workspace, app_name=app_name)
+            if started:
+                record = repin_started_deployment(
+                    workspace,
+                    app_name=app_name,
+                    scope=scope,
+                    deployment_id=started,
+                    expected_rollback_deployment_id=active_id,
+                    base_url=base_url,
+                    bearer_token=bearer_token,
+                    deployment_lease_id=deployment_lease_id,
+                    deployment_source_git_sha=deployment_source_git_sha,
+                )
+        except StartProofError:
+            return tier_b()
         _converge_rollback_endpoint_acl(
             workspace,
             app_name=app_name,
@@ -542,14 +552,8 @@ def ensure_current(
             deployment_lease_id=deployment_lease_id,
             deployment_source_git_sha=deployment_source_git_sha,
         )
-        _verify_health(
-            workspace,
-            app_name=app_name,
-            base_url=base_url,
-            bearer_token=bearer_token,
-            git_sha=record["git_sha"],
-            gateway_binding=record["gateway_binding_sha256"],
-            deployment_lease_id=_payload_deployment_lease_id(record["payload"]),
+        _health_hook(workspace, app_name=app_name, base_url=base_url, bearer_token=bearer_token)(
+            record, None
         )
         _stored_resource_proof(workspace, record=record)
         if _active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:

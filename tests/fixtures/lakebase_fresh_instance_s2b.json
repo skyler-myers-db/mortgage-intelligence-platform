@@ -1,0 +1,120 @@
+{
+  "event_triggers": [
+    {
+      "event_owner": "cloud_admin",
+      "evtenabled": "O",
+      "evtevent": "ddl_command_end",
+      "evtname": "on_create_schema",
+      "evttags": [
+        "CREATE SCHEMA"
+      ],
+      "function_acl": null,
+      "function_arguments": "",
+      "function_binary": null,
+      "function_config": null,
+      "function_kind": "f",
+      "function_language": "plpgsql",
+      "function_leakproof": false,
+      "function_name": "grant_usage_on_new_schema",
+      "function_owner": "cloud_admin",
+      "function_parallel_safety": "u",
+      "function_return_type": "event_trigger",
+      "function_schema": "public",
+      "function_security_definer": false,
+      "function_source_bytes": 1244,
+      "function_source_sha256": "f8bab6f3ee88910938aaf7f2639fda82627f15d615ac497f91853d9822d3c65b",
+      "function_strict": false,
+      "function_volatility": "v"
+    },
+    {
+      "event_owner": "cloud_admin",
+      "evtenabled": "O",
+      "evtevent": "ddl_command_end",
+      "evtname": "on_create_sequence",
+      "evttags": [
+        "CREATE SEQUENCE"
+      ],
+      "function_acl": null,
+      "function_arguments": "",
+      "function_binary": null,
+      "function_config": null,
+      "function_kind": "f",
+      "function_language": "plpgsql",
+      "function_leakproof": false,
+      "function_name": "grant_all_on_new_sequences",
+      "function_owner": "cloud_admin",
+      "function_parallel_safety": "u",
+      "function_return_type": "event_trigger",
+      "function_schema": "public",
+      "function_security_definer": false,
+      "function_source_bytes": 754,
+      "function_source_sha256": "8455ba3c7f11d90610079dd63bb522e334792847fa571f5065d4412b85577bb1",
+      "function_strict": false,
+      "function_volatility": "v"
+    },
+    {
+      "event_owner": "cloud_admin",
+      "evtenabled": "O",
+      "evtevent": "ddl_command_end",
+      "evtname": "on_create_table_or_view",
+      "evttags": [
+        "CREATE TABLE",
+        "CREATE TABLE AS",
+        "CREATE VIEW",
+        "CREATE MATERIALIZED VIEW"
+      ],
+      "function_acl": null,
+      "function_arguments": "",
+      "function_binary": null,
+      "function_config": null,
+      "function_kind": "f",
+      "function_language": "plpgsql",
+      "function_leakproof": false,
+      "function_name": "grant_select_on_new_objects",
+      "function_owner": "cloud_admin",
+      "function_parallel_safety": "u",
+      "function_return_type": "event_trigger",
+      "function_schema": "public",
+      "function_security_definer": false,
+      "function_source_bytes": 1991,
+      "function_source_sha256": "abcc894b28bd505cdc0c8f5dbb144329d0da2723fb0d61cc7458e8a495a47cff",
+      "function_strict": false,
+      "function_volatility": "v"
+    }
+  ],
+  "public_schema_acl_pristine": [
+    [
+      "PUBLIC",
+      "USAGE",
+      false,
+      "pg_database_owner"
+    ],
+    [
+      "databricks_superuser",
+      "CREATE",
+      true,
+      "pg_database_owner"
+    ],
+    [
+      "databricks_superuser",
+      "USAGE",
+      true,
+      "pg_database_owner"
+    ],
+    [
+      "pg_database_owner",
+      "CREATE",
+      false,
+      "pg_database_owner"
+    ],
+    [
+      "pg_database_owner",
+      "USAGE",
+      false,
+      "pg_database_owner"
+    ]
+  ],
+  "server_version": "PostgreSQL 16.15",
+  "server_version_num": 160015,
+  "source": "Spike S2b, 2026-11-10: read-only capture of every database on two Provisioned Lakebase instances created 2026-11 (four databases; identical on all four). Metadata only: the function bodies are pinned by their prosrc sha256 and byte length."
+}

@@ -161,7 +161,7 @@ def _same_id_other_key(estate: es.Estate) -> None:
 
 
 def _parent_moved(estate: es.Estate) -> None:
-    estate.object_of("dashboards.mip_segment_dashboard").names["parent_path"] = "/Workspace/Shared/elsewhere"
+    estate.object_of("dashboards.mip_segment_dashboard").names["parent_path"] = "/Shared/elsewhere"
 
 
 @pytest.mark.parametrize(

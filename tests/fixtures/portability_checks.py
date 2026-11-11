@@ -14,12 +14,18 @@ planted defects, so each check is shown to find what it looks for:
   run, read from a tree; ``AGENTIC_ONLY_MODULES`` is the same set committed,
   since a set read from the tree under test shrinks when a core file starts
   calling an agentic tool (review of #330);
-* ``agentic_only_modules`` reads a tool named either way, ``-m tools.x`` or
-  ``tools/x.py`` (review of #330); tests/fixtures/role_ledger.py has
-  ``account_api_reach``, the check behind its table;
-* ``core_deploy_tools``: every tool a core-tier deploy file names, either way,
-  which tests/unit/test_client_portability_integrity.py holds to the reviewed
-  tables and to ``LIVE_ONLY_MODULES``;
+* ``core_deploy_tools``: every tool a core-tier deploy file names, which
+  tests/unit/test_client_portability_integrity.py holds to the reviewed
+  tables and to ``role_ledger.OUTSIDE_PROOF_MODULES`` (the tools no dry run
+  the proof replays plans or runs: a live-only branch, another phase or a
+  mention in a message);
+* both read a deploy file word by word (``_named_tools``, review of #330,
+  round 3): the word after any ``-m`` and any word role_ledger.TOOL_PATH
+  reads as a tool, past quotes, line continuations and array bodies, so
+  ``-m "tools.x"``, an array's ``-m`` on its own line and
+  ``"$ROOT_DIR/tools/x.py"`` are read as the call classifier reads them;
+  tests/fixtures/role_ledger.py has ``account_api_reach``, the check behind
+  its table;
 * ``default_install_render``: client #1's render, read from the sql/ sources
   themselves rather than from tools/render_sql.py;
 * ``checkout_state``: the real checkout's status and the build artifacts a
@@ -44,6 +50,7 @@ from typing import Any
 from backend.config import source_names
 from backend.schemas.lender_identity_record import reviewed_lender_identity_from_env
 from tests.fixtures.client_profiles import paychex_shaped_profile
+from tests.fixtures.role_ledger import TOOL_MODULE, TOOL_PATH
 from tests.fixtures.role_recording_cli import tree_sha256
 from tools.clients import profile as views
 from tools.clients.environment import RawProfile, resolve
@@ -78,8 +85,11 @@ AGENTIC_LIBRARIES = (
 )
 # Build artifacts a dry run, a render or a validate would write in the checkout it runs in.
 ARTIFACTS = ("sql/_rendered", ".databricks", ".env.local", "genie/space_id.txt")
-# A tool named in a deploy file: ``-m tools.x`` or ``tools/x.py``.
-_MODULE = re.compile(r"-m (tools(?:\.[A-Za-z0-9_]+)+)|(?<![\w./-])(tools(?:/[A-Za-z0-9_]+)+)\.py(?![\w-])")
+# What separates the words of a deploy file: whitespace (newlines included,
+# so a line continuation or an array body is one run of words), quotes, a
+# backslash and the shell's operators and expansion brackets, with the
+# ``=``, ``,`` and ``:`` that join a word to an option or a message.
+_WORD_BREAK = re.compile(r"""[\s'"`\\;|&()<>{}\[\]=,:]+""")
 # agentic_only_modules() of the reviewed tree, committed: a test holds the
 # tree to it, so a core file that starts calling one of these fails both ways.
 AGENTIC_ONLY_MODULES = frozenset(
@@ -98,6 +108,10 @@ AGENTIC_ONLY_MODULES = frozenset(
         "tools.databricks.verify_agent_proxy_identity_boundary",
         "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority",
         "tools.databricks.verify_agent_runtime_identity_boundary",
+        # Named only as an array body's ``-m`` (deploy_step_agentic_cutover.sh,
+        # AI_GATEWAY_PROOF_ARGS), which round 3 of the review of #330 found
+        # the reader missed.
+        "tools.databricks.verify_ai_gateway_exact_proof",
         "tools.databricks.verify_hosted_agent_tool_execution",
         "tools.databricks.verify_lakebase_oauth_identity",
         "tools.databricks.verify_verifier_identity_boundary",
@@ -179,7 +193,11 @@ def literal_hits(
 
 
 def _named_tools(text: str) -> set[str]:
-    return {module or path.replace("/", ".") for module, path in _MODULE.findall(text)}
+    """Every tool a deploy file names: the word after any ``-m``, and any word that is a tool's path."""
+
+    words = [word.rstrip(".") for word in _WORD_BREAK.split(text)]
+    named = {after for flag, after in zip(words, words[1:], strict=False) if flag == "-m" and TOOL_MODULE.fullmatch(after)}
+    return named | {match.group(1).replace("/", ".") for word in words if (match := TOOL_PATH.fullmatch(word))}
 
 
 def _deploy_files(scripts: Path) -> list[tuple[Path, bool]]:

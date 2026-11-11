@@ -31,16 +31,30 @@ during its start, and the App checks below tell which):
 * ``blue_restorable`` false (a contract migration) leaves the App stopped and
   records ``deadman_left_stopped``;
 * otherwise, only when the App is still the window's stopped blue (its id,
-  STOPPED, nothing pending, blue its active deployment, its default source
-  blue's restore source: no start of the run's ever happened, or it failed),
-  it runs ``apps start``, waits for the deployment
-  that start created (never "active changed") to be terminal and records
-  ``deadman_restarted`` (SUCCEEDED) or ``deadman_start_failed`` with its id.
+  STOPPED, nothing pending, no other active deployment, blue its newest
+  deployment of ANY state and SUCCEEDED, its default source blue's restore
+  source: no start of the run's ever happened), it lists the App's
+  deployment ids, runs ``apps start`` and finds the deployment that start
+  created as the one id outside that list (never "active changed"), waits
+  for it to be terminal and records ``deadman_restarted`` (SUCCEEDED) or
+  ``deadman_start_failed`` with its id.
+
+Spike S7 measured the start this relies on: a STOPPED App's GET has no
+``active_deployment``, so blue is judged by its newest deployment (a FAILED
+one becomes active and moves the default source, and a start reruns it); the
+start response and an immediate GET show no new deployment, whose id appears
+only once the compute is ACTIVE, 96-108 s later on a trivial App, for about
+1 s as pending and then as active. The id is polled at most every 5 s, and
+the find and the terminal wait share the one ``--start-timeout-seconds``
+budget from the start call. Two new ids are ``deadman_start_unreadable``
+(``start_ambiguous``), none by then ``deadman_start_unreadable``
+(``start_timeout``).
 
 It never deploys, updates, stops or changes a grant: its only calls are
-``apps.get``, ``apps.get_deployment``, ``apps.start``, the journal download
-and the create-only uploads of its armed marker and its marker (the AST
-contract in ``tests/unit/test_window_deadman.py``). The marker is unsigned, because the
+``apps.get``, ``apps.list_deployments``, ``apps.get_deployment``,
+``apps.start``, the journal download and the create-only uploads of its
+armed marker and its marker (the AST contract in
+``tests/unit/test_window_deadman.py``). The marker is unsigned, because the
 proof-signing key never leaves the deployer's process. It is a pointer, never
 proof: the next governed run re-proves the start deployment against the signed
 journal and the App before it re-pins it (``app_deployment_rollback repin
@@ -78,6 +92,8 @@ MARKER_STATES = frozenset(
 # A journal still unreadable after these attempts at the deadline is a skip.
 JOURNAL_READ_ATTEMPTS = 5
 STOPPING_WAIT_S = 120
+# The start's new id shows in pending_deployment for about 1 s (spike S7).
+START_ID_POLL_S = 5.0
 _PREFIX = "[mip-window-deadman]"
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -104,6 +120,22 @@ def _deployment_state(deployment: object) -> str:
 
 def _pending_id(app: object) -> str:
     return _text(getattr(getattr(app, "pending_deployment", None), "deployment_id", None))
+
+
+def _active_id(app: object) -> str:
+    return _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
+
+
+def _newest(deployments: list[Any]) -> Any:
+    """The newest deployment of ANY state (create_time, update_time, id), or None."""
+
+    return max(
+        deployments,
+        key=lambda item: tuple(
+            _text(getattr(item, name, None)) for name in ("create_time", "update_time", "deployment_id")
+        ),
+        default=None,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -225,29 +257,61 @@ def blue_refusal(window: Window) -> str:
         app = apps.get(args.app)
     if _state(app) != "STOPPED":
         return "app_not_stopped"
-    if _pending_id(app):
+    if _pending_id(app) or getattr(app, "pending_deployment", None) is not None:
         return "pending_deployment"
-    active = _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
-    if active != args.blue_deployment_id:
+    # A STOPPED App's GET has no active deployment (spike S7); one shown is blue's.
+    if _active_id(app) not in {"", args.blue_deployment_id}:
         return "active_not_blue"
-    default_source = _text(getattr(app, "default_source_code_path", None))
-    if default_source and default_source != args.restore_source:
+    deployments = list(apps.list_deployments(args.app))
+    newest = _newest(deployments)
+    if (
+        any(not _text(getattr(item, "deployment_id", None)) for item in deployments)
+        or _text(getattr(newest, "deployment_id", None)) != args.blue_deployment_id
+        or _deployment_state(newest) != "SUCCEEDED"
+    ):
+        return "newest_not_blue"
+    if _text(getattr(app, "default_source_code_path", None)) != args.restore_source:
         return "default_source_drift"
     return ""
 
 
-def start_blue(window: Window) -> str:
-    """``apps start`` without waiting; the id of the deployment it created, or ""."""
-
-    waiter = window.workspace.apps.start(window.args.app)
-    created = _pending_id(getattr(waiter, "response", None))
-    return created or _pending_id(window.workspace.apps.get(window.args.app))
+def _deployment_ids(window: Window) -> set[str] | None:
+    ids = [_text(getattr(item, "deployment_id", None)) for item in window.workspace.apps.list_deployments(window.args.app)]
+    return None if any(not item for item in ids) else set(ids)
 
 
-def wait_for_terminal(window: Window, deployment_id: str) -> str:
+def start_blue(window: Window) -> tuple[str, str, float]:
+    """``apps start`` without waiting: (the deployment it created, or "", a reason, the start deadline).
+
+    The id is the one outside the deployment ids listed before the start, in
+    ``pending_deployment``, ``active_deployment`` or ``list_deployments``,
+    polled until the start budget ends.
+    """
+
+    apps, args = window.workspace.apps, window.args
+    baseline = _deployment_ids(window)
+    if not baseline:
+        return "", "start_unreadable", window.clock()
+    apps.start(args.app)  # never awaited: compute ACTIVE is no deployment
+    deadline = window.clock() + args.start_timeout_seconds
+    while True:
+        app = apps.get(args.app)
+        listed = _deployment_ids(window)
+        if listed is None:
+            return "", "start_unreadable", deadline
+        created = sorted(({_pending_id(app), _active_id(app)} | listed) - baseline - {""})
+        if len(created) > 1:
+            return "", "start_ambiguous", deadline
+        if created:
+            return created[0], "", deadline
+        if window.clock() >= deadline:
+            return "", "start_timeout", deadline
+        window.sleep(START_ID_POLL_S)
+
+
+def wait_for_terminal(window: Window, deployment_id: str, deadline: float) -> str:
     """The start deployment's terminal state, or "" when the start budget ran out."""
 
-    deadline = window.clock() + window.args.start_timeout_seconds
     while True:
         deployment = window.workspace.apps.get_deployment(window.args.app, deployment_id)
         state = _deployment_state(deployment)
@@ -349,11 +413,11 @@ def run(window: Window) -> int:
     if refusal:
         record(window, "deadman_skipped", reason=refusal)
         return 1
-    created = start_blue(window)
+    created, reason, deadline = start_blue(window)
     if not created:
-        record(window, "deadman_start_unreadable")
+        record(window, "deadman_start_unreadable", reason=reason)
         return 1
-    terminal = wait_for_terminal(window, created)
+    terminal = wait_for_terminal(window, created, deadline)
     if not terminal:
         record(window, "deadman_start_timeout", start_id=created)
         return 1

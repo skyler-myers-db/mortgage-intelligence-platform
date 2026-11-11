@@ -22,11 +22,21 @@ Never touched, each refused explicitly (``Refusal.code``):
 * the users, account users and admins vocabulary as the target.
 
 **Pipeline-managed datasets** (a streaming table, a materialized view, or any
-table a pipeline publishes) are excluded until spike S4 proves ``ALTER OWNER``
-on them survives the pipeline's run_as change. The plan lists each with its
-owner, and the private report suggests the interim pair the client's profile
-must carry (``MIP_UC_INTERIM_OWNER_PAIRS_JSON``, at most 14 days). A
+table a pipeline publishes) are never a change. Spike S4 measured that their
+owner cannot be changed at all: the REST owner PATCH and every ``ALTER ...
+OWNER TO`` form are refused for any actor
+(``CHANGE_OWNER_NOT_ALLOWED_FOR_PIPELINE_TABLE``). A dataset's owner is always
+its pipeline's run_as identity, and it flips the moment the pipeline's run_as
+setting changes, before any run. So the release's bundle apply, which moves
+the pipeline's run_as to the jobs identity, makes the jobs identity their
+owner permanently; never the data-owner group, which cannot be a run_as. The
+plan lists each the legacy owner still owns, and the private report suggests
+the interim pair the client's profile must carry from this handover until
+that release (``MIP_UC_INTERIM_OWNER_PAIRS_JSON``, at most 14 days). A
 configured pair that has expired refuses the plan (``interim_pair_expired``).
+``UcPlan.pipeline_datasets`` lists every pipeline dataset whoever owns it, for
+``tools/clients/handover_pipeline_owner.py`` to check against its pipeline's
+live run_as; it is not part of the digest.
 
 Every change is one typed Unity Catalog update with only ``owner`` set
 (``api``); ``sql`` is the equivalent statement, for review. The plan's sha256
@@ -138,6 +148,8 @@ class UcPlan:
     document: dict[str, Any]
     refusals: list[Refusal] = field(default_factory=list)
     suggested_pairs: list[dict[str, str]] = field(default_factory=list)
+    # Every pipeline dataset in the governed catalog, whoever owns it (read-only checks only).
+    pipeline_datasets: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def sha256(self) -> str:
@@ -244,6 +256,7 @@ def compute(
     left = {"other_owner": 0, "system_owned": 0, "follows_catalog": 0, "sync_catalog_child": 0}
     changes: list[dict[str, str]] = []
     pipeline: list[dict[str, str]] = []
+    published: list[dict[str, str]] = []
     if is_vocabulary(target) or not target:
         refusals.append(Refusal("target_vocabulary", "target", "the target must be the data-owner group"))
     if target.casefold() == legacy_owner.casefold():
@@ -278,7 +291,10 @@ def compute(
             where = f"{securable.kind.lower()}.{index}.{position}"
             if securable.full_name.split(".", 1)[0] != name:
                 refusals.append(Refusal("outside_catalog", where, "a listed object is outside its catalog"))
-            elif securable.owner.casefold() == SYSTEM_USER.casefold():
+                continue
+            if securable.kind == "PIPELINE":
+                published.append({"full_name": securable.full_name, "owner": securable.owner, "pipeline_id": securable.pipeline_id})
+            if securable.owner.casefold() == SYSTEM_USER.casefold():
                 left["system_owned"] += 1
             elif securable.owner.casefold() != legacy_owner.casefold():
                 left["other_owner"] += 1
@@ -287,7 +303,14 @@ def compute(
             elif securable.kind == "PIPELINE":
                 pipeline.append({"full_name": securable.full_name, "owner": securable.owner, "table_type": securable.table_type})
                 if pairs and pairs.verdict(full_name=securable.full_name, owner=securable.owner) == EXPIRED:
-                    refusals.append(Refusal("interim_pair_expired", where, "the dataset's interim owner pair expired; re-own it"))
+                    refusals.append(
+                        Refusal(
+                            "interim_pair_expired",
+                            where,
+                            "the dataset's interim owner pair expired before the release moved its "
+                            "pipeline's run_as; no ALTER can re-own it, so release or renew the pair",
+                        )
+                    )
             elif securable.kind == "FOREIGN":
                 refusals.append(Refusal("foreign_securable", where, "a foreign table mirrors another system's object"))
             elif securable.kind == "UNREVIEWED":
@@ -310,7 +333,8 @@ def compute(
     }
     expires = (interim_expires or (datetime.now(UTC) + MAX_AHEAD).date()).isoformat()
     suggested = [{"full_name": row["full_name"], "owner": row["owner"], "expires_at": expires} for row in pipeline]
-    return UcPlan(document, refusals, suggested)
+    published.sort(key=lambda item: item["full_name"])
+    return UcPlan(document, refusals, suggested, published)
 
 
 def reverse_order(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

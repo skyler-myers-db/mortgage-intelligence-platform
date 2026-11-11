@@ -188,9 +188,16 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
         modes={"ensure": True, "restore": True, "repin": True, "capture": False, "inspect": False}
     ),
     # The core tier's step-0a proof and tier-b restore (M2-PR7b); its capture and
-    # restore-payload modes deploy, start and stop nothing.
+    # restore-payload modes deploy, start and stop nothing. Its repin (the
+    # window's v7 core re-pin, spike S7) is reviewed as mutating, as v6's is.
     "tools.databricks.app_core_rollback": EntryPoint(
-        modes={"ensure": True, "restore": True, "capture": False, "restore-payload": False}
+        modes={
+            "ensure": True,
+            "restore": True,
+            "repin": True,
+            "capture": False,
+            "restore-payload": False,
+        }
     ),
     # The dead-man job (M0-PR9): only the window's submit runs it, no shell file.
     "jobs.window_deadman": EntryPoint(

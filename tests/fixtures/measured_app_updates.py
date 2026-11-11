@@ -12,7 +12,8 @@ S2-4 and S2b answers 1, 3b and 4). What they measured:
   (comma-separated), and is a long-running operation: a waiter whose
   ``response`` is IN_PROGRESS and whose ``result()`` polls to SUCCEEDED. A
   mask outside the allowed set (``default_source_code_path`` among them) is
-  refused. ``update_mask="description"`` touches nothing else: no restart, no
+  refused, by S7-2's one mask check (``measured_apps.check_create_update_mask``).
+  ``update_mask="description"`` touches nothing else: no restart, no
   deployment, no role change.
 * EVERY update that carries ``resources``, an identical array included, a
   PATCH or a create-update masked to ``resources`` alike, grants CREATE ON
@@ -46,30 +47,9 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-# The create-update masks the spike's error text allowed (S7-2).
-CREATE_UPDATE_MASKS = frozenset(
-    {
-        "description",
-        "budget_policy_id",
-        "usage_policy_id",
-        "resources",
-        "user_api_scopes",
-        "compute_size",
-        "compute_min_instances",
-        "compute_max_instances",
-        "compute_autoscaling",
-        "git_repository",
-        "git_source",
-        "telemetry_export_destinations",
-        "forward_user_access_token",
-        "compatibility_flags",
-        "compute_generation",
-    }
-)
-
-
-class InvalidUpdateMask(ValueError):
-    """``apps create-update`` with a mask outside the allowed set."""
+# One measured mask set and one refusal for every fake (S7-2): measured_apps owns
+# them, so the refusal is the class both spikes' tests catch.
+from tests.fixtures.measured_apps import check_create_update_mask
 
 
 class MissingSecretKey(ValueError):
@@ -151,9 +131,8 @@ def apply_create_update(
 ) -> MeasuredWait:
     """``apps create-update``: only the masked fields; a resources mask re-grants CREATE."""
 
+    check_create_update_mask(str(update_mask))
     fields = [item.strip() for item in str(update_mask).split(",")]
-    if not fields or any(item not in CREATE_UPDATE_MASKS for item in fields):
-        raise InvalidUpdateMask("Invalid update mask")
     body = _as_dict(app) if app is not None else {}
     applied: dict[str, Any] = {}
     if "resources" in fields:

@@ -1,7 +1,7 @@
 """An adopted install's profile: its legacy root, and its dashboards pinned inside it (M2-PR6).
 
-Spike S4 has not shown whether a dashboard ``parent_path`` change updates in
-place, so an adopted install's dashboards stay in their legacy folder:
+Spike S4 measured that a dashboard ``parent_path`` change recreates the
+dashboard, so an adopted install's dashboards stay in their legacy folder:
 ``MIP_LEGACY_BUNDLE_ROOT`` requires ``MIP_DASHBOARD_PARENT_PATH`` inside it.
 """
 

@@ -310,7 +310,7 @@ def _print_plan(plan: legacy_map.AdoptPlan) -> None:
     if plan.phase == "adopt":
         print(
             f"{_PREFIX} expected creates after the binds: {', '.join(plan.expected_creates) or 'none'}; "
-            f"dashboard parent_path {legacy_map.DASHBOARD_POLICY} (spike S4 owed)"
+            f"dashboard parent_path {legacy_map.DASHBOARD_POLICY} (spike S4: a move recreates)"
         )
     for refusal in plan.refusals:
         detail = f" ({refusal.reason})" if refusal.reason else ""

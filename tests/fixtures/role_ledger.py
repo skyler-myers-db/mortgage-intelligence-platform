@@ -31,12 +31,17 @@ the table against the code: no tool reviewed as ``workspace`` reaches an
 account API through its imports (``account_api_reach``).
 
 Inline code has no table entry, so it is held to that same rule directly
-(review of #330): it is ``workspace`` only when its text names no account
-API, every repository module it imports exists and none of them reaches an
-account API, and it neither loads code dynamically nor starts a process;
-otherwise it is ``unclassified`` (``account_admin`` when it imports the human
-bootstrap). A ``databricks api`` call is ``workspace`` only on a reviewed
-workspace path, and any path with an ``accounts`` segment is an account call.
+(review of #330): it is ``account_admin`` when it imports the human
+bootstrap, and ``workspace`` only when its text names no account API, none
+of the repository modules it imports reaches an account API, and everything
+it names is on the reviewed allowlist of tests/fixtures/inline_code_review.py
+(rounds 3 and 4: the modules and attributes, the repository modules and the
+builtins the dry runs' own inline code uses, and no ``match``). That module
+says what it does not model: a returned value's own public attributes, and
+what the code writes for a later process to load. Otherwise inline code is
+``unclassified``. A ``databricks api`` call is ``workspace`` only on a
+reviewed workspace path, and any path with an ``accounts`` segment is an
+account call.
 
 A read is ``read``: the human bootstrap reads the account under the account
 admin's own fresh login (tools/clients/bootstrap_session.py), and no CI step
@@ -53,6 +58,8 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.fixtures.inline_code_review import Repository, inline_refusals
 
 REPO = Path(__file__).resolve().parents[2]
 NONE = "none"
@@ -232,7 +239,12 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # The deploy interpreter: a python, or the proof sandbox's recording wrapper.
 _PYTHON = re.compile(r"(?:deploy-)?python(?:[0-9]+(?:\.[0-9]+)*)?")
 _PY_FLAGS = frozenset({"-P", "-I", "-B", "-E", "-s", "-S", "-u", "-O"})
-_TOOL_PATH = re.compile(r"(?:.*/)?(tools(?:/\w+)*/\w+)\.py")
+# A tool by module name, and by path behind any directory. The deploy-file
+# reader (tests/fixtures/portability_checks.py) names tools with both, and the
+# call classifier reads a path with the same TOOL_PATH (review of #330, round
+# 3), so a path one of them reads as a tool the other does too.
+TOOL_MODULE = re.compile(r"tools(?:\.\w+)+")
+TOOL_PATH = re.compile(r"(?:.*/)?(tools(?:/\w+)*/\w+)\.py")
 
 
 def cli_role(argv: Sequence[str]) -> str:
@@ -289,7 +301,7 @@ def _tool(kind: str, value: str | None) -> str | None:
 
     if kind == "module":
         return value
-    if kind == "path" and value is not None and (match := _TOOL_PATH.fullmatch(value)) is not None:
+    if kind == "path" and value is not None and (match := TOOL_PATH.fullmatch(value)) is not None:
         return match.group(1).replace("/", ".")
     return None
 
@@ -391,12 +403,6 @@ def _reach(module: str, repo: Path) -> tuple[str, ...]:
 
 # --- what the deploy interpreter really ran -----------------------------------------------
 
-# Inline code that loads code by name or starts a process runs what no
-# reading of its imports can see: it is unclassified.
-DYNAMIC_MODULES = frozenset({"importlib", "runpy", "subprocess", "multiprocessing", "pty", "code", "ctypes"})
-DYNAMIC_BUILTINS = frozenset({"__import__", "exec", "eval", "compile", "breakpoint"})
-_SPAWN = re.compile(r"(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*)")
-
 
 @dataclass(frozen=True)
 class Execution:
@@ -420,36 +426,10 @@ class Execution:
         return " ".join(self.argv) + (" (script on stdin)" if _target(self.argv)[0] == "stdin" else "")
 
 
-def _repo_import_resolves(node: ast.Import | ast.ImportFrom, repo: Path) -> bool:
-    """Whether every repository module an import statement names exists (a ``from`` name may be an attribute)."""
+def repository(repo: Path = REPO) -> Repository:
+    """The repository's modules, as the inline-code review reads them."""
 
-    def exists(name: str) -> bool:
-        return bool(module_files(name, repo)) or repo.joinpath(*name.split(".")).is_dir()
-
-    if isinstance(node, ast.Import):
-        return all(exists(a.name) for a in node.names if a.name.split(".")[0] in REPO_PACKAGES)
-    module = node.module or ""
-    if node.level or module.split(".")[0] not in REPO_PACKAGES:
-        return node.level == 0
-    return exists(module) and all(
-        exists(f"{module}.{a.name}") or bool(module_files(module, repo)) for a in node.names
-    )
-
-
-def _loads_or_spawns(tree: ast.AST) -> bool:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
-            if any(name.split(".")[0] in DYNAMIC_MODULES for name in names):
-                return True
-            if isinstance(node, ast.ImportFrom) and node.module == "os" and any(_SPAWN.fullmatch(a.name) for a in node.names):
-                return True
-        elif isinstance(node, ast.Name) and node.id in DYNAMIC_BUILTINS:
-            return True
-        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os":
-            if _SPAWN.fullmatch(node.attr):
-                return True
-    return False
+    return Repository(packages=REPO_PACKAGES, sources=lambda name: module_files(name, repo))
 
 
 def inline_imports(code: str | None, repo: Path = REPO) -> frozenset[str]:
@@ -464,7 +444,7 @@ def inline_imports(code: str | None, repo: Path = REPO) -> frozenset[str]:
 
 
 def inline_role(code: str | None, repo: Path = REPO) -> str:
-    """The class of inline code: ``workspace`` only when neither it nor a repository module it imports reaches an account API."""
+    """The class of inline code: ``workspace`` only when it names nothing unreviewed and nothing it imports reaches an account API."""
 
     if code is None:
         return UNCLASSIFIED
@@ -472,12 +452,12 @@ def inline_role(code: str | None, repo: Path = REPO) -> str:
         tree = ast.parse(code)
     except SyntaxError:
         return UNCLASSIFIED
-    imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
-    if ACCOUNT_API.search(code) or _loads_or_spawns(tree) or not all(_repo_import_resolves(n, repo) for n in imports):
-        return UNCLASSIFIED
     modules = inline_imports(code, repo)
+    # The human bootstrap is no reviewed inline import: read it first, so it is named as the need it is.
     if modules & HUMAN_ONLY_MODULES:
         return ACCOUNT_ADMIN
+    if ACCOUNT_API.search(code) or inline_refusals(tree, repository(repo)):
+        return UNCLASSIFIED
     return UNCLASSIFIED if any(account_api_reach(module, repo) for module in modules) else WORKSPACE
 
 

@@ -252,14 +252,20 @@ class FakeWorkspace:
         app = self.estate["app"]
         if app is None or app["name"] != name:
             raise NotFound(f"App {name} does not exist")
+        # Spike S7: a STOPPED App's GET has no active or pending deployment.
+        stopped = app["state"] == "STOPPED"
         return SimpleNamespace(
             name=name,
             id=app["id"],
             service_principal_client_id=app["client_id"],
             service_principal_id=app["scim_id"],
             compute_status=SimpleNamespace(state=app["state"]),
-            pending_deployment=SimpleNamespace(deployment_id="pending") if app.get("pending") else None,
-            active_deployment=SimpleNamespace(
+            pending_deployment=(
+                SimpleNamespace(deployment_id="pending") if app.get("pending") and not stopped else None
+            ),
+            active_deployment=None
+            if stopped
+            else SimpleNamespace(
                 deployment_id=app["active_deployment"], status=SimpleNamespace(state="SUCCEEDED")
             ),
         )

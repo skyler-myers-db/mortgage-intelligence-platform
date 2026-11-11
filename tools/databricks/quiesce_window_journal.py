@@ -15,10 +15,13 @@ read, under the held lease:
 ``absent|closed`` -> ``window_open`` (before the stop) -> ``window_starting``
 (before ``apps start``) -> ``window_started`` (the start's deployment id) ->
 ``window_proven`` (that deployment is blue) -> ``closed`` (after the re-pin).
-``window_starting`` is the intent: a start whose deployment id was never
-journaled reads as started, and a rerun resumes from the App's pending
-deployment instead of starting again. Any failure after the start call stops
-the App again and writes ``window_refused``. A contract window
+``window_starting`` is the intent, journaled with ``start_baseline_ids``: the
+App's deployment ids listed right before ``apps start`` (version 2). A start
+whose deployment id was never journaled reads as started, and a rerun finds
+it as the one id outside that baseline (the start's id shows only about 100 s
+later, spike S7) instead of starting again. Any failure after the start call
+stops the App again and writes ``window_refused``. A version 1 journal (no
+baseline) still reads; its ``window_starting`` resumes to a refusal. A contract window
 (``blue_restorable`` false) goes ``window_open`` -> ``closed`` only once the
 activated green is the signed record and the App's active deployment.
 """
@@ -44,7 +47,9 @@ from databricks.sdk.service.workspace import ImportFormat
 from tools.databricks.app_deployment_lease import LEASE_ROOT
 from tools.databricks.app_deployment_lease_support import key_registry
 
-JOURNAL_VERSION = 1
+JOURNAL_VERSION = 2
+# Version 1 had no start baseline; it is still read, and written as version 2.
+JOURNAL_V1 = 1
 ATTESTATION_ALG = "ed25519-app-quiesce-window-v1"
 STATES = frozenset(
     {
@@ -83,8 +88,10 @@ FIELDS = frozenset(
         "refusal",
         "closed_by",
         "updated_at",
+        "start_baseline_ids",
     }
 )
+FIELDS_V1 = FIELDS - {"start_baseline_ids"}
 _SIGNATURE_FIELDS = ("attestation_alg", "attestation_verify_key", "attestation_signature")
 
 
@@ -151,10 +158,14 @@ def _validated(value: object, *, app_name: str) -> dict[str, Any]:
     except (InvalidSignature, RuntimeError, ValueError) as exc:
         raise RuntimeError("quiesce-window journal signature is invalid") from exc
     unsigned = {key: item for key, item in value.items() if key not in _SIGNATURE_FIELDS}
-    if set(unsigned) != FIELDS:
+    reviewed = FIELDS_V1 if unsigned.get("version") == JOURNAL_V1 else FIELDS
+    if set(unsigned) != reviewed:
         raise RuntimeError("quiesce-window journal fields are not the reviewed set")
+    baseline = unsigned.get("start_baseline_ids", [])
+    if not isinstance(baseline, list) or any(not isinstance(item, str) or not item for item in baseline):
+        raise RuntimeError("quiesce-window journal start baseline is not a list of deployment ids")
     if (
-        unsigned["version"] != JOURNAL_VERSION
+        unsigned["version"] not in {JOURNAL_VERSION, JOURNAL_V1}
         or unsigned["app_name"] != app_name
         or unsigned["state"] not in STATES
         or not isinstance(unsigned["blue_restorable"], bool)
@@ -233,10 +244,10 @@ def write(
     if target not in TRANSITIONS[state_of(current)] and not _deadman_close(current, changes):
         raise RuntimeError("quiesce-window journal transition is not allowed")
     base: dict[str, Any] = {name: "" for name in FIELDS}
-    base.update(version=JOURNAL_VERSION, app_name=app_name, reasons=[], blue_restorable=False)
+    base.update(app_name=app_name, reasons=[], blue_restorable=False, start_baseline_ids=[])
     if current is not None and target != "window_open":
-        base.update({key: current[key] for key in FIELDS})
-    base.update(changes)
+        base.update({key: current[key] for key in FIELDS if key in current})
+    base.update(changes, version=JOURNAL_VERSION)
     base["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     if set(base) != FIELDS:
         raise RuntimeError("quiesce-window journal change names an unreviewed field")
