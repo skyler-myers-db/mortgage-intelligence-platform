@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.seed_render_scan import ENUMERATION, raw_seed_uses
+from tests.fixtures.seed_render_scan import ENUMERATION, raw_seed_uses, scan_seed_uses
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -58,6 +58,21 @@ _SEED_READERS = frozenset(
         "tests/integration/test_sales_loop_postgres.py",
         "tests/integration/test_saved_views_postgres.py",
         "tests/unit/test_lakebase_migration_inputs.py",
+    }
+)
+# Enumerations, in modules that name the lakebase directory as a path, whose
+# directory the scan cannot prove is another: (module, call). Each lists a
+# tree a test built under tmp_path, or a staged release, to compare file
+# names, and applies no SQL. A new one is red until it is reviewed here.
+_REVIEWED_ENUMERATIONS = frozenset(
+    {
+        # files_under(base): the names in a fixture repo or a staged App source.
+        ("tests/fixtures/app_runtime_stage_repo.py", "base.rglob('*')"),
+        # nothing_written(tmp_path, out): no staging directory is left behind.
+        ("tests/fixtures/app_runtime_stage_repo.py", "tmp_path.iterdir()"),
+        ("tests/unit/test_app_runtime_closure_release.py", "tmp_path.iterdir()"),
+        # The prebuilt release's file walk, compared with its SHA256SUMS manifest.
+        ("tests/unit/test_prebuilt_release.py", "release.walk(root)"),
     }
 )
 
@@ -107,12 +122,29 @@ def _in_function(body: str) -> str:
         ("for p in Path('lakebase').glob('*.sql'):\n    client.execute(p.read_text())\n", 0),
         ("LAKEBASE = ROOT / 'lakebase'\nfor p in sorted(LAKEBASE.rglob('*')):\n    client.execute(p.read_text())\n", 0),
         ("for name in os.listdir(ROOT / 'lakebase'):\n    client.execute(name)\n", 0),
+        # The directory reaches the enumeration some way other than a literal (round 3).
+        ("def _lakebase_dir():\n    return Path('lakebase')\nfor p in sorted(_lakebase_dir().glob('s*.sql')):\n"
+         "    client.execute(p.read_text())\n", 0),
+        ("def apply(client, root):\n    for p in root.glob('*.sql'):\n        client.execute(p.read_text())\n"
+         "apply(client, ROOT / 'lakebase')\n", 0),
+        ("class Applier:\n    def __init__(self):\n        self.root = ROOT / 'lakebase'\n"
+         "    def apply(self, client):\n        for p in self.root.glob('*.sql'):\n"
+         "            client.execute(p.read_text())\n", 0),
+        ("from tests.fixtures.paths import LAKEBASE_DIR\nassert (ROOT / 'lakebase' / 'schema.sql').is_file()\n"
+         "for p in LAKEBASE_DIR.glob('*.sql'):\n    client.execute(p.read_text())\n", 0),
+        ("d = ROOT / 'sql'\nd = ROOT / 'lakebase'\nfor p in d.glob('*.sql'):\n    client.execute(p.read_text())\n", 0),
+        ("for name in glob.glob(str(ROOT / 'lakebase' / '*.sql')):\n    client.execute(Path(name).read_text())\n", 0),
+        ("LAKEBASE = 'lakebase'\nfor p in ROOT.rglob('seed_*.sql'):\n    client.execute(p.read_text())\n", 0),
+        ("LAKEBASE = 'lakebase'\nfor top, _dirs, files in os.walk(ROOT):\n    client.execute(files)\n", 0),
+        ("for p in (ROOT / 'sql').glob('../lakebase/*.sql'):\n    client.execute(p.read_text())\n", 0),
     ],
     ids=[
         "comment", "two_sites", "two_sites_open", "direct", "concatenated", "transaction", "helper",
         "path_name", "kwarg", "open_read", "with_open", "io_open", "path_open", "unbound_read_text",
         "importlib_resources", "getattr", "alias", "helper_by_name", "returned", "psql_argv", "psql_shell",
         "module_text", "module_path", "class_text", "glob", "glob_through_a_name", "listdir",
+        "glob_via_dir_helper", "glob_via_parameter", "glob_via_attribute", "glob_via_imported_dir",
+        "glob_via_a_rebound_name", "glob_module_form", "rglob_from_an_unknown_root", "os_walk", "pattern_escapes",
     ],
 )
 def test_a_raw_seed_use_is_found(source: str, reads: int) -> None:
@@ -138,10 +170,22 @@ def test_a_raw_seed_use_is_found(source: str, reads: int) -> None:
         ("assert rows, 'lakebase/seed_campaigns.sql must seed an admin'\nclient.execute(sql)\n", 0),
         ("raise RuntimeError(f'lakebase/seed_campaigns.sql seeds {n} rows')\nclient.execute(sql)\n", 0),
         ("for probe in candidate.rglob('lakebase/schema.sql'):\n    client.execute(probe.read_text())\n", 0),
+        # Round 3: the directory is proven another, or the pattern cannot match, or lakebase is only a label.
+        ("assert (ROOT / 'lakebase' / 'schema.sql').is_file()\n"
+         "for p in sorted((ROOT / 'sql' / 'ddl').glob('*.sql')):\n    client.execute(p.read_text())\n", 0),
+        ("LAKEBASE = ROOT / 'lakebase'\ndef apply(client, root):\n    for p in (root / 'wheelhouse').iterdir():\n"
+         "        client.execute(p.name)\n", 0),
+        ("LAKEBASE = ROOT / 'lakebase'\nfor p in LAKEBASE.glob('*.json'):\n    client.execute(p.read_text())\n", 0),
+        ("DEPENDENCY = 'lakebase'\ndef evidence(root):\n    return sorted(root.glob(f'{DEPENDENCY}-*.json'))\n"
+         "client.execute(sql)\n", 0),
+        ("LAKEBASE = 'lakebase'\nfor node in ast.walk(tree):\n    client.execute(node)\n", 0),
+        ("checks = [ClosureEntry('lakebase', 'upload')]\nfor p in root.glob('*'):\n    client.execute(p.name)\n", 0),
     ],
     ids=[
         "direct", "named", "module_constant", "migrate_job", "live_contract", "joinpath",
         "importlib_resources", "docstring", "assert_message", "exception_text", "schema_glob",
+        "another_directory", "a_named_subdirectory", "a_pattern_that_cannot_match", "dependency_label",
+        "ast_walk", "label_only",
     ],
 )
 def test_a_rendered_seed_is_not_a_raw_use(source: str, reads: int) -> None:
@@ -154,37 +198,53 @@ def test_the_raw_template_reaches_only_render_seed_sql() -> None:
     Every module that names the seed, or could enumerate its directory, is
     scanned; every mention of it in code is a path read straight into
     render_seed_sql, and a shape the scan cannot follow is red, not skipped.
-    Only a reviewed inspector, which executes nothing, may read it raw to look
-    at its text. What it cannot see: a module that never spells the seed's
-    name, or its directory's, in one string (a whole-repo rglob, a name built
-    from pieces); _SEED_READERS turns red if a known applier moves to one.
+    An enumeration that can list the seed is red unless its directory is
+    proven another or it is reviewed in _REVIEWED_ENUMERATIONS. Only a
+    reviewed inspector, which executes nothing, may read it raw to look at its
+    text.
+    What it cannot see: a module that never spells the seed's name in code,
+    nor the lakebase directory as a path (a whole-repo rglob, a name built
+    from pieces, a helper module handed the directory by another);
+    _SEED_READERS turns red if a known applier moves to one.
     """
 
+    readers: set[str] = set()
+    inspectors: set[str] = set()
+    reviewed: set[tuple[str, str]] = set()
+    for rel in _tracked_python("tests", "tools", "jobs", "scripts", "backend"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        if "seed_campaigns" not in text and not ("lakebase" in text.lower() and ENUMERATION.search(text)):
+            continue
+        scan = scan_seed_uses(text)
+        if rel in _TEMPLATE_INSPECTORS:
+            inspectors.add(rel)
+            assert not scan.executes, f"{rel} inspects the raw template and also executes SQL"
+            continue
+        assert not scan.raw, (
+            f"{rel}:{scan.raw} names the seed where the scan cannot prove render_seed_sql gets it: read it "
+            "with .read_text() straight into render_seed_sql, or bind it to a name inside a function"
+        )
+        listed = {(rel, call) for _line, call in scan.enumerations}
+        reviewed |= listed & _REVIEWED_ENUMERATIONS
+        assert listed <= _REVIEWED_ENUMERATIONS, (
+            f"{rel}: {sorted(call for _rel, call in listed - _REVIEWED_ENUMERATIONS)} can list "
+            "lakebase/seed_campaigns.sql: list a directory the module builds from literals, or match only "
+            "other names, or (if it applies no SQL) review it into _REVIEWED_ENUMERATIONS"
+        )
+        if scan.reads:
+            readers.add(rel)
+    assert inspectors == _TEMPLATE_INSPECTORS
+    assert reviewed == _REVIEWED_ENUMERATIONS, f"stale reviews: {sorted(_REVIEWED_ENUMERATIONS - reviewed)}"
+    assert not _SEED_READERS - readers, f"these appliers no longer read the seed the way the scan follows: {sorted(_SEED_READERS - readers)}"
+
+
+def _tracked_python(*pathspecs: str) -> list[str]:
     listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", "tests", "tools", "jobs", "scripts", "backend"],
+        ["git", "ls-files", "-z", "--", *pathspecs],
         cwd=ROOT,
         capture_output=True,
         check=True,
         timeout=120,
     ).stdout.decode("utf-8")
-    readers: set[str] = set()
-    inspectors: set[str] = set()
-    for rel in filter(None, listed.split("\0")):
-        if not rel.endswith(".py"):
-            continue
-        text = (ROOT / rel).read_text(encoding="utf-8")
-        if "seed_campaigns" not in text and not ("lakebase" in text and ENUMERATION.search(text)):
-            continue
-        raw, reads, executes = raw_seed_uses(text)
-        if rel in _TEMPLATE_INSPECTORS:
-            inspectors.add(rel)
-            assert not executes, f"{rel} inspects the raw template and also executes SQL"
-            continue
-        assert not raw, (
-            f"{rel}:{raw} names the seed where the scan cannot prove render_seed_sql gets it: read it "
-            "with .read_text() straight into render_seed_sql, or bind it to a name inside a function"
-        )
-        if reads:
-            readers.add(rel)
-    assert inspectors == _TEMPLATE_INSPECTORS
-    assert not _SEED_READERS - readers, f"these appliers no longer read the seed the way the scan follows: {sorted(_SEED_READERS - readers)}"
+    return [rel for rel in listed.split("\0") if rel.endswith(".py")]
+
