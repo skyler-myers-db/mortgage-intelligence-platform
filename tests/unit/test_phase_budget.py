@@ -58,6 +58,21 @@ def test_a_first_install_release_bootstraps_one_role_per_tier_role() -> None:
     assert budget.predict("release", agentic=True, window_code="none")["components"].get("role_bootstrap") is None
 
 
+@pytest.mark.parametrize("agentic", (True, False))
+def test_a_release_over_signed_blue_budgets_step_0as_start_and_re_pin(agentic: bool) -> None:
+    """Review of #334: a stopped blue is started and re-pinned in step 0a (tier a, spike S7)."""
+
+    from tools.databricks.quiesce_window_plan import STEP_BUDGET_S as WINDOW
+
+    window = budget_body(("WR3",), blue_restorable=True)
+    for code, given in (("none", None), ("window", window)):
+        body = budget.predict("release", agentic=agentic, window_code=code, window_budget=given)
+        assert body["components"]["step0a_start"] == WINDOW["start"] + WINDOW["repin"], code
+    for code in ("not_applicable", "unknown"):
+        body = budget.predict("release", agentic=agentic, window_code=code)
+        assert "step0a_start" not in body["components"], "no signed blue, no step-0a start"
+
+
 def test_the_data_phase_reconciles_after_each_job_and_smokes_once() -> None:
     body = budget.predict("data", skip_silver=False)
     assert list(body["components"]) == [

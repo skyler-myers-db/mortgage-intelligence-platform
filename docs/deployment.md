@@ -3168,7 +3168,10 @@ decided by the window's own admission rule under its own schema
 one-use Lakebase role bootstraps when the window plan reads `not_applicable` (a
 first install, or one resumed after the owner bootstrap: the App's role, and the
 verifier's in the agentic tier) and the window's own length and restore when it
-reads `window`. A release refuses before its lease; a data phase refuses in its
+reads `window`. Over a signed blue (`none` or `window`) it also adds
+`step0a_start`, the window's start and re-pin budgets: step 0a starts and
+re-pins a stopped blue (tier a, spike S7), and the plan cannot tell a stopped
+blue from a serving one. A release refuses before its lease; a data phase refuses in its
 read-only data plan, also before its lease. The numbers are not measurements:
 the first governed run owes the live timings.
 
