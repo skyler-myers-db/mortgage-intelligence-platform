@@ -14,6 +14,7 @@ same schema-input digest, as before the token.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -247,11 +248,145 @@ def test_no_tracked_seed_or_bundle_text_names_an_operator_address() -> None:
     assert addresses and all(address.endswith("@summit.example") for address in addresses)
 
 
-def test_every_module_that_applies_the_seed_renders_it_first() -> None:
+# --- The raw template reaches only render_seed_sql -----------------------------------
+
+_RENDERERS = frozenset({"render_seed_sql", "_render_seed_sql"})
+_EXECUTORS = frozenset({"execute", "executemany", "executescript", "_run_transaction"})
+# Modules that only inspect the template's text. Each executes nothing (asserted).
+_TEMPLATE_INSPECTORS = frozenset(
+    {
+        "tests/unit/test_campaign_treatment_contracts.py",
+        "tests/unit/test_lakebase_schema_immutability.py",
+        "tests/unit/test_lakebase_seed_contract.py",
+        "tests/unit/test_lakebase_seed_operator.py",
+    }
+)
+
+
+def _call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr
+    return None
+
+
+def _bound_names(node: ast.AST) -> list[str] | None:
+    """The names an assignment of one value binds, or None when it binds anything else."""
+
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]  # type: ignore[attr-defined]
+    if all(isinstance(target, ast.Name) for target in targets):
+        return [target.id for target in targets]  # type: ignore[attr-defined]
+    return None
+
+
+def raw_seed_uses(source: str) -> tuple[list[int], int, bool]:
+    """(lines where raw seed text goes anywhere but render_seed_sql, seed reads, whether it executes SQL).
+
+    A seed read is ``.read_text()`` / ``.read_bytes()`` on a path naming
+    ``seed_campaigns.sql``, directly or through a name bound to one. The read
+    must be render_seed_sql's first argument, or be bound to a name whose every
+    load is; anything else (an execute, a concatenation, a helper) is a raw use.
+    Comments are not code, so a commented-out render never counts.
+    """
+
+    tree = ast.parse(source)
+    parent = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    path_names = {
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None
+        and "seed_campaigns.sql" in ast.unparse(node.value)
+        and not any(_call_name(inner) in {"read_text", "read_bytes"} for inner in ast.walk(node.value))
+        for name in (_bound_names(node) or [])
+    }
+
+    def names_seed(expr: ast.AST) -> bool:
+        return "seed_campaigns.sql" in ast.unparse(expr) or any(
+            isinstance(inner, ast.Name) and inner.id in path_names for inner in ast.walk(expr)
+        )
+
+    def rendered(node: ast.AST) -> bool:
+        call = parent.get(node)
+        return isinstance(call, ast.Call) and _call_name(call) in _RENDERERS and call.args[:1] == [node]
+
+    raw: list[int] = []
+    text_names: set[str] = set()
+    reads = 0
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"read_text", "read_bytes"}
+            and names_seed(node.func.value)
+        ):
+            continue
+        reads += 1
+        if rendered(node):
+            continue
+        holder = parent.get(node)
+        names = _bound_names(holder) if isinstance(holder, ast.Assign | ast.AnnAssign) else None
+        if names is None:
+            raw.append(node.lineno)
+        else:
+            text_names.update(names)
+    raw.extend(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in text_names and not rendered(node)
+    )
+    executes = any(_call_name(node) in _EXECUTORS for node in ast.walk(tree))
+    return sorted(raw), reads, executes
+
+
+_READ = 'Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")'
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A render that only a comment names.
+        f"seed = {_READ}\n# client.execute(render_seed_sql(seed))\nclient.execute(seed)\n",
+        # Rendered at one site, applied raw at another.
+        f"_SEED = render_seed_sql({_READ})\nraw = {_READ}\n"
+        "def apply(c):\n    c.execute(_SEED)\n    c.execute(raw)\n",
+        f"client.execute({_READ})\n",
+        f"seed = {_READ}\nsql = seed + ';'\nclient.execute(sql)\n",
+        f"seed = {_READ}\n_run_transaction([pre, seed], kwargs)\n",
+        f"seed = {_READ}\napply_sql(client, seed)\n",
+        # The path through a name, and bytes.
+        'SEED = ROOT / "lakebase" / "seed_campaigns.sql"\nclient.execute(SEED.read_bytes().decode())\n',
+        # A render whose template is not the seed it read.
+        f"seed = {_READ}\nclient.execute(render_seed_sql(other, seed_operator_email=seed))\n",
+    ],
+    ids=["comment", "two_sites", "direct", "concatenated", "transaction", "helper", "path_name", "kwarg"],
+)
+def test_a_raw_seed_use_is_found(source: str) -> None:
+    raw, reads, _executes = raw_seed_uses(source)
+    assert raw and reads == source.count(".read_"), source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        f"client.execute(render_seed_sql({_READ}))\n",
+        f"seed = {_READ}\nclient.execute(render_seed_sql(seed, seed_operator_email=op))\n",
+        f"_SEED = render_seed_sql({_READ})\ndef apply(c):\n    c.execute(_SEED)\n",
+        f"seed_sql = _render_seed_sql(\n    {_READ},\n    seed_operator_email=op,\n)\n_run_transaction([seed_sql], k)\n",
+    ],
+    ids=["direct", "named", "module_constant", "migrate_job"],
+)
+def test_a_rendered_seed_is_not_a_raw_use(source: str) -> None:
+    assert raw_seed_uses(source) == ([], 1, True)
+
+
+def test_the_raw_template_reaches_only_render_seed_sql() -> None:
     """A raw apply would write the literal token as an address (CI's real-PostgreSQL contracts).
 
-    A module that reads the seed and executes SQL must render it; one that
-    only inspects the template's text may read it raw.
+    Every module that reads the seed hands the template straight to
+    render_seed_sql; only a reviewed inspector, which executes nothing, may
+    read it raw to look at its text.
     """
 
     listed = subprocess.run(
@@ -261,16 +396,28 @@ def test_every_module_that_applies_the_seed_renders_it_first() -> None:
         check=True,
         timeout=120,
     ).stdout.decode("utf-8")
-    appliers: list[str] = []
+    readers: list[str] = []
+    inspectors: set[str] = set()
     for rel in filter(None, listed.split("\0")):
-        if not rel.endswith(".py") or rel == "tests/unit/test_lakebase_seed_operator.py":
+        if not rel.endswith(".py"):
             continue
         text = (ROOT / rel).read_text(encoding="utf-8")
-        reads = re.search(r"seed_campaigns\.sql\"\)\.read_text\(", text)
-        applies = re.search(r"_run_transaction\(|\.execute\(", text)
-        if reads and applies:
-            appliers.append(rel)
-            assert "render_seed_sql(" in text, f"{rel} applies the raw seed template"
+        if "seed_campaigns.sql" not in text:
+            continue
+        raw, reads, executes = raw_seed_uses(text)
+        if rel in _TEMPLATE_INSPECTORS:
+            inspectors.add(rel)
+            assert not executes, f"{rel} inspects the raw template and also executes SQL"
+            continue
+        assert not raw, f"{rel}:{raw} uses the raw seed template; pass it to render_seed_sql"
+        if reads:
+            readers.append(rel)
+    assert inspectors == _TEMPLATE_INSPECTORS
     # The migrate job, its plan inputs and the real-PostgreSQL and live contracts.
-    assert {"jobs/lakebase_migrate.py", "tests/integration/test_sales_loop_postgres.py"} <= set(appliers)
-    assert len(appliers) >= 20, appliers
+    assert {
+        "jobs/lakebase_migrate.py",
+        "jobs/lakebase_migration_inputs.py",
+        "tests/integration/test_sales_loop_postgres.py",
+        "tests/integration/test_approval_funnel_live.py",
+    } <= set(readers)
+    assert len(readers) >= 20, readers
