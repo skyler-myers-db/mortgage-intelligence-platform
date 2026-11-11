@@ -227,6 +227,20 @@ def description_differs(*, expected: dict[str, Any], live: dict[str, Any]) -> bo
     return str(live.get("description") or "") != str(expected.get("description") or "")
 
 
+def description_fixup_owed(*, expected: dict[str, Any], live: dict[str, Any]) -> bool:
+    """Whether the binding step's online fix-up has text to apply (``app_description_fixup``).
+
+    Only a payload that declares a description owes one: the fix-up never
+    clears a live description, so a bundle that declares none leaves the
+    live text as it is and owes nothing (the read-only plan and the fix-up
+    must agree, or every release would refuse after its non-App apply).
+    The post-update verifier still compares with ``description_differs``.
+    """
+
+    declared = bool(str(expected.get("description") or "").strip())
+    return declared and description_differs(expected=expected, live=live)
+
+
 def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
     """Describe, symbolically, how the live App's resource bindings differ from the payload's.
 
@@ -328,12 +342,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{_PREFIX} diff: {line}")
         if not lines:
             print(f"{_PREFIX} live App resource bindings equal the bundle payload (as a set)")
-        if description_differs(expected=expected, live=live):
+        if description_fixup_owed(expected=expected, live=live):
             # Never a drift code: the release applies it online (spike S2).
             print(
                 f"{_PREFIX} description: differs (an online fix-up: a create-update "
                 "masked to description, no window)"
             )
+        elif description_differs(expected=expected, live=live):
+            print(f"{_PREFIX} description: the bundle declares none; the live one is left as it is")
         if drift := binding_description_drift(expected=expected, live=live):
             print(f"{_PREFIX} {_description_drift_line(drift)}")
         return CHECK_DRIFT if lines else CHECK_EXACT

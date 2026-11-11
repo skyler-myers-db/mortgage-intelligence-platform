@@ -97,12 +97,54 @@ def test_no_bundle_description_and_none_live_is_equal_and_sends_nothing() -> Non
     assert _apply(apps, description="") == "equal" and apps.updates == 0
 
 
-def test_no_bundle_description_never_clears_a_live_one() -> None:
+def test_no_bundle_description_leaves_a_live_one_and_sends_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round 2 of #337: this refused at every no-WR1 release, after the non-App apply.
+
+    The read-only plan owed no fix-up for that shape
+    (``app_resource_bindings.description_fixup_owed``) and nothing could clear
+    it, so the release refused forever. A bundle that declares no description
+    manages none: the live text stays, never cleared, and the CLI exits 0.
+    """
+
     apps = _Apps(description="Edited in the UI")
 
-    with pytest.raises(DescriptionFixupRefused, match="never cleared"):
-        _apply(apps, description="")
+    assert _apply(apps, description="") == "left"
     assert apps.updates == 0 and apps.description == "Edited in the UI"
+
+    import databricks.sdk
+
+    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: SimpleNamespace(apps=apps))
+    payload = tmp_path / "payload.json"
+    payload.write_text(f'{{"name": "{APP}"}}', encoding="utf-8")
+    status = fixup.main(
+        [
+            "--app-name",
+            APP,
+            "--payload",
+            str(payload),
+            "--expected-app-id",
+            IDENTITY[0],
+            "--expected-client-id",
+            IDENTITY[1],
+            "--expected-scim-id",
+            IDENTITY[2],
+        ]
+    )
+
+    assert status == 0 and apps.updates == 0 and apps.description == "Edited in the UI"
+    out = capsys.readouterr().out
+    assert "declares no App description; the live one is left" in out and "Edited in the UI" not in out
+
+
+def test_no_bundle_description_still_pins_the_identity_first() -> None:
+    apps = _Apps(description="Edited in the UI")
+    apps.identity = ("another-app", "app-client", "app-scim-id")
+
+    with pytest.raises(DescriptionFixupRefused, match="immutable identity"):
+        _apply(apps, description="")
+    assert apps.updates == 0
 
 
 def test_a_foreign_identity_refuses_before_any_update() -> None:

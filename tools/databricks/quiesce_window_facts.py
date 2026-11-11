@@ -24,7 +24,7 @@ from collections.abc import Callable
 from typing import Any
 
 from tools.databricks import quiesce_window_journal as journal
-from tools.databricks.app_resource_bindings import binding_diff, description_differs
+from tools.databricks.app_resource_bindings import binding_diff, description_fixup_owed
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
     V7_REFUSAL,
@@ -188,10 +188,11 @@ def collect_facts(
     else:
         live = app.as_dict() if hasattr(app, "as_dict") else dict(app.__dict__)
         # Bindings as a set by name (spike S2): order is no reason. The
-        # description is the release's online fix-up, never a window.
+        # description is the release's online fix-up, never a window; a
+        # bundle that declares none owes none (the fix-up never clears one).
         lines = tuple(binding_diff(expected=binding_payload, live=live))
         binding_state = "diff" if lines else "equal"
-        if description_differs(expected=binding_payload, live=live):
+        if description_fixup_owed(expected=binding_payload, live=live):
             description_state = "differs"
     blue_id = record["deployment_id"]
     blue = workspace.apps.get_deployment(app_name, blue_id)

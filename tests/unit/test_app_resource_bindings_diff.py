@@ -271,6 +271,31 @@ def test_cli_diff_reports_a_description_only_difference_and_exits_exact(
     assert "description: differs (an online fix-up" in out
 
 
+def test_a_bundle_with_no_description_owes_no_fix_up_and_never_reads_as_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round 2 of #337: the plan and the fix-up agree; the verifier stays exact."""
+
+    payload = _payload()
+    payload.pop("description")
+    live = _live(payload)
+    live["description"] = "Set by an earlier send"
+
+    assert bindings.description_fixup_owed(expected=payload, live=live) is False
+    assert bindings.description_fixup_owed(expected=_payload(), live=live) is True
+    assert description_differs(expected=payload, live=live) is True, "the verifier still compares"
+    expected_path, live_path = tmp_path / "expected.json", tmp_path / "live.json"
+    expected_path.write_text(json.dumps(payload), encoding="utf-8")
+    live_path.write_text(json.dumps(live), encoding="utf-8")
+
+    status = bindings.main(["diff", "--expected", str(expected_path), "--live", str(live_path)])
+
+    out = capsys.readouterr().out
+    assert status == CHECK_EXACT and "an online fix-up" not in out
+    assert "the bundle declares none; the live one is left as it is" in out
+    assert "Set by an earlier send" not in out
+
+
 def _described() -> dict[str, Any]:
     """The fixture payload with a description on every binding, as databricks.yml declares them."""
 

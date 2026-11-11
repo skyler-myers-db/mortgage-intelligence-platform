@@ -124,6 +124,37 @@ def test_run_1_on_the_measured_live_shape_plans_no_window_and_one_online_fix_up(
     assert world.apps.mutations == [], "the plan is read-only"
 
 
+def test_a_bundle_with_no_description_over_a_live_one_plans_and_applies_nothing(world: CoreWorld) -> None:
+    """Round 2 of #337: the plan read a harmless online fix-up that the fix-up then refused.
+
+    Unreachable for a config-only client (databricks.yml declares the App
+    description), but the plan and the binding step must agree on it: no
+    fix-up owed, none applied, the live text left as it is.
+    """
+
+    payload = bindings.build_resource_binding_payload(
+        bundle_summary(), app_name=APP_NAME, salesforce_bindings=False
+    )
+    payload.pop("description")
+    world.resources = copy.deepcopy(payload["resources"])
+    world.description = "Set by an earlier send"
+
+    found = _collect(world, payload)
+    plan = window_plan(found, position="pre-lease", acknowledgement="")
+
+    assert (found.description_state, plan.code, plan.reasons) == ("equal", "none", ())
+    assert plan.public_summary()["online_fixups"] == []
+    apps = FakeApps(files=FakeFiles(), env_names=["APP_ENV"], resources=copy.deepcopy(payload["resources"]))
+    apps.description = "Set by an earlier send"
+    outcome = apply_bundle_description(
+        SimpleNamespace(apps=_Named(apps)),
+        app_name=APP_NAME,
+        description="",
+        identity=("app-object-id", "app-client", "app-scim-id"),
+    )
+    assert (outcome, apps.description, apps.update_ledger.masks) == ("left", "Set by an earlier send", [])
+
+
 def test_switching_the_connector_on_is_the_one_wr1_left_and_it_names_its_re_grant() -> None:
     on = bindings.build_resource_binding_payload(bundle_summary(), app_name=APP_NAME, salesforce_bindings=True)
     off = bindings.build_resource_binding_payload(bundle_summary(), app_name=APP_NAME, salesforce_bindings=False)

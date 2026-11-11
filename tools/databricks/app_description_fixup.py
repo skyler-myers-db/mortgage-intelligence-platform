@@ -19,11 +19,12 @@ it never re-grants CREATE ON DATABASE to the App's role.
 
 The tool reads the App and proves its immutable identity first. It does
 nothing when the description already equals the payload's (both empty
-included), refuses to clear a live one (a payload with no description while
-the App has one), and otherwise applies it and proves
+included) or when the payload declares none (a live one is never cleared,
+and the read-only plan, ``app_resource_bindings.description_fixup_owed``,
+owes no fix-up then either), and otherwise applies it and proves
 afterwards that the identity, the resource bindings, the active and pending
 deployments and the compute state are unchanged and the description is the
-payload's. Exit 0 when applied or already equal, 2 on a refusal. It prints
+payload's. Exit 0 when applied, equal or left, 2 on a refusal. It prints
 names and states only, never a value.
 """
 
@@ -97,16 +98,16 @@ def apply_bundle_description(
     description: str,
     identity: tuple[str, str, str],
 ) -> str:
-    """``equal`` when nothing was needed, ``applied`` after the proven online fix-up."""
+    """``equal`` (nothing needed), ``left`` (the bundle declares none) or ``applied`` (proven)."""
 
     before = _plain(workspace.apps.get(app_name))
     _assert_identity(before, app_name=app_name, identity=identity)
     if str(before.get("description") or "") == description:
         return "equal"
     if not description.strip():
-        # The shell runs this at every no-WR1 binding step: an install whose
-        # bundle declares no description is "equal" while the App has none too.
-        raise DescriptionFixupRefused("the bundle declares no App description; a live one is never cleared")
+        # A bundle that declares no description manages none: the live text
+        # stays (never cleared), and the plan owed no fix-up for it either.
+        return "left"
     from databricks.sdk.service.apps import App
 
     workspace.apps.create_update(
@@ -158,6 +159,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if outcome == "equal":
         print(f"{_PREFIX} the App description already equals the bundle's")
+    elif outcome == "left":
+        print(f"{_PREFIX} the bundle declares no App description; the live one is left as it is")
     else:
         print(
             f"{_PREFIX} applied the bundle's App description online (a create-update masked to "
