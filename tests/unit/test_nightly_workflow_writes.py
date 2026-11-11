@@ -265,26 +265,64 @@ def test_the_suite_scan_allows_a_write_only_a_deselected_test_reaches_and_ignore
 SPEC_HEAD = "import { test } from '@playwright/test';\nconst API = process.env.MIP_API_URL;\n"
 
 
+SPEC_WRITE = "export async function write(request) { await request.post('/api/leads/B/snooze'); }\n"
+SPEC_READS = "test('reads', async ({ request }) => { await write(request); });\n"
+
+
 @pytest.mark.parametrize(
-    ("spec", "helpers"),
+    ("spec", "files"),
     [
-        ("async function write(request) {\n  await request.post(`${API}/api/leads/${id}/outcome`);\n}\ntest('reads', async ({ request }) => { await write(request); });\n", None),
-        ("test.beforeEach(async ({ request }) => { await request.post('/api/leads/B/disposition'); });\ntest('reads', async () => {});\n", None),
-        ("test('writes', async ({ request }) => { await request.post('/api/leads/B/assign'); });\n", None),
-        ("import { write } from './planted_helpers';\ntest('reads', async ({ request }) => { await write(request); });\n", "export async function write(request) { await request.post('/api/leads/B/snooze'); }\n"),
-        ("for (const kind of ['a', 'b']) {\n  test(`writes ${kind}`, async ({ request }) => { await request.post('/api/leads/B/outcome'); });\n}\n", None),
+        ("async function write(request) {\n  await request.post(`${API}/api/leads/${id}/outcome`);\n}\ntest('reads', async ({ request }) => { await write(request); });\n", {}),
+        ("test.beforeEach(async ({ request }) => { await request.post('/api/leads/B/disposition'); });\ntest('reads', async () => {});\n", {}),
+        ("test('writes', async ({ request }) => { await request.post('/api/leads/B/assign'); });\n", {}),
+        ("import { write } from './planted_helpers';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("for (const kind of ['a', 'b']) {\n  test(`writes ${kind}`, async ({ request }) => { await request.post('/api/leads/B/outcome'); });\n}\n", {}),
+        # real_data.spec.ts imports '../../src/routes/analytics.lib': the file is analytics.lib.ts, beside analytics.tsx.
+        ("import { write } from '../../src/routes/planted.lib';\n" + SPEC_READS, {"src/routes/planted.lib.ts": SPEC_WRITE, "src/routes/planted.tsx": "export const Route = 1;\n"}),
+        ("import { write } from './planted_dir';\n" + SPEC_READS, {"tests/e2e/planted_dir/index.tsx": SPEC_WRITE}),
+        ("import { write } from './planted_helpers.js';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("const { write } = require('./planted_helpers');\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("import { write } from './planted_helpers_moved';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": SPEC_WRITE}),
+        ("import { write } from './planted_helpers';\n" + SPEC_READS, {"tests/e2e/planted_helpers.ts": "export { write } from './planted_missing';\n"}),
     ],
-    ids=["module-helper", "hook", "running-test", "imported-helper", "generated-title"],
+    ids=[
+        "module-helper",
+        "hook",
+        "running-test",
+        "imported-helper",
+        "generated-title",
+        "dotted-module-import",
+        "directory-index-tsx",
+        "js-specifier",
+        "require-import",
+        "unresolved-import",
+        "unresolved-import-in-a-helper",
+    ],
 )
-def test_the_spec_scan_finds_a_write_no_deselected_test_holds(tmp_path: Path, spec: str, helpers: str | None) -> None:
-    (tmp_path / "tests" / "e2e").mkdir(parents=True)
-    (tmp_path / "tests" / "e2e" / "planted.spec.ts").write_text(SPEC_HEAD + spec, encoding="utf-8")
-    if helpers is not None:
-        (tmp_path / "tests" / "e2e" / "planted_helpers.ts").write_text(helpers, encoding="utf-8")
+def test_the_spec_scan_finds_a_write_no_deselected_test_holds(tmp_path: Path, spec: str, files: dict[str, str]) -> None:
+    for relative, text in {"tests/e2e/planted.spec.ts": SPEC_HEAD + spec, **files}.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
 
     findings, _writers = scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, "a title no test has")
 
     assert findings
+
+
+def test_the_spec_scan_reads_the_file_a_dotted_import_names_and_not_its_sibling(tmp_path: Path) -> None:
+    """``planted.lib`` is planted.lib.ts: a write in planted.tsx, which no spec imports, is no finding."""
+
+    spec = SPEC_HEAD + "import { label } from '../../src/routes/planted.lib';\ntest('reads', async () => { label(); });\n"
+    files = {
+        "tests/e2e/planted.spec.ts": spec,
+        "src/routes/planted.lib.ts": "export const label = () => 'reads';\n",
+        "src/routes/planted.tsx": "export const write = (request) => request.post('/api/leads/B/outcome');\n",
+    }
+    for relative, text in files.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
+
+    assert scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, None) == ([], [])
 
 
 def test_the_spec_scan_attributes_a_write_to_the_one_test_that_holds_it(tmp_path: Path) -> None:

@@ -18,7 +18,8 @@ imported module, a conftest) is a finding, whether or not a test reaches it.
 * ``spec_findings`` covers a Playwright spec: a path may sit only inside a
   ``test(...)`` call the step's ``--grep``/``--grep-invert`` leaves out,
   matched the way Playwright matches, against ``" <project> <file>
-  <describe...> <title>"``. A relative import that holds one is a finding.
+  <describe...> <title>"``. A relative import that holds one is a finding,
+  and so is one that resolves to no file.
 
 A UI control that posts one of these paths is not a literal in the spec;
 nightly's specs drive none today, and the docs list what they write.
@@ -382,15 +383,26 @@ def spec_calls(src: str) -> list[SpecCall]:
     return calls
 
 
-def _relative_imports(path: Path, src: str) -> list[Path]:
-    found = []
-    for module in re.findall(r"""(?:from|import)\s*\(?\s*['"](\.{1,2}/[^'"]+)['"]""", src):
+# A specifier names the file itself, the file with an extension appended (``analytics.lib`` is
+# analytics.lib.ts, never analytics.tsx), or a directory's index; a ``.js`` one its TypeScript twin.
+_APPENDED = ("", ".ts", ".tsx", "/index.ts", "/index.tsx")
+_TS_TWINS = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
+
+
+def _relative_imports(path: Path, src: str) -> tuple[list[Path], list[str]]:
+    """(the files ``src``'s relative imports resolve to, the specifiers that resolve to no file)."""
+
+    found: list[Path] = []
+    unresolved: list[str] = []
+    for module in re.findall(r"""(?:from|import|require)\s*\(?\s*['"](\.{1,2}/[^'"]+)['"]""", src):
         base = (path.parent / module).resolve()
-        for candidate in (base, base.with_suffix(".ts"), base.with_suffix(".tsx"), base / "index.ts"):
-            if candidate.is_file():
-                found.append(candidate)
-                break
-    return found
+        candidates = [Path(f"{base}{suffix}") for suffix in _APPENDED] + [base.with_suffix(twin) for twin in _TS_TWINS.get(base.suffix, ())]
+        resolved = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if resolved is None:
+            unresolved.append(module)
+        else:
+            found.append(resolved)
+    return found, unresolved
 
 
 def grep_matches(pattern: str, title: str) -> bool:
@@ -436,7 +448,8 @@ def spec_findings(frontend: Path, spec: str, grep: str | None, grep_invert: str 
         if runs:
             findings.append(f"{spec}:{line}: {match.group()} in a test the step runs: {title.strip()}")
     seen: set[Path] = set()
-    todo = _relative_imports(path, src)
+    todo, unresolved = _relative_imports(path, src)
+    findings += [f"{spec}: imports {name}, which resolves to no file this scan can read" for name in unresolved]
     while todo:
         module = todo.pop()
         if module in seen:
@@ -446,6 +459,8 @@ def spec_findings(frontend: Path, spec: str, grep: str | None, grep_invert: str 
         for match in LEAD_STATE_WRITE.finditer(text):
             findings.append(f"{module.relative_to(frontend)}:{_line_of(text, match.start())}: {match.group()} in a module {spec} imports")
         if module.is_relative_to(frontend / "tests"):
-            todo.extend(_relative_imports(module, text))
+            more, unresolved = _relative_imports(module, text)
+            todo.extend(more)
+            findings += [f"{module.relative_to(frontend)}: imports {name}, which resolves to no file this scan can read" for name in unresolved]
     return findings, sorted(set(writers))
 
