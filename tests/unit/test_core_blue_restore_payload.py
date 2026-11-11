@@ -157,3 +157,34 @@ def test_a_recorded_payload_or_no_core_blue_needs_no_rebuild() -> None:
     assert core_blue.blue_restore_payload(recorded, **INPUTS) == (None, "blue's restore payload is already recorded")
     assert core_blue.blue_restore_payload(None, **INPUTS)[0] is None
     assert core_blue.blue_restore_payload(rr.v6_record(), **INPUTS)[0] is None
+
+
+def test_a_blue_bound_to_another_database_is_rebuilt_with_its_database_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review of #330: a client bound to a non-default database carries LAKEBASE_DATABASE in blue's set.
+
+    The deploy hands the rebuild the database it binds (``--lakebase-database``,
+    as it hands ``app_deploy_payload``), so the rebuilt set is blue's; without
+    it the builder's default adds no name and the rebuild refuses.
+    """
+
+    from tools.databricks import app_core_rollback
+
+    names = sorted({*D0_NAMES, "LAKEBASE_DATABASE"})
+    payload, why = core_blue.blue_restore_payload(_adopted(names), **INPUTS, lakebase_database="acme_app_state")
+    assert payload is not None, why
+    env = {item["name"]: item.get("value") for item in payload["env_vars"]}  # type: ignore[union-attr]
+    assert env["LAKEBASE_DATABASE"] == "acme_app_state"
+    assert core_blue.blue_restore_payload(_adopted(names), **INPUTS)[1].endswith("lacks LAKEBASE_DATABASE)")
+    default, why = core_blue.blue_restore_payload(_adopted(sorted(D0_NAMES)), **INPUTS, lakebase_database="mip_app_state")
+    assert default is not None and "LAKEBASE_DATABASE" not in {item["name"] for item in default["env_vars"]}, why  # type: ignore[index]
+
+    # The command the deploy runs threads the flag through to the rebuild.
+    monkeypatch.setattr(core_blue, "load_core_blue", lambda *_a, **_k: _adopted(names))
+    out = tmp_path / "blue-restore-payload.json"
+    argv = ["restore-payload", "--app-name", rr.APP_NAME, "--scope", "scope", "--lakebase-instance", rr.LAKEBASE,
+            "--agentic-tier", "off", "--install-class", "demo", "--app-env", "sandbox", "--out", str(out)]
+    line = app_core_rollback.run(app_core_rollback._parser().parse_args([*argv, "--lakebase-database", "acme_app_state"]), None)
+    assert line == "restore-payload: blue's restore payload was rebuilt with blue's exact env-name set"
+    assert '"LAKEBASE_DATABASE"' in out.read_text(encoding="utf-8")

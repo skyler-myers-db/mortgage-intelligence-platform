@@ -79,6 +79,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--app-env", default="")
     parser.add_argument("--catalog", default="mip")
     parser.add_argument("--schema", default="gold")
+    # The database scripts/deploy.sh binds (M3-PR4); unset, the builder's
+    # default, the App's own database.
+    parser.add_argument("--lakebase-database", default=None)
     return parser
 
 
@@ -172,6 +175,7 @@ def run(args: argparse.Namespace, workspace: Any) -> str:
             catalog=args.catalog,
             schema=args.schema,
             lakebase_instance=args.lakebase_instance,
+            lakebase_database=args.lakebase_database,
         )
         if payload is not None and args.out is not None:
             args.out.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")

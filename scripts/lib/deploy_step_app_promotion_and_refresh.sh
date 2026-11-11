@@ -54,6 +54,7 @@ emit_app_deploy_payload() {
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
     --enable-campaign-treatment-runtime \
     --agentic-tier "$CLIENT_AGENTIC_TIER" \
     "${OTEL_DEPLOY_PAYLOAD_ARGS[@]}" \
