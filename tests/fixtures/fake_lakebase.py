@@ -485,12 +485,14 @@ class FakeCursor:
                 continue
             owner = server.owner_of(item.key)
             for (grantee, grantor, privilege), grantable in sorted(server.acl.get(item.key, {}).items()):
-                if target in (grantee, grantor):
-                    rows.append((_tag(item, definer_marker=False), item.schema, item.name, item.signature, "", owner, privilege, grantable, grantee == target, grantor))
+                owner_entry = grantee == grantor == owner
+                if target in (grantee, grantor) or owner_entry:
+                    tag = _tag(item, definer_marker=False)
+                    rows.append((tag, item.schema, item.name, item.signature, "", owner, privilege, grantable, grantee == target, grantor, owner_entry))
         for key, column, grantee, grantor, privilege in server.column_grants:
             item = next(item for item in server.objects if item.key == key)
             if target in (grantee, grantor):
-                rows.append(("column:r", item.schema, item.name, "", column, server.owner_of(key), privilege, False, grantee == target, grantor))
+                rows.append(("column:r", item.schema, item.name, "", column, server.owner_of(key), privilege, False, grantee == target, grantor, False))
         return rows
 
     def execute(self, statement: str, params: Any = None) -> None:

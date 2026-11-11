@@ -3764,8 +3764,9 @@ half-applied (exit 4) and offers exactly two exits:
   restores each such entry (`revert_grants`) and the revert runs it, as the
   legacy owner, in the same transaction as that object's inverse. Any other
   entry naming the deployer (granted by another role, with a grant option,
-  granted by the deployer, a column grant, or on a column's own sequence)
-  could not come back exactly, so the plan refuses it
+  granted by the deployer, of a privilege the legacy owner's own entry lacks,
+  which the owner would come back holding, a column grant, or on a column's
+  own sequence) could not come back exactly, so the plan refuses it
   (`target_grant_unrevertible`). Apply, revert and a new plan give the
   original plan digest.
 

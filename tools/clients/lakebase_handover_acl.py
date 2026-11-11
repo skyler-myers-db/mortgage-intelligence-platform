@@ -26,9 +26,11 @@ Three facts the owner changes alone do not cover:
   entry, same grantor. Any other entry naming the target cannot come back
   exactly (one another role granted it would return granted by the legacy
   owner, one with a grant option would leave that option on the owner's own
-  entry, one the target granted would change grantor, and a column grant or
-  a grant on a column's own sequence follows its table), so it is counted as
-  unrevertible and the plan refuses rather than claim an exact revert.
+  entry, one the target granted would change grantor, one whose privilege
+  the owner's own entry lacks would leave the owner holding it, and a column
+  grant or a grant on a column's own sequence follows its table), so it is
+  counted as unrevertible and the plan refuses rather than claim an exact
+  revert.
 * **The rehearsal's schema.** ``--rehearse`` creates and owns its schema, so
   it grants the target ``CREATE`` there itself and revokes exactly that grant
   afterwards (spike S3, answer 6).
@@ -68,9 +70,11 @@ ORDER BY n.nspname
 """
 # Read-only: every explicit ACL entry naming the target, as grantee or grantor,
 # on the database, mip_app and every mip_app object (the inventory's scope),
-# with the object's owner. Tags are the inventory's, plus ``owned:`` for a
-# column's own sequence (it moves with its table) and ``column:`` for a
-# column grant (its entry follows its table's owner change).
+# with the object's owner; and the owner's own entry on each (last column
+# TRUE), whose privileges a restorable entry must be within. Tags are the
+# inventory's, plus ``owned:`` for a column's own sequence (it moves with its
+# table) and ``column:`` for a column grant (its entry follows its table's
+# owner change).
 TARGET_ACL_SQL = """
 WITH target_role AS (
     SELECT oid FROM pg_roles WHERE rolname = %(target)s
@@ -121,11 +125,13 @@ WITH target_role AS (
 )
 SELECT scoped.tag, scoped.schema_name, scoped.object_name, scoped.signature, scoped.column_name,
        scoped.owner_name, entry.privilege_type::text, entry.is_grantable,
-       entry.grantee = target_role.oid, pg_get_userbyid(entry.grantor)::text
+       entry.grantee = target_role.oid, pg_get_userbyid(entry.grantor)::text,
+       entry.grantee = entry.grantor AND pg_get_userbyid(entry.grantee) = scoped.owner_name
 FROM scoped
 CROSS JOIN target_role
 CROSS JOIN LATERAL aclexplode(scoped.acl) entry
 WHERE entry.grantee = target_role.oid OR entry.grantor = target_role.oid
+   OR (entry.grantee = entry.grantor AND pg_get_userbyid(entry.grantee) = scoped.owner_name)
 ORDER BY 1, 2, 3, 4, 5, 7
 """
 # PostgreSQL 16's object privileges (MAINTAIN is PostgreSQL 17's).
@@ -198,15 +204,24 @@ def target_grants(cursor: Any, *, legacy: str, target: str, planned: Mapping[str
     """Read-only: the target's explicit entries on the objects the plan moves.
 
     Restorable: an entry the legacy owner granted the target without a grant
-    option. Every other entry naming the target is unrevertible (module docstring).
+    option, of a privilege the owner's own entry holds. Every other entry
+    naming the target is unrevertible (module docstring).
     """
 
     cursor.execute(TARGET_ACL_SQL, {"target": target, "schema": SCHEMA_NAME})
+    rows = cursor.fetchall()
+    # What the owner's own entry holds, per object (tag, schema, name, signature, column).
+    owner_holds: dict[tuple[str, ...], set[str]] = {}
+    for tag, schema, name, signature, column, _owner, privilege, _grantable, _grantee, _grantor, owner_entry in rows:
+        if owner_entry:
+            owner_holds.setdefault((str(tag), str(schema), str(name), str(signature), str(column)), set()).add(str(privilege))
     held: dict[str, set[str]] = {}
     unrevertible = 0
-    for tag, schema, name, signature, column, owner, privilege, grantable, grantee_is_target, grantor in cursor.fetchall():
+    for tag, schema, name, signature, column, owner, privilege, grantable, grantee_is_target, grantor, owner_entry in rows:
         if str(owner) != legacy:
             continue  # the handover does not move it
+        if owner_entry and not grantee_is_target:
+            continue  # the legacy owner's own entry, read above
         prefix = str(tag).partition(":")[0]
         restorable = (
             prefix not in {"owned", "column"}
@@ -215,6 +230,8 @@ def target_grants(cursor: Any, *, legacy: str, target: str, planned: Mapping[str
             and str(grantor) == legacy
             and not grantable
             and str(privilege) in REVIEWED_PRIVILEGES
+            # Merged into the target's owner entry, it comes back on the legacy owner's.
+            and str(privilege) in owner_holds.get((str(tag), str(schema), str(name), str(signature), str(column)), set())
         )
         if not restorable:
             unrevertible += 1

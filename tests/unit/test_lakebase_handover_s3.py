@@ -278,6 +278,32 @@ def test_a_legacy_granted_table_entry_is_restored_exactly(tmp_path: Path) -> Non
     assert server.acl == before
 
 
+def _owner_lacking_truncate(*target_privileges: str) -> FakeServer:
+    """The legacy owner revoked TRUNCATE from its own entry, then granted the target ``target_privileges``."""
+
+    server = FakeServer()
+    entries = {**owner_entries(APPROVALS, LEGACY), **{(DEPLOYER, LEGACY, privilege): False for privilege in target_privileges}}
+    entries.pop((LEGACY, LEGACY, "TRUNCATE"))
+    server.acl[APPROVALS] = entries
+    return server
+
+
+def test_the_fake_leaves_the_owner_holding_what_its_own_entry_lacked_after_a_round_trip() -> None:
+    """PostgreSQL 16.15 (PR #336 review): legacy=arwdxt plus target=D/legacy came back as legacy=arwdDxt."""
+
+    server = _owner_lacking_truncate("TRUNCATE")
+    server.change_owner(APPROVALS, LEGACY, DEPLOYER)
+    assert server.acl[APPROVALS] == owner_entries(APPROVALS, DEPLOYER), "merged into the new owner's entry"
+    server.change_owner(APPROVALS, DEPLOYER, LEGACY)
+    assert (LEGACY, LEGACY, "TRUNCATE") in server.acl[APPROVALS]
+
+
+def test_a_target_entry_the_owners_own_entry_lacks_refuses() -> None:
+    server = _owner_lacking_truncate("TRUNCATE", "SELECT")
+    assert _plan(server).refusals == ["target_grant_unrevertible"], "TRUNCATE only: SELECT is within the owner's entry"
+    assert _plan(_owner_lacking_truncate("SELECT")).refusals == []
+
+
 def test_the_apply_still_sends_no_grant_and_the_revert_only_journaled_restores(tmp_path: Path) -> None:
     server = FakeServer()
     journal = _apply(server, tmp_path / "j.json")
