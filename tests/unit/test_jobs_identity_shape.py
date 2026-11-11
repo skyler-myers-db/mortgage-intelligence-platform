@@ -18,9 +18,9 @@ keep the deployer (workspace admin).
 * The pipeline runs as the jobs principal too. The CLI v1.10.0 bundle schema
   (``databricks bundle schema``) declares ``run_as`` on ``resources.Pipeline``
   (service_principal_name or user_name), so spike S4's fallback (keep the
-  pipeline on the deployer) is not needed for the bundle to express it; the
-  live half of S4 (ALTER OWNER on its published datasets after a run_as
-  change) stays with the cutover.
+  pipeline on the deployer) is not needed for the bundle to express it. S4's
+  live half answered: no ALTER can re-own its published datasets; they follow
+  the pipeline's run_as, so after the release they are the jobs identity's.
 """
 
 from __future__ import annotations

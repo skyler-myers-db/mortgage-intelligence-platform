@@ -1,8 +1,9 @@
 """Interim owner pairs: exact matches only, at most 14 days ahead, an expired pair refuses (M2-PR8).
 
-Spike S4 is owed, so the ownership handover leaves the pipeline-managed
-datasets with their owner and the client's profile names each one in an exact
-``(full_name, owner, expires_at)`` pair. The approved-owner policy admits that
+No ALTER can re-own a pipeline-managed dataset (spike S4), so the ownership
+handover leaves them with their owner, the pipeline's run_as, and the client's
+profile names each one in an exact ``(full_name, owner, expires_at)`` pair
+until the release moves the pipeline's run_as. The approved-owner policy admits that
 owner for exactly that object; a case variant, another object, an expired
 pair or a pair beyond 14 days does not pass.
 """
@@ -133,6 +134,8 @@ def test_a_pair_for_another_object_or_a_case_variant_owner_still_refuses() -> No
 def test_an_expired_pair_refuses_its_object() -> None:
     refused = _refusals(_estate(), _pairs(_pair(expires_at="2026-11-03")))
     assert len(refused) == 1 and "expired interim owner pair" in refused[0]
+    # Spike S4: no ALTER can re-own a pipeline dataset, the only object a pair exists for.
+    assert "release or renew the pair" in refused[0] and "re-own the object" not in refused[0]
 
 
 def test_a_pair_never_admits_the_apps_own_service_principal() -> None:

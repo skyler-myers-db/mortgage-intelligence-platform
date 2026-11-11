@@ -15,7 +15,16 @@ job runs as the jobs identity:
   other principals' grants (the App's CAN_MANAGE_RUN, the verifier's CAN_USE)
   are never sent, a higher level already held is never lowered, and a grant
   the postflight cannot see fails the step. ``plan`` never mutates, and no
-  output names a principal or an object id.
+  output names a principal or an object id;
+* before any grant, reads each jobs-identity job's and pipeline's LIVE
+  run_as and refuses one that runs as anyone else (``live_run_as_drift``) or
+  cannot be read (``live_run_as_unreadable``): the summary is configuration,
+  and the direct-engine plan cannot see a pipeline's run_as (spike S4).
+
+``FakeWorkspace`` answers as the APIs did in spike S4: ``jobs.get`` and
+``pipelines.get`` carry the effective ``run_as_user_name`` (a pipeline's
+``spec`` never carries run_as), and a permissions ``set`` replaces the whole
+ACL, which the measured ``jobs set-permissions`` did.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ from typing import Any
 
 import pytest
 import yaml
+from databricks.sdk.errors import NotFound
 
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools.databricks import jobs_identity_acl as acl
@@ -203,14 +213,48 @@ def _entry(principal: str, *levels: str, inherited: bool = False, kind: str = "s
     )
 
 
-class FakeWorkspace:
-    """The permissions API over in-memory ACLs; ``update`` merges like PATCH and is the only write."""
+def _run_as_ids() -> dict[tuple[str, str], str]:
+    """Every jobs-identity job and pipeline id of ``_summary()``, running as the jobs SP."""
 
-    def __init__(self, acls: dict[tuple[str, str], list[Any]], *, sticky: bool = True) -> None:
+    return {(kind, live_id): JOBS_SP for kind, _key, live_id in acl.run_as_targets(_summary(), bundle=BUNDLE)}
+
+
+class FakeWorkspace:
+    """The permissions API over in-memory ACLs, and the job and pipeline GETs, as spike S4 measured them.
+
+    ``update`` merges like PATCH. ``set`` replaces the whole ACL, as the
+    measured ``jobs set-permissions`` did; it is recorded in ``sets`` and no
+    caller here may use it. ``run_as`` maps ``(kind, id)`` to the effective
+    ``run_as_user_name`` its GET answers; a pipeline's ``spec`` carries none.
+    """
+
+    def __init__(self, acls: dict[tuple[str, str], list[Any]], *, sticky: bool = True,
+                 run_as: dict[tuple[str, str], str] | None = None) -> None:
         self.acls, self.sticky = acls, sticky
         self.updates: list[tuple[str, str, list[Any]]] = []
-        self.permissions = SimpleNamespace(get=self._get, update=self._update, set=self._forbidden)
+        self.sets: list[tuple[str, str, list[Any]]] = []
+        self.run_as = _run_as_ids() if run_as is None else run_as
+        self.permissions = SimpleNamespace(get=self._get, update=self._update, set=self._set)
         self.workspace = SimpleNamespace(get_status=lambda path: SimpleNamespace(object_id="dir-1"))
+        self.jobs = SimpleNamespace(get=self._job)
+        self.pipelines = SimpleNamespace(get=self._pipeline)
+
+    def _identity(self, kind: str, live_id: str) -> str:
+        if (kind, live_id) not in self.run_as:
+            raise NotFound(f"{kind} not found")
+        return self.run_as[(kind, live_id)]
+
+    def _job(self, *, job_id: int) -> Any:
+        identity = self._identity("jobs", str(job_id))
+        return SimpleNamespace(
+            job_id=job_id,
+            run_as_user_name=identity,
+            settings=SimpleNamespace(run_as=SimpleNamespace(service_principal_name=identity, user_name=None)),
+        )
+
+    def _pipeline(self, *, pipeline_id: str) -> Any:
+        identity = self._identity("pipelines", pipeline_id)
+        return SimpleNamespace(pipeline_id=pipeline_id, run_as_user_name=identity, spec=SimpleNamespace(name="p"))
 
     def _get(self, object_type: str, object_id: str) -> Any:
         return SimpleNamespace(access_control_list=list(self.acls.get((object_type, object_id), [])))
@@ -225,8 +269,12 @@ class FakeWorkspace:
                 )
         return self._get(object_type, object_id)
 
-    def _forbidden(self, *args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("a set would replace the object's whole ACL")
+    def _set(self, object_type: str, object_id: str, *, access_control_list: list[Any]) -> Any:
+        self.sets.append((object_type, object_id, access_control_list))
+        self.acls[(object_type, object_id)] = [
+            _entry(request.service_principal_name, request.permission_level.value) for request in access_control_list
+        ]
+        return self._get(object_type, object_id)
 
 
 def _live_acls() -> dict[tuple[str, str], list[Any]]:
@@ -246,6 +294,7 @@ def _live_acls() -> dict[tuple[str, str], list[Any]]:
 def test_apply_adds_only_the_missing_grants_with_one_entry_each() -> None:
     client = FakeWorkspace(_live_acls())
     granted = acl.converge(client, _targets(), JOBS_SP)
+    assert client.sets == [], "a set would replace each object's whole ACL"
 
     assert sorted(target.grant.label for target in granted) == sorted(
         grant.label for grant in EXPECTED if grant.key != "mip_feature_pipeline"
@@ -294,6 +343,99 @@ def test_main_prints_bundle_keys_only(tmp_path: Path, capsys: pytest.CaptureFixt
     bad.write_text(json.dumps(_summary(**{"resources/sql_warehouses/mip_serverless_sql": {}})), encoding="utf-8")
     assert acl.main(["apply", "--bundle-summary", str(bad), "--jobs-principal", JOBS_SP], client=client) == 2
     assert "nothing was granted" in capsys.readouterr().err
+
+
+# ------------------------------------------------- the live run_as postflight
+
+PIPELINE = ("pipelines", "pl-placeholder")
+OTHER = "someone-else@example.invalid"
+
+
+def _job_id(key: str) -> str:
+    return {k: live_id for kind, k, live_id in acl.run_as_targets(_summary(), bundle=BUNDLE) if kind == "jobs"}[key]
+
+
+def test_every_jobs_identity_job_and_pipeline_is_read_live_and_none_is_left_out() -> None:
+    targets = acl.run_as_targets(_summary(), bundle=BUNDLE)
+    assert sorted(f"{kind}.{key}" for kind, key, _ in targets) == sorted(
+        [f"jobs.{key}" for key in _on_jobs("jobs")] + [f"pipelines.{key}" for key in _on_jobs("pipelines")]
+    )
+    assert "pipelines.mip_feature_pipeline" in {f"{k}.{key}" for k, key, _ in targets}, "positive control"
+    assert acl.live_run_as_drift(FakeWorkspace({}), targets, JOBS_SP.upper()) == [], "one principal, any case"
+
+
+@pytest.mark.parametrize(
+    ("where", "label"),
+    ((lambda: PIPELINE, "pipelines.mip_feature_pipeline"), (lambda: ("jobs", _job_id("mip_kpi_snapshot")), "jobs.mip_kpi_snapshot")),
+    ids=("pipeline", "job"),
+)
+def test_a_live_run_as_drift_refuses_though_the_summary_says_jobs_principal(where: Any, label: str) -> None:
+    """Spike S4: the summary (configuration) still names the jobs SP; only the live GET shows the drift."""
+
+    summary = _summary()
+    _targets(summary)  # the configuration check passes
+    client = FakeWorkspace(_live_acls())
+    client.run_as[where()] = OTHER
+    assert acl.live_run_as_drift(client, acl.run_as_targets(summary, bundle=BUNDLE), JOBS_SP) == [
+        (acl.LIVE_RUN_AS_DRIFT, label)
+    ]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    (lambda run_as: run_as.__setitem__(PIPELINE, ""), lambda run_as: run_as.pop(PIPELINE)),
+    ids=("blank", "gone"),
+)
+def test_an_unreadable_live_run_as_refuses_and_is_never_read_as_the_creator(damage: Any) -> None:
+    client = FakeWorkspace({})
+    damage(client.run_as)
+    assert acl.live_run_as_drift(client, acl.run_as_targets(_summary(), bundle=BUNDLE), JOBS_SP) == [
+        (acl.LIVE_RUN_AS_UNREADABLE, "pipelines.mip_feature_pipeline")
+    ]
+
+
+def test_the_fake_answers_run_as_as_the_apis_did_in_spike_s4() -> None:
+    client = FakeWorkspace(_live_acls())
+    pipeline = client.pipelines.get(pipeline_id=PIPELINE[1])
+    assert pipeline.run_as_user_name == JOBS_SP and not hasattr(pipeline.spec, "run_as"), "spec never carries run_as"
+    assert client.jobs.get(job_id=int(_job_id("mip_kpi_snapshot"))).run_as_user_name == JOBS_SP
+    # A set replaces the whole ACL: setting IS_OWNER dropped the App's CAN_MANAGE_RUN.
+    from databricks.sdk.service.iam import AccessControlRequest, PermissionLevel
+
+    job = ("jobs", _job_id("mip_refresh_scores"))
+    owner = AccessControlRequest(service_principal_name=JOBS_SP, permission_level=PermissionLevel("IS_OWNER"))
+    client.permissions.set(*job, access_control_list=[owner])
+    assert [entry.service_principal_name for entry in client.acls[job]] == [JOBS_SP]
+
+
+def test_main_refuses_a_drift_before_any_grant_and_names_bundle_keys_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps(_summary()), encoding="utf-8")
+    monkeypatch.chdir(ROOT)
+    client = FakeWorkspace(_live_acls())
+    client.run_as[PIPELINE] = OTHER
+    for command in ("plan", "apply"):
+        assert acl.main([command, "--bundle-summary", str(summary), "--jobs-principal", JOBS_SP], client=client) == 4
+    assert client.updates == [] and client.sets == []
+    err = capsys.readouterr().err
+    assert "REFUSED live_run_as_drift pipelines.mip_feature_pipeline" in err and "nothing was granted" in err
+    for value in (OTHER, JOBS_SP, "pl-placeholder"):
+        assert value not in err, value
+    client.run_as[PIPELINE] = JOBS_SP
+    assert acl.main(["apply", "--bundle-summary", str(summary), "--jobs-principal", JOBS_SP], client=client) == 0
+    assert client.sets == [] and client.updates, "the grants follow once every live run_as is the jobs SP"
+
+
+def test_a_live_read_error_fails_the_step_without_a_grant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps(_summary()), encoding="utf-8")
+    monkeypatch.chdir(ROOT)
+    client = FakeWorkspace(_live_acls())
+    client.pipelines = SimpleNamespace(get=lambda **_: (_ for _ in ()).throw(PermissionError("denied")))
+    assert acl.main(["apply", "--bundle-summary", str(summary), "--jobs-principal", JOBS_SP], client=client) == 3
+    assert client.updates == []
 
 
 # ------------------------------------------------------------ the deploy step

@@ -2,7 +2,7 @@
 
 The synthetic install of tests/fixtures/adopt_estate.py after its adoption:
 the deployer's state binds the 16 legacy keys; the dashboards stay in the
-legacy ``resources`` folder (pinned until spike S4) and the App runs from the
+legacy ``resources`` folder (pinned for good: spike S4) and the App runs from the
 legacy ``app-src`` folder, so both are bound paths, and so is the legacy
 ``state`` folder that unadopt reads.
 """

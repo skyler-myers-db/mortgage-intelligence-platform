@@ -155,7 +155,12 @@ HANDOVER_READS = frozenset(
         ("pipelines", "list_pipelines"),
     }
 )
-HANDOVER_MODULES = frozenset({HANDOVER_OWNER_MODULE, "handover_uc_plan.py", "handover_verify.py"})
+# handover_pipeline_owner.py is the --verify helper that reads each pipeline
+# dataset's pipeline id (tables.get) to compare its owner with the pipeline's
+# live run_as (spike S4); it reads only.
+HANDOVER_MODULES = frozenset(
+    {HANDOVER_OWNER_MODULE, "handover_uc_plan.py", "handover_verify.py", "handover_pipeline_owner.py"}
+)
 # The owner's estate inventory (M4-PR1) runs as the metastore's direct owner.
 # Its CLI here makes no SDK call of its own; its collector, outside this
 # directory, makes exactly these, every one a get or a list.
