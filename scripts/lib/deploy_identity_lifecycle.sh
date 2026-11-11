@@ -62,6 +62,47 @@ deployment_control_value() {
   printf '%s' "${value:-$default_value}"
 }
 
+# A first install's bootstrap SQL warehouse (B1): the client profile's
+# MIP_BOOTSTRAP_WAREHOUSE_ID ($1, as the preflight's bundle warehouse block
+# read it), which that block admits only when this deployer's bundle state
+# binds no warehouse; $2 is an operator DATABRICKS_WAREHOUSE_ID. Returns only
+# when every check holds, else exits 2 before any mutation, the id unprinted:
+# the data phase runs on the bundle's own warehouse only; an operator value
+# must be the same warehouse; and `bundle_state bootstrap-warehouse-id` must
+# prove it read-only (a first install, no App, a live pro or serverless
+# warehouse) and print exactly the id read here, 16 lowercase hex characters.
+check_bootstrap_warehouse() {
+  local configured="$1" operator="$2" checked=""
+  if [[ "${DEPLOY_PHASE:-}" == "data" ]]; then
+    echo "${RED}[deploy] the data phase runs on this deployer's bundle warehouse only, which the first release creates; this deployer's bundle state binds none yet, so MIP_BOOTSTRAP_WAREHOUSE_ID is refused. Nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  if [[ -n "$operator" && "$operator" != "$configured" ]]; then
+    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID; unset it. Nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  echo "${DIM}\$ $PYTHON -m tools.databricks.bundle_state bootstrap-warehouse-id${RST}"
+  if ! checked="$("$PYTHON" -m tools.databricks.bundle_state bootstrap-warehouse-id)"; then
+    echo "${RED}[deploy] the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID was refused (see above); nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  if ! [[ "$checked" =~ ^[0-9a-f]{16}$ && "$checked" == "$configured" ]]; then
+    echo "${RED}[deploy] the bootstrap warehouse check did not print exactly the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID; nothing was changed.${RST}" >&2
+    exit 2
+  fi
+}
+
+# What the preflight's bundle warehouse block reports for a configured
+# MIP_BOOTSTRAP_WAREHOUSE_ID it did not use (B1): this deployer's bundle state
+# binds the bundle's own warehouse, which always wins, or a dry run read no
+# state. The field is never refused for that and its id is never printed.
+note_bootstrap_warehouse() {
+  case "$WAREHOUSE_SOURCE" in
+    bundle-state) echo "  bootstrap warehouse: not read (this deployer's bundle state binds the bundle's own)" ;;
+    dry-run*) echo "  bootstrap warehouse: configured (a live run proves it read-only; its id is never printed)" ;;
+  esac
+}
+
 # The App's optional Salesforce secret bindings (spike S2b): the client
 # profile's MIP_SALESFORCE_BINDINGS, off when unset. The release's binding
 # payload, the window plan's and the App payload read this one export, so a

@@ -252,6 +252,23 @@ def adoption_refusals(profile: ClientProfile) -> list[str]:
     return lines
 
 
+def bootstrap_warehouse_refusals(profile: ClientProfile) -> list[str]:
+    """A first install's bootstrap warehouse (B1) is never an adopted install's.
+
+    ``MIP_BOOTSTRAP_WAREHOUSE_ID`` names the SQL warehouse a first install's
+    steps borrow until its bundle apply creates the bundle's own. An adopted
+    install binds the warehouse its legacy bundle state names, so the two
+    fields together refuse. A placeholder never fires: the template holds both.
+    """
+
+    if _real(profile.bootstrap_warehouse_id) and _real(profile.legacy_bundle_root):
+        return [
+            "MIP_BOOTSTRAP_WAREHOUSE_ID: must be unset when MIP_LEGACY_BUNDLE_ROOT is set: an "
+            "adopted install keeps the SQL warehouse its legacy bundle state binds"
+        ]
+    return []
+
+
 def exposure_refusals(profile: ClientProfile) -> list[str]:
     """The accepted-exposure policy's closed shape and ceiling, at resolve (M2-PR4).
 
@@ -323,6 +340,7 @@ def cross_field_refusals(profile: ClientProfile, *, allow_placeholders: bool) ->
         tier_refusals,
         reserved_identity_refusals,
         adoption_refusals,
+        bootstrap_warehouse_refusals,
         exposure_refusals,
         interim_pair_refusals,
     ):

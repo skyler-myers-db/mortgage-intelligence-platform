@@ -42,6 +42,9 @@ LEGACY_BUNDLE_ROOT = re.compile(
     r"/Workspace/Users/[^/\s<>]+/\.bundle/mortgage-intelligence-platform/[A-Za-z0-9][A-Za-z0-9_-]*"
 )
 STORAGE_ROOT = re.compile(r"(?P<scheme>s3|abfss|gs)://[^\s'\"<>]+")
+# A SQL warehouse id as the Warehouses API returns it: 16 lowercase hex
+# characters (a first install's bootstrap warehouse, B1).
+SQL_WAREHOUSE_ID = re.compile(r"[0-9a-f]{16}")
 PRINCIPAL = re.compile(r"[^\s,<>](?:[^,\n\r<>]{0,253}[^\s,<>])?")
 
 # Each cloud's workspace-host suffix, account-console host and storage scheme.

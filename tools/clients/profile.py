@@ -207,7 +207,9 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
     """Values for the bundle variables databricks.yml declares today.
 
     ``scheduled_refresh_failure_recipients`` is a complex variable the CLI
-    refuses from the environment, so it is not here.
+    refuses from the environment, so it is not here. Nor is a first install's
+    ``MIP_BOOTSTRAP_WAREHOUSE_ID`` (B1): the bundle declares its own warehouse
+    and names it by reference, never by a variable.
     """
 
     lender = _lender_env(profile)
@@ -287,7 +289,11 @@ OPTIONAL_PAYLOAD_ENV_NAMES = (
 
 
 def app_payload_env(profile: ClientProfile) -> dict[str, str]:
-    """The App runtime env the profile owns (the rest stays with the payload builder)."""
+    """The App runtime env the profile owns (the rest stays with the payload builder).
+
+    A first install's ``MIP_BOOTSTRAP_WAREHOUSE_ID`` (B1) never reaches it: the
+    App binds the bundle's own warehouse (``value_from: sql_warehouse``).
+    """
 
     ids = profile.identity_ids
     policy = policy_controls(install_policy(profile))

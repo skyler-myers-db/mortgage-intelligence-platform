@@ -93,6 +93,9 @@ EXPECTED_IDENTIFYING = frozenset(
         "MIP_DASHBOARD_PARENT_PATH",
         # M2-PR6: an adopted install's legacy root names its owner.
         "MIP_LEGACY_BUNDLE_ROOT",
+        # B1 (wave 7): a first install's bootstrap SQL warehouse id; every
+        # warehouse id in this repo is masked.
+        "MIP_BOOTSTRAP_WAREHOUSE_ID",
         "MIP_LENDER_IDENTITY_JSON",
         "MIP_ACCEPTED_EXPOSURE_JSON",
         # M2-PR8: the handover's interim owner pairs name each dataset's owner.
