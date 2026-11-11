@@ -3856,9 +3856,12 @@ MIP_LENDER_IDENTITY_SHA256=
 
 No tracked file names a client value any more:
 `tests/unit/test_no_client_identifiers_committed.py` holds the tree at zero
-workspace hosts, App URLs, `?o=` workspace ids, non-example emails, bare
-16-digit ids, 16-hex and 32-hex ids and UUIDs, outside synthetic values,
-pinned test digests, content-hash files and its reviewed `ALLOWED` entries.
+workspace hosts and their bare `dbc-`/`adb-` labels, App URLs, `?o=`
+workspace ids, non-example emails (plain, URL-encoded or a URL's userinfo;
+`.local` is not an example domain), bare 16-digit ids, 16-hex and 32-hex ids
+in either case and UUIDs, outside synthetic values, pinned test digests and
+its reviewed `ALLOWED` entries. No file is exempt by name: lockfiles and
+manifests are scanned too.
 Docs use symbolic placeholders (`<workspace-host>`, `<app-host>`,
 `<workspace-id>`, `<genie-space-id>`, `<warehouse-id>`, `<deployment-id>`,
 `<operator-email>`). Git history still holds the values the purge removed.

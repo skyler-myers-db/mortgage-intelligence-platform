@@ -20,14 +20,20 @@ What a shape may still match, and why:
   hand-made. ``is_synthetic`` decides, and
   ``test_random_ids_are_almost_never_synthetic`` bounds how often a real,
   random id would pass it;
-- an example-domain address (RFC 2606 / 6761), or the userinfo of a URL
-  (``https://user:pw@host``), which is not an address;
+- an example-domain address (RFC 2606 / 6761; ``.local`` is not one, since
+  directory domains use it), or the userinfo of a URL
+  (``https://user:pw@host``), which is not an address. A userinfo whose
+  authority holds a second ``@`` (``postgresql://<user>@<domain>@<host>``)
+  is an address and is counted, as is a URL-encoded one (``%40``);
 - a pinned digest in a test: a value labelled as a hash
   (``question_hash``, ``sql_hash``, ``hash:``) or held by a ``GOLDEN_``
   constant is what the code computes from synthetic inputs;
-- a content-hash file (lockfiles, manifests): its hex and UUID runs are
-  hashes and ids of packages, never of an install;
 - an entry of ``ALLOWED``, each scoped to its files and with its reason.
+
+Every tracked text file is scanned for every shape, lockfiles and manifests
+included: their hashes are 64-hex or base64, which no shape matches, and
+none held a match at the purge. A value one of them ever needs goes in
+``ALLOWED`` by value and path, never as a file exemption.
 
 When this test fails it lists every file and line holding the shape.
 Replace the value with a symbolic placeholder or an example-domain value;
@@ -50,10 +56,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Each id-bearing shape names its id ``id`` so the synthetic test can judge it.
 SHAPES: dict[str, re.Pattern[bytes]] = {
-    # An AWS dbc- host, an Azure adb- host or a GCP numeric host.
+    # An AWS dbc- host, an Azure adb- host or a GCP numeric host. The AWS and
+    # Azure deployment labels (dbc-<8hex>-<4hex>, adb-<id>) name the workspace
+    # without their domain too.
     "workspace_host": re.compile(
-        rb"(?i)(?<![a-z0-9-])(?:dbc-(?P<id>[0-9a-f]{8}(?:-[0-9a-f]{4})?)\.cloud\.databricks\.com"
-        rb"|adb-(?P<azure>[0-9]{6,19})\.[0-9]{1,2}\.azuredatabricks\.net"
+        rb"(?i)(?<![a-z0-9-])(?:dbc-(?P<id>[0-9a-f]{8}(?:-[0-9a-f]{4})?)(?:\.cloud\.databricks\.com)?"
+        rb"|adb-(?P<azure>[0-9]{6,19})(?:\.[0-9]{1,2}\.azuredatabricks\.net)?"
         rb"|(?P<gcp>[0-9]{6,19})\.[0-9]\.gcp\.databricks\.com)(?![a-z0-9-])"
     ),
     # A Databricks App URL: <app>-<workspace id>.<cloud>.databricksapps.com.
@@ -63,14 +71,18 @@ SHAPES: dict[str, re.Pattern[bytes]] = {
     ),
     # A workspace id in a workspace URL's ``?o=`` query.
     "workspace_query": re.compile(rb"[?&]o=(?P<id>[0-9]{6,19})(?![0-9])"),
-    # An email-shaped address; reserved example domains are dropped below.
-    "email": re.compile(rb"[A-Za-z0-9._%+-]+@(?P<domain>[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})"),
+    # An email-shaped address, plain or URL-encoded (``%40``, as a deep link's
+    # query carries it); reserved example domains are dropped below.
+    "email": re.compile(
+        rb"[A-Za-z0-9._%+-]+(?:@|%40)(?P<domain>[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})"
+    ),
     # A bare 16-digit id (a workspace, SCIM or run id); not a decimal's fraction.
     "digits16": re.compile(rb"(?<![0-9A-Za-z])(?<![0-9]\.)(?P<id>[0-9]{16})(?![0-9A-Za-z])"),
-    # A 16-hex id (a warehouse id) with at least one letter, so digits16 keeps the rest.
-    "hex16": re.compile(rb"(?<![0-9A-Za-z])(?P<id>(?=[0-9a-f]{0,15}[a-f])[0-9a-f]{16})(?![0-9A-Za-z])"),
-    # A 32-hex id: a Genie space, conversation, message or App deployment id.
-    "hex32": re.compile(rb"(?<![0-9A-Za-z])(?P<id>(?=[0-9a-f]{0,31}[a-f])[0-9a-f]{32})(?![0-9A-Za-z])"),
+    # A 16-hex id (a warehouse id) with at least one letter, so digits16 keeps
+    # the rest; either case, as Genie and the UI both print it.
+    "hex16": re.compile(rb"(?i)(?<![0-9a-z])(?P<id>(?=[0-9a-f]{0,15}[a-f])[0-9a-f]{16})(?![0-9a-z])"),
+    # A 32-hex id, either case: a Genie space, conversation, message or App deployment id.
+    "hex32": re.compile(rb"(?i)(?<![0-9a-z])(?P<id>(?=[0-9a-f]{0,31}[a-f])[0-9a-f]{32})(?![0-9a-z])"),
     # A UUID: a service principal's application id, an account or a metastore id.
     "uuid": re.compile(
         rb"(?i)(?<![0-9a-z])(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-z])"
@@ -79,19 +91,18 @@ SHAPES: dict[str, re.Pattern[bytes]] = {
 # Zero everywhere since the purge. Never raise one.
 BASELINE = dict.fromkeys(SHAPES, 0)
 
-# RFC 2606 / 6761 reserved names: an address there names nobody.
+# RFC 2606 / 6761 reserved names: an address there names nobody. Not
+# ``.local``: directory (Active Directory) domains use it for real people.
 _EXAMPLE_DOMAIN = re.compile(
-    rb"(?i)(?:^|\.)(?:example|invalid|test|localhost|local)$|(?:^|\.)example\.(?:com|net|org)$"
+    rb"(?i)(?:^|\.)(?:example|invalid|test|localhost)$|(?:^|\.)example\.(?:com|net|org)$"
 )
 # ``scheme://user@`` or ``scheme://user:password@``: a URL's userinfo, not an address.
 _URL_USERINFO = re.compile(rb"://(?:[A-Za-z0-9._%+-]+:)?$")
+# ...unless the authority goes on to another ``@``: then the match was the
+# userinfo's own address (``postgresql://<user>@<domain>[:<secret>]@<host>``).
+_USERINFO_CONTINUES = re.compile(rb"[^\s/?#@]*@")
 _HEX = "0123456789abcdef"
 
-# Lockfiles and manifests: their hex and UUID runs hash or name packages and
-# assets, never an install, so only the id-free shapes (hosts, App URLs,
-# ``?o=`` and emails) scan them.
-_CONTENT_HASH_FILE = re.compile(r"(?:^|/)(?:uv\.lock|[^/]*\.lock|package-lock\.json|[^/]*manifest[^/]*\.json)$")
-_ID_SHAPES = frozenset({"digits16", "hex16", "hex32", "uuid"})
 # The shapes a hex digest takes; a pinned digest never relaxes a UUID or a number.
 _DIGEST_SHAPES = frozenset({"hex16", "hex32"})
 # Test sources, where a labelled hash or a GOLDEN_ pin is a computed digest.
@@ -217,17 +228,15 @@ def shape_hits(data: bytes, rel: str = "") -> list[tuple[str, int, bytes]]:
     """(shape, line, value) for every client-identifier-shaped value in ``data``."""
 
     hits: list[tuple[str, int, bytes]] = []
-    content_hash = bool(_CONTENT_HASH_FILE.search(rel))
     in_tests = bool(_TEST_PATH.match(rel))
     for shape, pattern in SHAPES.items():
-        if content_hash and shape in _ID_SHAPES:
-            continue
         for match in pattern.finditer(data):
             value = match.group(0)
             line_start = data.rfind(b"\n", 0, match.start()) + 1
             before = data[line_start : match.start()]
             if shape == "email" and (
-                _EXAMPLE_DOMAIN.search(match.group("domain")) or _URL_USERINFO.search(before)
+                _EXAMPLE_DOMAIN.search(match.group("domain"))
+                or (_URL_USERINFO.search(before) and not _USERINFO_CONTINUES.match(data, match.end()))
             ):
                 continue
             ident = _id_of(match)
@@ -324,13 +333,26 @@ def test_each_shape_has_a_positive_and_a_negative_control() -> None:
             _j("dbc-", _HOST8, "-", _HOST4, ".cloud.databricks.com"),
             _j("adb-", _WS, ".", "7", ".azuredatabricks.net"),
             _j(_WS, ".", "2", ".gcp.databricks.com"),
+            # The bare deployment labels, as a deploy log or a report names them.
+            _j("deployed to dev (`dbc-", _HOST8, "-", _HOST4, "`)"),
+            _j("dbc-", _HOST8.upper(), " "),
+            _j("workspace adb-", _WS, ","),
         ],
         "app_url": [_j("mip-app-", _WS, ".aws.databricksapps.com"), _j("x-", _WS, ".11.azure.databricksapps.com")],
         "workspace_query": [_j("/?o=", _WS), _j("&o=", _WS[:15])],
-        "email": [_j("someone", "@", "corp-alpha", ".com"), _j("mailto:", "a.b", "@", "lender", ".ai")],
+        "email": [
+            _j("someone", "@", "corp-alpha", ".com"),
+            _j("mailto:", "a.b", "@", "lender", ".ai"),
+            # A directory domain, a URL-encoded address and an address as a URL's userinfo.
+            _j("first.last", "@", "corp", ".local"),
+            _j("/audit-ledger?audit_actor=", "first.last", "%40", "corp", ".com&x=1"),
+            _j("postgresql://", "first.last", "@", "corp", ".com", "@", "inst", ".database.example.com:5432/db"),
+            _j("postgresql://", "first.last", "@", "corp", ".com", ":token", "@", "inst", ".example.com/db"),
+            _j("postgresql://", "first.last", "%40", "corp", ".com", ":token", "@", "inst", ".example.com/db"),
+        ],
         "digits16": [_j("workspace ", _WS), _j("id=", _WS, ";")],
-        "hex16": [_j("warehouses/", _HEX16), _j('"', _HEX16, '"')],
-        "hex32": [_j("space ", _HEX32), _j("/rooms/", _HEX32, "?")],
+        "hex16": [_j("warehouses/", _HEX16), _j('"', _HEX16, '"'), _j('id="', _HEX16.upper(), '"')],
+        "hex32": [_j("space ", _HEX32), _j("/rooms/", _HEX32, "?"), _j('conversation_id="', _HEX32.upper(), '"')],
         "uuid": [_j("sp ", _UUID), _j("agent-trace-", _UUID)],
     }
     negatives = {
@@ -338,7 +360,9 @@ def test_each_shape_has_a_positive_and_a_negative_control() -> None:
             b"https://dbc-test.cloud.databricks.com",
             b"accounts.cloud.databricks.com",
             _j("dbc-", "1234", "5678", "-abcd", ".cloud.databricks.com"),
+            _j("dbc-", "1234", "5678", "-abcd"),
             _j("adb-", "1234567890", "123456", ".7.azuredatabricks.net"),
+            _j("dbc-", _HOST8, "-", _HOST4, "-extra"),
         ],
         "app_url": [b"https://mip-app-test.aws.databricksapps.com", b"mip-app.databricksapps.com", b"<app-host>"],
         "workspace_query": [b"?o=12345", b"?o=<workspace-id>"],
@@ -349,10 +373,23 @@ def test_each_shape_has_a_positive_and_a_negative_control() -> None:
             b"x@y.invalid",
             _j("https://user", ":pw", "@", "dbc-x", ".cloud.databricks.com"),
             _j("https://user", "@", "workspace", ".cloud.databricks.com"),
+            _j("postgresql://user", ":pw", "@", "inst", ".database.cloud.databricks.com:5432/db"),
+            _j("?audit_actor=", "jane", "%40", "summit", ".example"),
+            _j("http://", "dev", "@", "app", ".localhost:8000"),
         ],
         "digits16": [_j("x", _WS), _j(_WS, "1"), _j("0.", _WS), _j("1", "0" * 15), b"<workspace-id>"],
-        "hex16": [_j("0123", "4567", "89ab", "cdef"), _j("a0b1", "c2d3", "e4f5", "a6b7"), _j(_HEX16, "00")],
-        "hex32": [_j("0123456789abcdef", "0123456789abcdef"), _j("01f1", "0" * 27, "1"), _j(_HEX32, "a")],
+        "hex16": [
+            _j("0123", "4567", "89ab", "cdef"),
+            _j("a0b1", "c2d3", "e4f5", "a6b7"),
+            _j(_HEX16, "00"),
+            _j("1234", "5678", "90AB", "CDEF"),
+        ],
+        "hex32": [
+            _j("0123456789abcdef", "0123456789abcdef"),
+            _j("01f1", "0" * 27, "1"),
+            _j(_HEX32, "a"),
+            _j("01F1C0DE", "0" * 23, "1"),
+        ],
         "uuid": [
             _j("11111111", "-1111-4111-8111-", "111111111111"),
             _j("0a1b2c3d", "-4e5f-4a6b-8c7d-", "9e0f1a2b3c4d"),
@@ -381,11 +418,24 @@ def test_pinned_digests_are_exempt_only_in_tests() -> None:
     assert shape_counts(_j('id = "', _HEX16, '"'), "tests/unit/test_x.py")["hex16"] == 1
 
 
-def test_content_hash_files_skip_only_the_id_shapes() -> None:
-    data = _j(_HEX32, " ", _UUID, " dbc-", _HOST8, ".cloud.databricks.com")
-    assert shape_counts(data, "uv.lock") == Counter({"workspace_host": 1})
-    assert shape_counts(data, "frontend/package-lock.json") == Counter({"workspace_host": 1})
-    assert shape_counts(data, "docs/notes.md") == Counter({"workspace_host": 1, "hex32": 1, "uuid": 1})
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "uv.lock",
+        "requirements-dev.lock",
+        "frontend/package-lock.json",
+        "backend/resources/lineage_manifest.json",
+        "frontend/src/geo/zcta/manifest.json",
+        "docs/release-manifest.json",
+        "docs/notes.md",
+    ],
+)
+def test_lockfiles_and_manifests_are_scanned_for_every_shape(rel: str) -> None:
+    """No file is exempt by name: a release manifest is where deployment ids would sit."""
+
+    data = _j(_HEX32, " ", _UUID, " ", _HEX16, " ", _WS, " dbc-", _HOST8, ".cloud.databricks.com")
+    every = Counter({"workspace_host": 1, "hex32": 1, "uuid": 1, "hex16": 1, "digits16": 1})
+    assert shape_counts(data, rel) == every
 
 
 def test_each_allowed_value_is_scoped_and_still_matches_its_shape() -> None:
