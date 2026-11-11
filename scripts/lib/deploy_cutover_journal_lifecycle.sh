@@ -123,7 +123,7 @@ reconcile_retry_supervisor_app_acl() {
     "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" \
     "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     "${MIP_DEFAULT_CATALOG:-mip}" \
-    "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    "$MIP_AGENT_SUPERVISOR_NAME" \
     "$plan_file" <<'PYEOF'
 import sys
 from pathlib import Path
@@ -490,6 +490,7 @@ resume_captured_runtime_retirement() {
     DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
     DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor finalize \
+    --canonical-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --replacement-id "$MIP_AGENT_SUPERVISOR_ID" \
     --replacement-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
     --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \

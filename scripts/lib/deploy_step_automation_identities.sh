@@ -313,7 +313,7 @@ elif [[ "$DRY_RUN" -eq 0 ]]; then
     --app-name "$_GRANTS_APP_NAME" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     "${_PRESTOP_TIER_ARGS[@]}" "${_PRESTOP_PHASE_ARGS[@]}" \
-    --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --supervisor-name "$MIP_AGENT_SUPERVISOR_NAME" \
     --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
@@ -337,7 +337,7 @@ else
   step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
   _PRESTOP_GENIE_TURN="one Genie turn"
   [[ "${DEPLOY_PHASE:-}" != "plan" ]] || _PRESTOP_GENIE_TURN="no Genie turn (--phase plan; the release asks it)"
-  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and ${_PRESTOP_GENIE_TURN}"
+  echo "  would probe read-only: the creator of Supervisor '$MIP_AGENT_SUPERVISOR_NAME' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and ${_PRESTOP_GENIE_TURN}"
   echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
 fi
 # >>> estate inventory: pre-lease >>>

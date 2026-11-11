@@ -1131,7 +1131,7 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
         '--app-name "$_GRANTS_APP_NAME"',
         '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"',
         '"${_PRESTOP_TIER_ARGS[@]}"',
-        '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"',
+        '--supervisor-name "$MIP_AGENT_SUPERVISOR_NAME"',
         '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
         '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
         '--catalog "${MIP_DEFAULT_CATALOG:-mip}"',
@@ -1315,6 +1315,7 @@ PII_SALT_REQUIRE_EXISTING=0
 APP_ROLLBACK_SECRET_SCOPE=mip-app-rollback
 MIP_LAKEBASE_INSTANCE=mip-app-state
 MIP_GENIE_SPACE_NAME="Mortgage Lead Intelligence"
+MIP_AGENT_SUPERVISOR_NAME="Mortgage Growth Agent"
 DATABRICKS_CLIENT_ID=normal-client DATABRICKS_CLIENT_SECRET=s1
 DATABRICKS_OPERATOR2_CLIENT_ID=operator2-client
 DATABRICKS_ADMIN_CLIENT_ID=admin-client DATABRICKS_ADMIN_CLIENT_SECRET=s2
