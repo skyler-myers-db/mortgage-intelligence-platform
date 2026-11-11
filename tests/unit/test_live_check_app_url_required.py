@@ -29,8 +29,19 @@ def test_verify_live_refuses_without_a_base_url(monkeypatch: pytest.MonkeyPatch,
     assert "--base-url (or MIP_APP_URL) is required" in capsys.readouterr().err
 
 
+def _no_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Any token mint or probe fails the test before it reaches the CLI or the network."""
+
+    monkeypatch.setattr(verify_live, "get_oauth_token", lambda profile: pytest.fail("no token without a URL"))
+    monkeypatch.setattr(verify_live, "run_probes", lambda base, token: pytest.fail("no probe without a URL"))
+    monkeypatch.setattr(
+        verify_live, "resolve_max_source_age_days", lambda profile: pytest.fail("no job read without a URL")
+    )
+
+
 @pytest.mark.parametrize("blank", ["", "   "])
 def test_a_blank_environment_url_is_no_url(monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
+    _no_probe(monkeypatch)
     monkeypatch.setenv(verify_live.BASE_URL_ENV, blank)
     monkeypatch.setattr("sys.argv", ["verify_live.py"])
 
