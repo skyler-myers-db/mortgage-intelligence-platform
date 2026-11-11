@@ -990,7 +990,19 @@ python tools/databricks/bundle_env.py validate -t client
    reconcile it.
    `MIP_LAKEBASE_INSTANCE`/`LAKEBASE_INSTANCE_NAME` and
    `LAKEBASE_DATABASE`/`MIP_LAKEBASE_DATABASE_NAME` are compatibility alias
-   pairs and must match when both names are present.
+   pairs and must match when both names are present. The App reads
+   `LAKEBASE_DATABASE` before the `PGDATABASE` its database binding injects.
+   So `scripts/deploy.sh` hands `app_deploy_payload.py` the database it binds
+   (`--lakebase-database "$LAKEBASE_DATABASE"`, the value it also exports as
+   `BUNDLE_VAR_lakebase_database_name`), and the payload names it whenever it
+   is not the App's default `mip_app_state` (M3-PR4). The payload tool itself
+   reads no ambient or `.env.local` value for it. An adopted core blue's
+   restore payload is rebuilt with the same flag (`app_core_rollback
+   restore-payload --lakebase-database`), so a blue bound to another database
+   rebuilds with its own env-name set. The default install's App env-name set
+   does not change, and the emergency recipe above passes no flag, so it
+   builds the same payload; for a client bound to another database, add
+   `--lakebase-database <database>` to its `app_deploy_payload` line.
 
 3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
@@ -4460,6 +4472,83 @@ lock).
 A dispatch before these exist refuses in `check-validate-environment` (no
 environment) or in the validator session (no validation profile, no
 federation policy), before any test.
+
+## Second-client portability proof (CI, offline, M3-PR4)
+
+The ci.yml job `client-portability-proof` runs
+`tests/unit/test_client_portability_proof.py` and
+`tests/unit/test_client_portability_integrity.py` on every push. It proves that a
+second client onboards with zero code edits. The client is `acme`
+(`tests/fixtures/clients/acme.env`), a synthetic customer install: prod App
+env, agentic tier off, weekly refresh off, and the Cotality share mounted as
+`cotality_prod.mortgage` with unprefixed tables.
+
+Its secrets and its lender record's pin exist only inside the sandbox. The
+proof runs offline against a stub `databricks` CLI and a stub account API.
+Both record the authority each call needs (`tests/fixtures/role_ledger.py`).
+It runs, in order:
+
+1. `python -m tools.clients check`;
+2. `python -m tools.clients.bootstrap_account --plan`;
+3. a deploy-dev.yml `phase: plan` dispatch and an acked `phase: release`
+   dispatch, each replayed with `--dry-run` in a sandbox clone with the profile
+   removed from the tree;
+4. the `bundle_env validate -t client` those dispatches plan.
+
+The proof fails in any of these cases:
+
+- the real checkout changes;
+- a bundle call leaves `-t client` or acme's variables and root leaf;
+- a canonical Cotality token stays in acme's rendered SQL;
+- the pipeline configuration or the App's booted settings are not acme's;
+- an agentic step runs (held to a committed list of the agentic-only tools,
+  and to a reviewed list of the tools a core run may use), or the refresh is
+  not PAUSED;
+- a call the dry runs plan or run needs account-admin authority, or is one
+  the reviewed role table (`tests/fixtures/role_ledger.py`) does not class:
+  a tool (by `-m` or by path, behind any interpreter flag), a CLI command
+  group or flag, or a `databricks api` path other than the reviewed SQL
+  statements path (any `accounts` path segment is an account call). An
+  unclassified call counts as an account-admin need. A tool reviewed as
+  workspace-only may not reach an account API through its imports, and inline
+  Python the interpreter runs (`-c` or a heredoc) is held to that same rule
+  directly: it may not name an account API, import a module that reaches
+  one, load code by name or start a process;
+- a bundle call addresses another target than `client`, whether it is
+  planned, run through the CLI or run through the `bundle_env` wrapper, or a
+  bundle variable databricks.yml declares resolves to a client-#1 default;
+- an identifying value reaches the public log or the step summary in any
+  letter case;
+- a value of the client-#1-shaped install reaches acme's run (a client
+  literal);
+- the analytics battery stops being allowed with acme's names;
+- a one-character tamper of the lender record or the accepted exposure is not
+  refused, whatever ack the dispatch carries.
+
+Its client-#1-shaped case (placeholders only) renders SQL byte for byte as
+the sql/ sources with only the demo feeds switched on, a reference read from
+the sources rather than from the renderer. A dispatch with planted defects
+proves that each check can fail.
+
+The proof covers what the `plan` and `release` dry runs plan or run. A tool
+that only a live run (`DRY_RUN -eq 0`) or another phase reaches is outside
+it. `tests/unit/test_client_portability_integrity.py` therefore holds every
+tool a core-tier deploy file names to a list: the reviewed role table, the
+human-only bootstrap, or `OUTSIDE_PROOF_MODULES`. It also pins the tools on
+that last list that reach an account API through their imports
+(`OUTSIDE_PROOF_ACCOUNT_REACH`), so a new one cannot join unnoticed. Their
+live authority is not proven here.
+
+The owner attestation layer is deferred (M1-PR5). So the integrity it
+exercises is main's: the record's exact-digest pin and the dispatch's exact
+digest acks. Nothing signs anything. backend-tests ignores both modules, so
+they run once per push. `tests/unit/test_ci_client_portability_job.py` pins
+both sides and the proof job's steps whole. It refuses a job or step that is
+switched off (`if`, `continue-on-error`, `needs`), a step that writes
+`$GITHUB_ENV` or checks out another ref, a pytest command that deselects or
+swallows a failure, a trigger filter that skips the workflow, and a
+workflow-wide shell or variable that changes what the shell or pytest runs.
+The job is advisory until the owner makes it a required check.
 
 ## Jobs identity and pinned job parameters (M2-PR5)
 

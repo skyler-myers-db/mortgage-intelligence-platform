@@ -26,6 +26,7 @@ BASE = {
     "APP_FAIL_CLOSED_NAME": "synthetic-app",
     "APP_ROLLBACK_SECRET_SCOPE": "synthetic-app-rollback",
     "MIP_LAKEBASE_INSTANCE": "synthetic-state",
+    "LAKEBASE_DATABASE": "synthetic_state_db",
     "CLIENT_AGENTIC_TIER": "off",
     "CLIENT_INSTALL_CLASS": "demo",
     "APP_RUNTIME_ENV": "sandbox",
@@ -107,6 +108,8 @@ def test_the_core_tier_rebuilds_blues_restore_payload_and_hands_it_in_only_when_
     assert rebuild[:2] == ["app_core_rollback", "restore-payload"]
     flags = _flags(rebuild)
     assert (flags["--agentic-tier"], flags["--install-class"], flags["--app-env"]) == ("off", "demo", "sandbox")
+    # The database the deploy binds, as app_deploy_payload is handed it (review of #330).
+    assert flags["--lakebase-database"] == "synthetic_state_db"
     assert proof[:2] == ["blue_restore_proof", "prepare-activation"] and "--agentic-tier" in proof
     assert ("--restore-payload" in proof) is rebuilt
     if rebuilt:
