@@ -1037,7 +1037,15 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    bundle apply creates its own (the deploy switches to that one right after
    the apply), and refuses when it names another warehouse than the state
    binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
-   resource uses the bundle's own warehouse.
+   resource uses the bundle's own warehouse. The adopt and unadopt phases
+   run no SQL, so the preflight reads no warehouse for them (B1): no bundle
+   state read, no warehouse resolved, `DATABRICKS_WAREHOUSE_ID` unset for
+   every later step (an ambient export included), and the log line
+   `sql warehouse: none (--phase adopt runs no SQL)`. An adopt phase that
+   ever ran on past its exit would stop on that empty warehouse: under the
+   lease at `the preflight resolved no SQL warehouse`, in a dry run at step
+   0a's `no SQL warehouse was resolved`
+   (tests/unit/test_adopt_phases_read_no_warehouse.py).
    `deploy-dev.yml` runs one client environment's phase per manual dispatch
    (M1-PR7), and `nightly.yml` validates one client per dispatch (M1-PR8,
    "Live validation per client"). The command of record is the governed
@@ -3518,7 +3526,10 @@ run time; they are never committed. The profile then requires
 `MIP_DASHBOARD_PARENT_PATH` inside the legacy root (see the dashboards below).
 
 **The run.** Both phases run the same read-only steps as `--phase plan`, with
-the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
+no SQL warehouse (neither phase runs SQL, so an install whose deployer state
+binds none yet, which is every install before its adoption, passes the
+warehouse preflight: `sql warehouse: none (--phase adopt runs no SQL)`), and
+with the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
 or `--phase unadopt` accepts an App the deployer's state does not bind, and its
 unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound
 state an unproven undo can leave, legacy keys bound without the App, must
@@ -5709,6 +5720,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    A first install's bootstrap warehouse (`DATABRICKS_WAREHOUSE_ID`) is no
    client profile field, so `deploy-dev.yml` carries none and a first install
    through CI refuses at the preflight until that field exists (a follow-up).
+   Adopting an existing install needs none: the adopt phases read no
+   warehouse, and the plan and release after the bind take the adopted one
+   from the deployer's bundle state.
    (`GENIE_SPACE_ID` is no deploy input since M1-PR3; since M1-PR8
    `nightly.yml` reads the App's Genie space from the App itself.)
 5. Set no repository-level profile name. Every profile name lives in the

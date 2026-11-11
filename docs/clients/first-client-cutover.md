@@ -52,24 +52,27 @@ journals the tools write name resources: keep them in `<private-dir>`.
 ## Blockers on main (code follow-ups, not runbook steps)
 
 Read against `main` (which holds #334 and #337), five gaps stopped the governed path;
-B5 is fixed, the other four still stop it, and one owed spike may stop it too.
-Each gap is a code change; nothing in this runbook works around one. **Do not
-start step 7 until B1, B2 and B4 have landed, B3 has landed or is about to land,
-and S0(b) is answered:** steps 7 to 12
+B5 is fixed, and B1 no longer stops this cutover: its adopt-phase part has
+landed (#344), and what remains of it blocks a new client's first install
+only. The other three (B2 to B4) still stop it, and one owed spike may stop it
+too. Each gap is a code change; nothing in this runbook works around one.
+**Do not start step 7 until B2 and B4 have landed, B3 has landed or is about
+to land, and S0(b) is answered:** steps 7 to 12
 run as one sequence inside a 14-day window (step 7), and a sequence started
 while 10B cannot run leaves the install half handed over.
 
 | # | Blocks | What happens | The follow-up |
 |---|---|---|---|
-| B1 | step 10B | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a new client's plan and first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
+| B1 | a new client's plan and first install (step 10B no longer) | Before adoption the deployer's bundle state binds no SQL warehouse, and `DATABRICKS_WAREHOUSE_ID` is no client profile field, so `deploy-dev.yml` carries none. **Adopt phases cleared by #344:** `--phase adopt` and `--phase unadopt` run no SQL, so the preflight reads no warehouse for them, leaves `DATABRICKS_WAREHOUSE_ID` unset and prints `sql warehouse: none (--phase adopt runs no SQL)`; 10B no longer refuses here. A live `plan` or `release` whose deployer state binds no warehouse still refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | A new client's first install still needs the follow-up: a bootstrap warehouse carried through the profile ([onboarding.md](onboarding.md)). |
 | B2 | step 10B, and its rollback | adopt-live's acks have no dispatch carrier: `operation_acks` admits only the purposes in `tools/clients/dispatch_acks.OPERATION_ACKS`, and `adopt_live`, `unadopt` and `supersede` are not among them (nor is `MIP_ADOPT_LIVE_SUPERSEDE`, which selects a supersede). A `phase=adopt` run with `adopt_plan=<sha256>` refuses before the lease: `the adopt needs the adopt-live ack as well`; an acked `phase=unadopt` refuses the same way for `MIP_ACK_UNADOPT`. | Add `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `unadopt` (`MIP_ACK_UNADOPT`, phase `unadopt`) and the supersede pair to the dispatch. |
 | B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
 | B4 | step 10B, and its rollback | Two acks the adopt phases read are admitted only in other phases: `genie_pin` (`MIP_GENIE_PIN_ACK`) in `release` only, `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) in `plan` and `release` only. (a) The step-0 preflight runs `provision_genie_space --plan-pin` in every live phase (`scripts/lib/deploy_step_preflight_gates.sh`). Before adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well), and the live space carries the profile's title, so the check refuses: `one Genie space carries the governed title but no pin names it, and no ack names it`, then `the governed Genie space pin was refused before the lease` (exit 2). (b) The pre-stop probes run in `adopt` and `unadopt` and load the accepted-exposure policy with its ack required; client #1's policy is not empty (step 2), so they refuse `accepted_exposure`. A dispatch carrying either ack in an adopt phase refuses at the dispatch preflight: `genie_pin is never read by --phase adopt`. So even the first, read-only 10B dispatch stops before it prints either plan digest, and so does `phase=unadopt`. | Admit `genie_pin` and `accepted_exposure_plan` in phases `adopt` and `unadopt` (or exempt those two reads in the adopt phases). |
 | B5 (fixed: #343) | step 10B | The deploy job's checkout was shallow (`actions/checkout@v6` at depth 1), so adopt-live refused `health_sha_not_on_main` for every live health `git_sha` older than the run's own commit. `deploy-dev.yml`'s adopt phase now checks out main's full history (`fetch-depth` 2147483647, git's infinite depth: the run's commit at `refs/remotes/origin/main`, unshallow, and no other branch or tag); every other phase stays at depth 1, and a shallow checkout refuses saying so. adopt-live still refuses, by design, a health sha `main` does not hold: in CI, `the health sha resolves to no single commit in this checkout's history of main` (step 10A's source check finds it first). | Done. Keep the two history rules in "Decisions taken". |
 | S0(b) | steps 10B, 11 and 12 | An owed spike, not yet a known gap. The pre-stop owner probe (in `adopt`, `plan` and `release`) and the release's treatment-access converger read the metastore with `metastores.get` as the deployer (`tools/databricks/prestop_owner_policy.py`, `tools/databricks/converge_campaign_treatment_access.py`). The SDK documents that read as metastore-admin only; the deployer is a workspace admin holding `CREATE_CATALOG`, and by decision the legacy owner stays the metastore owner. Whether a non-admin read returns the owner is spike S0(b), still owed (docs/deployment.md, "Metastore owner"). Worst case: `[mip-prestop] REFUSED: owner_policy: cannot evaluate the approved-owner policy before step 0a: ...` in 10B, plan #3 and the release, before the lease. | Measure it read-only before step 7, as an identity of the deployer's shape (a workspace admin that neither owns nor administers the metastore, for example a throwaway `mip-spike-*` service principal the owner deletes afterwards). If the read is denied, a code follow-up must read the owner another way before step 7. |
 
-The order a live `phase=adopt` run meets them: the client live checks, then
-B1 (the warehouse), then B4(a) (the Genie pin), then the pre-stop probes with
+The order a live `phase=adopt` run meets them: the client live checks, the
+warehouse preflight (which passes the adopt phases since B1's adopt part
+landed), then B4(a) (the Genie pin), then the pre-stop probes with
 B4(b) and S0(b), then the bind plan, then adopt-live's plan, and last, on
 the acked dispatch, B2. A fix that clears one gap only moves the run
 to the next.
@@ -141,7 +144,7 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 7 | Unity Catalog ownership handover | owner | **wait** for the blockers (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
-| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2, B4; S0(b) owed)** |
+| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B2, B4; S0(b) owed)** |
 | 11 | Plan #3 | CI | after 10 (S0(b) owed) |
 | 12 | Release (run 1) | CI | **blocked (B3; S0(b) owed)** |
 | 13 | Post-release verification | agent, owner | after 12 |
@@ -432,8 +435,9 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 
 **Preconditions:**
 
-- **Every blocker of steps 10B and 12 has landed on `main`** (B1, B2 and
-  B4, and B3, or B3 is about to land before step 12), and spike S0(b) is
+- **Every blocker of steps 10B and 12 has landed on `main`** (B2 and B4,
+  and B3, or B3 is about to land before step 12; B1's adopt part and B5
+  have landed), and spike S0(b) is
   answered with a read that returns the owner, or its follow-up has landed
   (Blockers, above). This step starts a sequence that must finish inside the
   pairs' 14 days; started while 10B cannot run, it leaves UC (and, after
@@ -618,7 +622,7 @@ the cause.
 adopt-live signs only a **running** App: a stopped App has no active
 deployment and refuses `deployment_unstable`. Immediately before 10B the owner
 starts it, raw, with their own profile. **Do not start it while any 10B
-blocker stands** (B1, B2, B4, or an unanswered S0(b)): 10B would refuse
+blocker stands** (B2, B4, or an unanswered S0(b)): 10B would refuse
 before the lease, and the App, which the owner keeps stopped until 10B can
 follow, would be up with nothing to adopt it. The start creates a new SNAPSHOT
 deployment of the App's default-source folder (spike S7), which adopt-live then
@@ -680,10 +684,10 @@ again if the owner wants it stopped, and fix the folder first (a fresh
 emergency deploy of a current `main` commit is the remedy for `closure_differs`
 and for a health sha `main` does not hold).
 
-### 10B. Adopt (CI): **blocked by B1, B2 and B4; S0(b) owed**
+### 10B. Adopt (CI): **blocked by B2 and B4; S0(b) owed**
 
-**Preconditions:** 10A, its source check included; steps 7 and 8 done; B1,
-B2 and B4 fixed on `main`, and S0(b) answered (Blockers, above).
+**Preconditions:** 10A, its source check included; steps 7 and 8 done; B2
+and B4 fixed on `main`, and S0(b) answered (Blockers, above).
 
 ```bash
 gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
@@ -691,7 +695,8 @@ gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f o
 ```
 
 These are the dispatches as `main` accepts them today, and on `main` both
-refuse before the lease. In order: B1 (the warehouse), B4(a) (the Genie pin:
+refuse before the lease, after the warehouse preflight passes (it prints
+`sql warehouse: none (--phase adopt runs no SQL)`). In order: B4(a) (the Genie pin:
 `one Genie space carries the governed title but no pin names it, and no ack
 names it`), B4(b) (`[mip-prestop] REFUSED: accepted_exposure`), and S0(b) at
 worst (`owner_policy`). Each follow-up that
@@ -717,7 +722,7 @@ the 2 jobs the legacy install never had; the active deployment is unchanged (the
 10A start); the record verifies; `frontend_provenance` is reported
 (`unverified` in CI, see B3).
 
-**Refusals:** before the bind plan: the warehouse (B1), the Genie pin (B4(a),
+**Refusals:** before the bind plan: the Genie pin (B4(a),
 exit 2: `the governed Genie space pin was refused before the lease`), and the
 pre-stop probes (`[mip-prestop] REFUSED: <code>`; `accepted_exposure` is
 B4(b), `owner_policy` may be S0(b)); bind plan: `missing`, `renamed`, `foreign_bound`,
@@ -740,7 +745,7 @@ its unbind plan and, once B2 is fixed, adopt-live's `unadopt` ack): the exact
 unbind plus a tombstone record version. Nothing is deleted. `phase=unadopt`
 meets B4 as well (the same Genie pin check and pre-stop probes, and no
 record names the space until adopt-live signs one), so it needs B4's fix too.
-While B1 or B4 stands, every adopt dispatch refuses before the bind, and
+While B4 stands, every adopt dispatch refuses before the bind, and
 while B2 stands an acked adopt refuses before the lease, so there is nothing to
 roll back.
 
