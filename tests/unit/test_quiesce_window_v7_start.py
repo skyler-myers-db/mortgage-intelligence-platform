@@ -30,7 +30,11 @@ from tools.databricks import quiesce_window as window
 from tools.databricks import quiesce_window_facts as facts
 from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_deployment_lease import LEASE_ROOT
-from tools.databricks.app_start_deployment import StartProofError
+from tools.databricks.app_rollback_resource_contract import (
+    app_resource_contract_digest,
+    validated_app_resource_contract,
+)
+from tools.databricks.app_start_deployment import StartProofError, ensure_started, tree_digest
 from tools.databricks.quiesce_window_plan import window_plan
 
 APPLY = {
@@ -206,6 +210,87 @@ def test_the_core_repin_re_proves_on_its_own_and_is_idempotent(world: CoreWorld)
     with pytest.raises(core_blue.CoreBlueRefused) as refused:
         _repin(world, "deployment-other")
     assert refused.value.code == "record_changed"
+
+
+def _drift(world: CoreWorld) -> None:
+    world.tree.add_file(f"{world.folder(BLUE).removeprefix('/Workspace')}/backend/late.py", b"x\n")
+
+
+def test_a_folder_that_drifted_from_the_record_before_the_plan_refuses_the_window(world: CoreWorld) -> None:
+    """The plan's check is against the record's SIGNED tree, never the folder against itself."""
+
+    _drift(world)
+    plan = _plan(world)
+    assert plan.code == "refused" and "window_start_source_drift" in plan.refusals
+    assert plan.facts.source_tree_sha256 != world.record()["source_tree_sha256"]
+    assert plan.facts.artifact_tree_sha256 == world.record()["source_tree_sha256"]
+    assert world.apps.mutations == [], "refused before any stop"
+
+
+def test_a_repin_proves_only_against_the_records_own_tree(world: CoreWorld) -> None:
+    """A caller's digest of other bytes never re-signs the record onto a start of them."""
+
+    world.compute = "STOPPED"
+    _drift(world)
+    drifted = tree_digest(world, world.folder(BLUE))
+    started = ensure_started(world, app_name=rr.APP_NAME)
+    with pytest.raises(core_blue.CoreBlueRefused) as refused:
+        _repin(world, started, drifted)
+    assert refused.value.code == "repin_unproven"
+    assert world.record()["deployment_id"] == BLUE, "never re-signed"
+    with pytest.raises(StartProofError, match="start_tree_digest"):
+        _repin(world, started, world.record()["source_tree_sha256"])  # the signed tree: not this start
+
+
+def _bound(
+    world: CoreWorld, live: list[dict[str, Any]], *, applied: list[dict[str, object]] | None
+) -> dict[str, Any]:
+    """Re-pin a window's proven start while the App is bound to ``live``."""
+
+    opened = _open(world)
+    proven = _start_and_await(world)
+    world.resources = live
+    return core_blue_repin.repin_core_start(
+        world,
+        app_name=rr.APP_NAME,
+        scope=rr.SCOPE,
+        lakebase_instance=rr.LAKEBASE,
+        deployment_id=proven,
+        expected_rollback_deployment_id=BLUE,
+        health=world.serves,
+        lease=world.lease,
+        expected_tree_sha256=opened["source_tree_sha256"],
+        applied_app_resources=applied,
+    )
+
+
+def _other_warehouse() -> list[dict[str, Any]]:
+    other = copy.deepcopy(rr.APP_RESOURCES)
+    other[1]["sql_warehouse"]["id"] = "warehouse-other"  # type: ignore[index]
+    return other
+
+
+def test_a_repin_refuses_live_bindings_no_window_applied(world: CoreWorld) -> None:
+    with pytest.raises(core_blue.CoreBlueRefused) as refused:
+        _bound(world, _other_warehouse(), applied=None)
+    assert refused.value.code == "resource_drift" and world.record()["deployment_id"] == BLUE
+
+
+def test_a_repin_refuses_an_applied_set_that_rebinds_the_genie_space(world: CoreWorld) -> None:
+    rebind = copy.deepcopy(rr.APP_RESOURCES)
+    rebind[0]["genie_space"]["space_id"] = "genie-space-other"  # type: ignore[index]
+    with pytest.raises(core_blue.CoreBlueRefused) as refused:
+        _bound(world, rebind, applied=validated_app_resource_contract(rebind))
+    assert refused.value.code == "resource_drift" and "Genie space" in str(refused.value)
+    assert world.record()["deployment_id"] == BLUE
+
+
+def test_a_repin_records_the_exact_bindings_a_wr1_window_applied(world: CoreWorld) -> None:
+    applied = validated_app_resource_contract(_other_warehouse())
+    record = _bound(world, _other_warehouse(), applied=applied)
+    assert record["app_resources"] == applied
+    assert record["app_resources_sha256"] == app_resource_contract_digest(applied)
+    assert world.record()["app_resources"] == applied
 
 
 def test_an_agentic_v7_record_is_still_refused(world: CoreWorld) -> None:

@@ -12,9 +12,10 @@ does that with the v7 core record's own proofs:
    as a re-pin of it: an idempotent rerun);
 2. ``prove_start_deployment``: the start is SUCCEEDED, from blue's own
    source folder (the record's ``source_code_path``), its ``/src/`` snapshot
-   hashes to the window journal's full-tree digest (else the record's
-   ``source_tree_sha256``), and its env-name set is the record's
-   ``env_names``;
+   hashes to the record's signed ``source_tree_sha256`` (a caller's digest,
+   the window journal's, must be that one: the re-signed record keeps it, so
+   it never names a snapshot it does not certify), and its env-name set is
+   the record's ``env_names``;
 3. the start is what the App runs and would rerun (``last_deployment_is``:
    nothing pending, the active and newest deployment of any state, SUCCEEDED,
    the default source its own);
@@ -145,12 +146,17 @@ def repin_core_start(
     )
     if restore_source != record["source_code_path"]:
         raise CoreBlueRefused("repin_unproven", "blue's deployment is not from the record's source folder")
+    signed_tree = str(record["source_tree_sha256"])
+    if expected_tree_sha256 and expected_tree_sha256 != signed_tree:
+        raise CoreBlueRefused(
+            "repin_unproven", "the expected tree digest is not the signed core record's source tree"
+        )
     proof = prove_start_deployment(
         workspace,
         app_name=app_name,
         deployment=workspace.apps.get_deployment(app_name, start_id),
         restore_source=restore_source,
-        expected_tree_sha256=expected_tree_sha256 or str(record["source_tree_sha256"]),
+        expected_tree_sha256=signed_tree,
         expected_env_names=frozenset(record["env_names"]),
         digest=digest,
     )
