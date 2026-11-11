@@ -3662,15 +3662,25 @@ is exactly converged, read-only, in the runtime or the quiesce mode
 resolves in the checkout and is an ancestor of main, where main is
 `refs/remotes/origin/main`, never the run's own HEAD, and the run's source
 commit is itself on that main (`health_unreadable`, `main_unresolved`,
-`source_not_on_main`, `health_sha_not_on_main`; a CI checkout needs the full
-history and origin/main fetched), so a run from a branch whose HEAD carries an
+`source_not_on_main`, `health_sha_not_on_main`; `deploy-dev.yml`'s adopt phase
+checks out main's full history and no other branch or tag, a local run needs a
+full clone with origin/main fetched, and a shallow checkout refuses, saying
+so), so a run from a branch whose HEAD carries an
 unmerged commit refuses; the full-tree digest of the deployment's source folder (every file,
 `app.yaml` and `frontend/dist` included) equals that of its `/src/` snapshot
 (`tree_drift`); `app.yaml` is byte-equal to the repo's at the health sha
 (`app_yaml_differs`); and every other file outside `frontend/dist` is the App
 runtime closure git tracks at that sha (`closure_differs`). A folder staged by
 an older closure definition therefore refuses, and the remedy is a fresh
-emergency deploy of a current commit before the adoption. `frontend/dist` is
+emergency deploy of a current commit before the adoption. A deployment whose
+`MIP_GIT_SHA` names a commit main does not hold (an emergency ship from a
+branch, or from a branch head later squash- or rebase-merged) refuses
+`health_sha_not_on_main` by design: in CI with `the health sha resolves to no
+single commit in this checkout's history of main`, in a full clone that holds
+the branch with `the health sha is not an ancestor of main`. So does every live
+deployment after a rewrite of main's history, which gives every commit a new
+sha. The remedy is an emergency redeploy of a main commit, then a fresh start
+and adopt, never a relaxation. `frontend/dist` is
 compared with a dist adopt-live builds itself from the health sha when
 `MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
 that sha into a private temporary tree, then `npm ci --ignore-scripts` and
@@ -5241,7 +5251,15 @@ key.
   `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, and its first step turns that into
-  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. It re-hashes
+  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout
+  depth is the phase's too: `adopt` fetches main's full history (`fetch-depth`
+  2147483647, git's infinite depth: the run's commit pinned at
+  `refs/remotes/origin/main`, unshallow, and no other branch or tag), because
+  adopt-live resolves the live App's health sha in it ("Signing the live
+  deployment as an adopted blue"); every other phase reads only the run's
+  commit and checks out at depth 1. Never depth 0: it fetches every branch and
+  tag, prints each name in the public log, and a tag named like a short sha
+  shadows that commit. It re-hashes
   the artifact against the build job's
   manifest digest, and checks its staged App source against its own checkout
   of the commit, before it installs anything, installs with
