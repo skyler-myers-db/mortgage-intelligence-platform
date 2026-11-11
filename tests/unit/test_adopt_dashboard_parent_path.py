@@ -123,8 +123,15 @@ def test_adopt_accepts_the_legacy_folder_in_either_spelling(spelling: str) -> No
         "/Shared/elsewhere",
         FOLDER.replace(OWNER, OWNER.upper()),
         f"/Workspace/Users/{OWNER}/elsewhere",
+        # The comparison is exact equality of one spelling: never a prefix test.
+        f"{FOLDER}/sub",
+        f"/Workspace{FOLDER}/sub",
+        f"{FOLDER}2",
+        FOLDER.replace(OWNER, "another-owner@example.invalid"),
+        FOLDER.rsplit("/", 1)[0],
     ),
-    ids=("same-home-other-folder", "shared", "case-variant", "workspace-spelled-elsewhere"),
+    ids=("same-home-other-folder", "shared", "case-variant", "workspace-spelled-elsewhere",
+         "subfolder", "workspace-spelled-subfolder", "prefix-lookalike", "another-users-home", "parent-folder"),
 )
 def test_a_genuinely_moved_dashboard_still_refuses(moved: str) -> None:
     estate = es.Estate()
