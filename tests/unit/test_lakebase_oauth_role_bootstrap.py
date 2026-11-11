@@ -41,9 +41,9 @@ from tools.databricks import lakebase_oauth_role_scim_marker as scim_marker
 from tools.databricks import lakebase_oauth_role_tombstone as tombstone
 
 _TARGET = "11111111-1111-4111-8111-111111111111"
-_TARGET_SCIM_ID = "74635290620767"
+_TARGET_SCIM_ID = "70000000000101"
 _CREATOR = "22222222-2222-4222-8222-222222222222"
-_CREATOR_SCIM_ID = "78879891843203"
+_CREATOR_SCIM_ID = "70000000000106"
 _CONTROL = "33333333-3333-4333-8333-333333333333"
 _INSTANCE = "mip-app-state"
 _DATABASE = "mip_app_state"
@@ -1425,7 +1425,7 @@ def _seed_v2_tombstone(state: _State) -> str:
         application_id=_CREATOR,
         signature=signature,
     )
-    marker_id = "78451793422043"
+    marker_id = "70000000000105"
     state.orphan_tombstones[marker_id] = SimpleNamespace(
         id=marker_id,
         application_id=marker_application_id,
@@ -3365,7 +3365,7 @@ def test_control_plane_only_role_is_retained_without_exact_sql_contract() -> Non
 
 
 def test_absent_instance_residual_principal_is_retained_without_any_mutation() -> None:
-    principal_id = "78879891843204"
+    principal_id = "70000000000107"
     application_id = "33333333-3333-4333-8333-333333333333"
     principals = {
         principal_id: SimpleNamespace(
@@ -4013,7 +4013,7 @@ def test_v3_tombstone_recovers_direct_id_when_account_filter_omits_original() ->
         principal_id=_CREATOR_SCIM_ID,
         signing_key=_SIGNING_KEY,
     )
-    marker_id = "78451793422042"
+    marker_id = "70000000000104"
     markers = {
         marker_id: SimpleNamespace(
             id=marker_id,
@@ -4069,7 +4069,7 @@ def test_v2_tombstone_without_independent_id_is_retained_fail_closed() -> None:
         application_id=_CREATOR,
         signature=signature,
     )
-    marker_id = "78451793422043"
+    marker_id = "70000000000105"
     marker = SimpleNamespace(
         id=marker_id,
         application_id=marker_application_id,

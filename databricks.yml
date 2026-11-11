@@ -1256,6 +1256,7 @@ resources:
               - "--tenant-id=${var.tenant_id}"
               - "--lender-identity-json=${var.lender_identity_json}"
               - "--lender-identity-sha256=${var.lender_identity_sha256}"
+              - "--seed-operator-email=${var.seed_operator_email}"
               - "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"
               - "${var.require_ai_gateway_verifier}"
               # M2-PR5: the jobs identity's Lakebase jobs_reader role (SELECT on
@@ -1581,6 +1582,13 @@ variables:
     default: ""
   lender_identity_sha256:
     description: Reviewed sha256 pin of lender_identity_json; empty when it is empty
+    default: ""
+  seed_operator_email:
+    description: >-
+      The demo seed's operator (the operator token in
+      lakebase/seed_campaigns.sql), set by tools/databricks/bundle_env.py
+      from the client profile's demo-only MIP_SEED_OPERATOR_EMAIL. Empty seeds
+      the synthetic operator@summit.example (M1-PR4).
     default: ""
   scheduled_refresh_pause_status:
     description: >-

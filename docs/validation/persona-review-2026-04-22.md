@@ -104,7 +104,7 @@ Screenshot: `05-borrower360-vp-lending.png`
 - **Good:** "Rationale: +246 bps spread (>= 75) AND 79% equity (>= 15%)" — spelled out, human-readable, sourced. Keep.
 - **Good:** "Approval pending" chip + Next-best-offer panel + "Build outreach draft" button — the gate is clearly human-driven.
 - **Polish:** "Trigger timeline" items say "1D AGO" and "2D AGO" without a date. On a Monday-morning demo, "2D ago" means Saturday, which reads as "we're working over weekends on this borrower?" Use ISO date or "Apr 20".
-- **Polish:** Related properties "2 (via Owner Link)" is a great signal but Owner Link (`1100000134187756`) is displayed as a raw 16-digit number. Label: "Owner Link ID (Cotality master)".
+- **Polish:** Related properties "2 (via Owner Link)" is a great signal but Owner Link (`<owner-link-id>`) is displayed as a raw 16-digit number. Label: "Owner Link ID (Cotality master)".
 
 ### `/offer-orchestrator/<id>`
 

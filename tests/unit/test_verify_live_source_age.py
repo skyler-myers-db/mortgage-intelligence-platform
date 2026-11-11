@@ -168,7 +168,8 @@ def _main_with_jobs(
     monkeypatch.setattr(verify_live, "collect_red_flags", fake_collect)
     monkeypatch.setattr(readiness, "_cli_jobs_list", fake_cli_jobs_list)
     out = tmp_path / "report.md"
-    monkeypatch.setattr("sys.argv", ["verify_live.py", "--out", str(out), "--profile", "ops", *extra])
+    argv = ["verify_live.py", "--base-url", "https://app.example", "--out", str(out)]
+    monkeypatch.setattr("sys.argv", [*argv, "--profile", "ops", *extra])
 
     assert verify_live.main() == 0
     return seen["days"], out.read_text(encoding="utf-8"), profiles

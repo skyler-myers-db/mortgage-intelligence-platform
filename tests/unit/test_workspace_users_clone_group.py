@@ -22,7 +22,7 @@ from tools.databricks.workspace_system_group_evidence import (
 _USERS_ID = "workspace-users-id"
 _CLONE_ID = "workspace-users-clone-id"
 _CLONE_NAME = "users-clone-2026-08-03-2052-UTC (created by Databricks)"
-_MEMBERS = ("5882225431657870", "75100133948918", "78072554043911")
+_MEMBERS = ("1000000000000101", "70000000000102", "70000000000103")
 
 
 def _group(

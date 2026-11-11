@@ -117,7 +117,7 @@ def test_foundation_endpoint_cannot_consume_pending_supervisor_cleanup_proof() -
             client,
             pending_cleanup=inventory.SupervisorCleanupProof(
                 app_name="mip-app",
-                lease_id="4f29fc88-85fd-4c6e-bffd-42841e54b50e",
+                lease_id="5eed00b4-0000-4000-8000-0000000000b4",
                 source_git_sha="a" * 40,
                 runtime_application_id=_RUNTIME,
                 supervisor_id=supervisor["supervisor_agent_id"],

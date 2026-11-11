@@ -73,7 +73,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const ID = 'B-0000000000001';
 const SNAPSHOT = '2026-07-13T12:00:00Z';
-const CAMPAIGN_ID = '7e373ef5-d4b6-4fea-b555-0cb925987a72';
+const CAMPAIGN_ID = '5eed00a4-0000-4000-8000-0000000000a4';
 const VARIANT = 'Supervisor B';
 const LO: SalesTeamMember = {
   email: 'lo.a@summit-mortgage.example',

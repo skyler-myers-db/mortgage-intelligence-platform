@@ -38,6 +38,7 @@ from backend.services.lakebase import (
     get_lakebase_client,
 )
 from backend.services.loan_officer_state import LoanOfficerStateStore
+from jobs.lakebase_migration_seed import SEED_OPERATOR_EMAIL_ENV, render_seed_sql
 from tests.integration._live_actor import resolve_live_admin_actor
 
 _HAS_STATIC_CREDS = all(
@@ -77,7 +78,9 @@ def _client_from_env() -> LakebaseClient:
 def _apply_schema_and_seed(client: LakebaseClient) -> None:
     root = Path(__file__).resolve().parents[2] / "lakebase"
     client.execute((root / "schema.sql").read_text(encoding="utf-8"))
-    client.execute((root / "seed_campaigns.sql").read_text(encoding="utf-8"))
+    # The target install's own operator, so a live re-apply keeps its seed (M1-PR4).
+    seed = (root / "seed_campaigns.sql").read_text(encoding="utf-8")
+    client.execute(render_seed_sql(seed, seed_operator_email=os.environ.get(SEED_OPERATOR_EMAIL_ENV, "")))
 
 
 def _synthetic_borrower_id() -> str:

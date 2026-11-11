@@ -4,7 +4,7 @@
 
 **Date:** 2026-04-21
 **Branch:** `slice13-accuracy-validation`
-**Space:** `mortgage_lead_intelligence` (id `01f13d4968af1b249dc388fd5b18b195`)
+**Space:** `mortgage_lead_intelligence` (id `<genie-space-id>`)
 **Suite:** `tests/integration/test_genie_regression.py` (29 tests: 10 sample + 12 adversarial + 7 grader smoke)
 **Catalog:** [genie/regression_suite.md](../../genie/regression_suite.md)
 **Instructions patched:** [genie/instructions.md](../../genie/instructions.md) (was a placeholder) and the `instructions:` block in [genie/mortgage_lead_intelligence_space.yml](../../genie/mortgage_lead_intelligence_space.yml)
@@ -25,7 +25,7 @@
   (cred-free) all pass locally. The 22 live-creds-gated tests skip
   cleanly in this environment because the `.env.local` checked into
   this workspace has `DATABRICKS_HOST` + `GENIE_SPACE_ID` but **no
-  `DATABRICKS_TOKEN`** for the `dbc-3aa503a9.cloud.databricks.com`
+  `DATABRICKS_TOKEN`** for the `<workspace-host>`
   host. The nightly workflow (with `secrets.DATABRICKS_TOKEN`) is the
   canonical execution site; see "Wiring to nightly" below.
 

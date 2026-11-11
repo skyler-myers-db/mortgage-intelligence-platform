@@ -37,13 +37,14 @@ from backend.services.sales_distribution_plan import Candidate
 from backend.services.sales_state import SalesStateStore
 from backend.services.sales_state_release import ReleaseConflict
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 from tests.integration._live_actor import roster_admin
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 LO1 = "lo01@summit.example"
 LO2 = "lo02@summit.example"
 BORROWERS = [f"B-0000000000SL{n}" for n in range(1, 6)]

@@ -3985,6 +3985,61 @@ MIP_LENDER_IDENTITY_JSON=
 MIP_LENDER_IDENTITY_SHA256=
 ```
 
+## Demo seed operator and other required inputs (M1-PR4)
+
+No tracked file names a client value any more:
+`tests/unit/test_no_client_identifiers_committed.py` holds the tree at zero
+workspace hosts and their bare `dbc-`/`adb-` labels, App URLs, `?o=`
+workspace ids, non-example emails (plain, URL-encoded or a URL's userinfo;
+`.local` is not an example domain), bare 16-digit ids, 16-hex and 32-hex ids
+in either case and UUIDs, outside synthetic values, pinned test digests and
+its reviewed `ALLOWED` entries. No file is exempt by name: lockfiles and
+manifests are scanned too.
+Docs use symbolic placeholders (`<workspace-host>`, `<app-host>`,
+`<workspace-id>`, `<genie-space-id>`, `<warehouse-id>`, `<deployment-id>`,
+`<operator-email>`). Git history still holds the values the purge removed.
+
+Three values that were committed defaults are now inputs:
+
+- **The demo seed's operator.** `lakebase/seed_campaigns.sql` names its demo
+  operator (the `sales_team` admin row, the archived campaigns' owner and the
+  sample approvals' actor) by the token `{{mip_seed_operator_email}}`. The
+  migrate job renders it from `--seed-operator-email`, which the
+  `seed_operator_email` bundle variable carries; `bundle_env.py -t client`
+  sets that variable from the profile's demo-only `MIP_SEED_OPERATOR_EMAIL`
+  and never from an ambient export, and the deploy's migration plan passes
+  the same value (`nonblank_control_value MIP_SEED_OPERATOR_EMAIL`: a shell
+  value `str.strip()` empties is unset and `.env.local`'s is read, as the
+  profile reads it), so plan and apply digest one text. Unset, the seed names the synthetic
+  `operator@summit.example`. An install that seeded an operator before keeps
+  its seed, and its schema-input digest, byte for byte by setting the
+  address it seeded. A customer profile refuses the field.
+- **The App URL of the live checks.** `tools/verify_live.py` takes
+  `--base-url https://<app-host>` (or `MIP_APP_URL`) and `scripts/e2e_live.sh`
+  takes `MIP_APP_URL`; both refuse without it. `databricks apps get
+  <app-name>` prints it as `url`. The verifier's report names the URL, so it
+  is written to a new private (0700) `mip-verify-live-*` directory in the
+  system temp directory, never a fixed path there, and an `--out` inside the
+  checkout that git does not ignore, or cannot answer for, is refused.
+- **The load-test target** recorded in `tools/load_test/baseline.json` reads
+  `https://<app-host>/api/v1`. It is a label, never compared:
+  `tools/load_test/baseline.py --target` keeps the scheme and path and
+  writes the `<app-host>` placeholder for the host, so a regenerated
+  baseline never names an App.
+
+The emergency recipe above takes none of these: it ships App source and
+never runs the migrate job or a live check, so its commands are unchanged.
+
+`.env.example` cannot be read or edited from an agent session, so the owner
+adds this line to its "Direct os.environ reads" section and, in the same
+change, moves the name from `DIRECT_ENV_READS_PENDING_TEMPLATE` to
+`DIRECT_ENV_READS` in `tests/unit/test_settings_contract.py`:
+
+```bash
+# demo installs only: the demo seed's operator (lakebase/seed_campaigns.sql's {{mip_seed_operator_email}}); unset seeds operator@summit.example; a customer profile refuses it; docs/deployment.md "Demo seed operator and other required inputs"
+MIP_SEED_OPERATOR_EMAIL=
+```
+
 ## Lender co-branding (optional)
 
 A deployment may draw its lender's reviewed mark beside the tenant name (the
@@ -4214,7 +4269,7 @@ deployed app `correlation_id`.
 
 Current Entrada dev status (2026-05-15): external OTLP is not configured
 on `mip-app`. CLI/API evidence shows active deployment
-`01f14ff2c4cd10b99ebad8f8785c307f` is `SUCCEEDED`, the app is `RUNNING`,
+`<deployment-id>` is `SUCCEEDED`, the app is `RUNNING`,
 and only the warehouse, Genie, Lakebase, and lifecycle job resources are
 attached; no app secret resource is attached for collector headers.
 `/api/v1/admin/health` returns
@@ -4228,21 +4283,21 @@ secret resource and emits the full runtime contract plus
 bundle var, process environment, or shell history.
 
 App-side proof was completed on 2026-05-14 with temporary deployment
-`01f14fe0164a1b6388f9d240679492db`: `/api/v1/admin/health` reported
+`<deployment-id>`: `/api/v1/admin/health` reported
 `log_export: otlp`, a sanitized RUM request returned correlation id
-`b07b2f0825a043188fda96e041a14d19`, and the external collector received
+`<correlation-id>`, and the external collector received
 the matching OTLP HTTP protobuf payload. The sandbox was then restored to
 stdout-only so it is not left exporting logs to the temporary collector.
 
 Secret-backed header proof was completed on 2026-05-14/15 with temporary
-deployment `01f14ff1cb5513a9824b1e040701141d`: `MIP_OTEL_HEADERS` was
+deployment `<deployment-id>`: `MIP_OTEL_HEADERS` was
 resolved through Databricks App resource `value_from: otel_headers`,
 backed by a temporary non-sensitive `mip/otel-headers` secret. The
-external collector received request `d64260ce-232a-498e-bb9a-4bf65306c090`
+external collector received request `<request-id>`
 with proof header `x-mip-otel-proof=proof-20260515T000246Z` and a
 matching `/api/v1/telemetry/rum` log body for correlation id
-`c864cd1bbbf44779874fdb235ae7c6bf`. The sandbox was restored to
-deployment `01f14ff2c4cd10b99ebad8f8785c307f` with no OTLP env vars, the
+`<correlation-id>`. The sandbox was restored to
+deployment `<deployment-id>` with no OTLP env vars, the
 temporary app secret resource removed, and the temporary Databricks
 Secret deleted.
 

@@ -107,7 +107,7 @@ describe('the filter grammar against the queue vocabulary', () => {
   });
 
   it('never emits a ZIP, county, city, borrower id, cohort or email', () => {
-    const result = parseFilterGrammar('60611 17031 Chicago B-0123456789ABC 0f8fad5b-d9cb-469f-a165-70867728950e lo@summit.example');
+    const result = parseFilterGrammar('60611 17031 Chicago B-0123456789ABC 5eed00a1-0000-4000-8000-0000000000a1 lo@summit.example');
     expect(result.params.toString()).toBe('');
     expect(result.chips).toEqual([]);
     expect(result.unrecognized).toHaveLength(6);

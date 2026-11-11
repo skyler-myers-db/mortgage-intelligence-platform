@@ -10,7 +10,7 @@ the `/data-estate/assets/:assetKey` frontend route (`frontend/src/routes/asset.t
 and the supporting wiring (`drawerSources.ts`, `DataEstatePanel.tsx`,
 `api.ts`, `queryKeys.ts`, `borrowers.py` proof audit, `audit_store.py`).
 **Method:** Full code read → standalone policy tests in sandbox → live Chrome
-walkthrough against the deployed app (`mip-app-2543889327043640`).
+walkthrough against the deployed app (`mip-app-<workspace-id>`).
 **Live deployment:** Asset, proof, and glossary surfaces are all deployed and
 reachable; the audited session is admin-authenticated.
 

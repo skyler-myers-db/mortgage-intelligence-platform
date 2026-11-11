@@ -616,7 +616,7 @@ never carries it, by construction and by test
 **Codes never changed; only display words did.** Historical Lakebase and
 `action_audit` rows are never rewritten, so an examiner reading a row
 written before this change (the W5e dev deploy of 2026-10-26, main
-`8eea6174`, deployment `01f1d187674d1942baac5b6da43b5b4e`; the gold
+`8eea6174`, deployment `<deployment-id>`; the gold
 `segment_population` rename landed the same day) maps the old display words through the stable
 code:
 

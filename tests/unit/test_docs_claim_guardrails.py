@@ -16,6 +16,11 @@ import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
+# A deployed App's URL and a 32-hex Databricks id (a Genie space, conversation
+# or deployment): each names one client's workspace object, so a doc cites a
+# placeholder instead (tests/unit/test_no_client_identifiers_committed.py).
+_APP_URL = re.compile(r"(?i)[a-z0-9-]+-[0-9]{6,19}\.(?:[0-9]{1,2}\.)?(?:aws|azure|gcp)\.databricksapps\.com")
+_HEX32_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])")
 
 PUBLIC_DOCS = (
     "README.md",
@@ -318,13 +323,13 @@ def test_public_talk_track_does_not_pin_fixture_borrowers_or_urls() -> None:
 
     forbidden = (
         "B-48291",
-        "https://mip-app-2543889327043640.aws.databricksapps.com",
         "5.16 million",
         "3.1 million",
         "never synthesized",
     )
     for phrase in forbidden:
         assert phrase not in text
+    assert _APP_URL.search(text) is None
 
 
 def test_public_talk_track_pins_claim_boundaries() -> None:
@@ -351,9 +356,8 @@ def test_archived_cotality_walkthrough_cannot_be_used_as_live_teleprompter() -> 
 
     assert "Archived rehearsal snapshot" in text
     assert "do not use as the live demo teleprompter" in text
+    assert _APP_URL.search(text) is None and _HEX32_ID.search(text) is None
     forbidden_operator_values = (
-        "01f1532b4e1314e7964cb093feade193",
-        "https://mip-app-2543889327043640.aws.databricksapps.com",
         "B-102FL7THC6Q3L",
         "B-1AT5CXZZ1NI2N",
         "5.16M",
@@ -434,18 +438,18 @@ def test_validation_notes_are_explicitly_internal_artifacts() -> None:
         )
 
 
-def test_current_release_docs_do_not_cite_stale_deployments() -> None:
+def test_current_release_docs_cite_no_concrete_deployment() -> None:
+    """A deployment id names one client's App: the docs cite ``<deployment-id>`` (M1-PR4)."""
+
     current_docs = (
         "docs/partner-review-checklist.md",
         "docs/module0-alignment-todo.md",
         "docs/audits/persona-walkthroughs/01-head-of-growth.md",
     )
-    current_deployment_id = "01f14d00b90b15bba16e412e31a8edbd"
-    deployment_id_pattern = re.compile(r"\b01f14[0-9a-f]{27}\b")
     for relative_path in current_docs:
         text = (REPO / relative_path).read_text(encoding="utf-8")
-        cited_deployments = set(deployment_id_pattern.findall(text))
-        assert cited_deployments <= {current_deployment_id}
+        assert _HEX32_ID.search(text) is None, relative_path
+        assert "`<deployment-id>`" in text, relative_path
 
 
 def test_genie_yaml_off_topic_redirect_points_to_bucket_c() -> None:

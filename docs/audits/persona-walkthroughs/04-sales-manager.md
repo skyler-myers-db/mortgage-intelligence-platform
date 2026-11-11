@@ -5,7 +5,7 @@
 > *In-character audit. I am "Sam," Sales Manager at Summit Mortgage. I run the LO bullpen — 8 loan officers most days, 5–6 after PTO. My job is shift-by-shift: morning call list, distribute leads, watch aging, coach the team, run the 8:30 standup with yesterday's numbers, run the Friday close-out with the week's conversion. Pat is strategy, Vera is credit, Maya is campaigns. I am the person who turns an "approved Refi+HELOC opportunity" into "Joe called Tuesday at 10:14am, scheduled callback for Thursday, application started Thursday at 11:03am, closed Wednesday next week."*
 
 **Auditor:** Claude (Cowork) acting as Sam, Sales Manager
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14dbfb9e81300a5e969695671c6d2`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Read-only Chrome screenshots, live `/api/*` calls with my workspace OAuth, direct UC SQL, code inspection. Synthetic borrower IDs only.
 
 ---
@@ -30,7 +30,7 @@ Honestly, very little. The handful of things I can use:
 
 - **Lead Queue exists and is fast.** The 500-row paged view loads cleanly; the new contactability / consent / recency filters mean what's on screen is at least theoretically contactable.
 - **Borrower 360 is committee-grade.** If an LO calls me with "is this real?" I can open the dossier and read evidence + why-now + trigger timeline in 30 seconds. That part of the LO-support workflow holds up.
-- **Audit trail shows actor.** Every action carries `actor=skyler@entrada.ai` from the edge. If I want to manually grep "what did each user do," the data is there — just not aggregated for me.
+- **Audit trail shows actor.** Every action carries `actor=<operator-email>` from the edge. If I want to manually grep "what did each user do," the data is there — just not aggregated for me.
 - **Lifecycle mirror tracks state.** `mip.gold.borrower_lifecycle_state` carries `approval_status`, `outreach_status`, `approved_at`, `outreach_at`. The data is *there*; nothing in the UI shows it to me.
 
 That's the win column. The lose column follows.
@@ -180,7 +180,7 @@ Call recording links, objection-handling notes, "this LO is on a PIP" badges, sc
 
 #### P2-S16. Audit `actor` is an email — no team / region / role mapping
 
-The audit log records `actor=skyler@entrada.ai` — fine for traceability, useless for rollups. To group "actors managed by Sam" vs. "actors managed by Tasha" the system would need an org structure (`mip_app.users(email, role, manager_email, region)`) which doesn't exist.
+The audit log records `actor=<operator-email>` — fine for traceability, useless for rollups. To group "actors managed by Sam" vs. "actors managed by Tasha" the system would need an org structure (`mip_app.users(email, role, manager_email, region)`) which doesn't exist.
 
 ---
 
@@ -217,7 +217,7 @@ I lean toward (1) being the correct scoping decision — the data foundation (li
 
 ## Sources
 
-- Live `/api/leads`, `/api/borrowers/{id}`, `/api/audit/events`, `/api/audit/rollups`, `/api/sales/*` (all 404), `/api/leads/{id}/assignment` (404), `/api/leads/{id}/disposition` (405) against deployment `01f14dbfb9e81300a5e969695671c6d2`
+- Live `/api/leads`, `/api/borrowers/{id}`, `/api/audit/events`, `/api/audit/rollups`, `/api/sales/*` (all 404), `/api/leads/{id}/assignment` (404), `/api/leads/{id}/disposition` (405) against deployment `<deployment-id>`
 - Direct SQL on `mip.gold.borrower_lifecycle_state`, `mip.gold.borrower_360`
 - `genie/sample_questions.md` (no Sales-Manager-shaped prompts)
 - Module 0 spec persona line: "Head of Growth / VP of Mortgage Lending / Marketing Leader / Sales Manager"
@@ -225,19 +225,19 @@ I lean toward (1) being the correct scoping decision — the data foundation (li
 
 ---
 
-## Independent re-validation (Claude, 2026-05-12 19:42 UTC, deployment `01f14e37f0531430b5c48f9014be417c`)
+## Independent re-validation (Claude, 2026-05-12 19:42 UTC, deployment `<deployment-id>`)
 
 After the engineering pass, I re-exercised every S-finding against the new deployment (`SUCCEEDED / RUNNING / ACTIVE`, update_time 2026-05-12T19:27:09Z; 9 walkthrough screenshots present at `/tmp/mip-sales-walkthrough-20260512-final2/`). The product went from "Sam's persona unsupported" to "Sam's persona has a complete operational surface" in one cycle.
 
 | Finding | Engineering claim | Independent live re-validation |
 |---|---|---|
-| P0-S1 No LO assignment | Real assignment + distribution endpoints + Lead Queue column | ✅ Verified. `POST /api/leads/B-1AT5CXZZ1NI2N/assign {assigned_to_email: 'lo02@summit.example'}` returns 200 with full assignment object: `assignment_id, borrower_id, assigned_to_email, assigned_to_label='Summit LO 02', assigned_by='skyler@entrada.ai', assigned_at, expires_at (24 hours later), released_at=null, strategy='manual'` + `audit_event_id`. PII guard: external `alice@example.com` → 422 "staff email must be an approved internal demo/workspace email." Lead Queue table renders the new `ASSIGNED TO` column ("Summit LO 01 / May 12, 2:24 PM"). Minor: `GET /api/leads/{id}/assignment` returns 404 even when the borrower has an active assignment — the read path runs through `/api/borrowers/{id}/lifecycle.assignment` instead. Worth a tiny GET-alias fix but functionally not blocking. |
+| P0-S1 No LO assignment | Real assignment + distribution endpoints + Lead Queue column | ✅ Verified. `POST /api/leads/B-1AT5CXZZ1NI2N/assign {assigned_to_email: 'lo02@summit.example'}` returns 200 with full assignment object: `assignment_id, borrower_id, assigned_to_email, assigned_to_label='Summit LO 02', assigned_by='<operator-email>', assigned_at, expires_at (24 hours later), released_at=null, strategy='manual'` + `audit_event_id`. PII guard: external `alice@example.com` → 422 "staff email must be an approved internal demo/workspace email." Lead Queue table renders the new `ASSIGNED TO` column ("Summit LO 01 / May 12, 2:24 PM"). Minor: `GET /api/leads/{id}/assignment` returns 404 even when the borrower has an active assignment — the read path runs through `/api/borrowers/{id}/lifecycle.assignment` instead. Worth a tiny GET-alias fix but functionally not blocking. |
 | P0-S2 `approval_status` filter ignored | Honored in repo | ✅ Verified. `/api/leads?approval_status=approved&limit=2` now returns only `approval_status='approved'` rows (B-102FL7THC6Q3L, B-1AT5CXZZ1NI2N), both with `assigned_to_email` populated. `/api/leads?approval_status=pending&limit=2` returns only pending rows (B-0KMY6IXUDKX9X, B-17WANAO1W6ZLU). Lead Queue filter row now shows an `APPROVAL: Approved` chip + the top-right active-filter pill reads `approval = approved` when the URL drives it. |
 | P0-S3 `outreach_status` missing from borrower payload | Surfaced on borrower + lead summary | ✅ Verified. Borrower payload grew from 40 keys → **52 keys**. New: `approval_status, outreach_status, approved_at, outreach_at, assigned_to_email, latest_disposition, aging_days`. Lead Queue table renders a new `OUTREACH` column with `Queued / Sent / Pending / —` pills. |
 | P0-S4 No call disposition logging | `POST /api/leads/{id}/disposition` + governed enum + PII scrubbing | ✅ Verified. `POST /api/leads/B-102FL7THC6Q3L/disposition {outcome:'connected', lo_email:'lo01@summit.example', notes:'reached borrower at alice@example.com'}` → 200 with full disposition object: `disposition_id, borrower_id, lo_email, outcome, attempt_number=3 (auto-incremented from prior rows), occurred_at, callback_at, notes` — and **notes were scrubbed to `"reached borrower at [EMAIL-REDACTED]"`**. Invalid outcome → 422 with the exact enum (`called_no_answer / called_left_voicemail / connected / callback_scheduled / application_started / not_interested / not_now / dead`). Nonexistent borrower → 404. |
 | P1-S5 No per-borrower lifecycle | `GET /api/borrowers/{id}/lifecycle` | ✅ Verified. Returns `approval_status, outreach_status, approved_at, outreach_at, synced_at` plus an `assignment` block (assignment_id, assigned_to_email/label, assigned_at, expires_at, released_at, strategy). |
 | P1-S6 No aging surface | Stale-lead surfaces in UI + `/api/sales/aging` endpoint + Genie aging query | ✅ Verified. The Lead Queue page now renders a "Sales ops snapshot" panel with **STALE APPROVED** count + an "Open stale queue" CTA. `/api/sales/aging?older_than_days=30` returns 200 (empty list = no aged leads at >30d). Sales Ops Genie "Which approved borrowers are aging out and have not been worked yet?" returns the exact 20-day-stale B-0STSZHO4O5J04 I flagged in the original audit, sourced from `mip_app.approvals + lead_assignments + call_dispositions` joins. |
-| P1-S7 Audit rollups `groupBy` ignored | Now honored | ✅ Verified. `GET /api/audit/rollups?period=week&groupBy=actor` returns rows shaped `{bucket_start, event_type, group_by:'actor', group_key:'skyler@entrada.ai', event_count: 65}` — `group_by` and `group_key` are now first-class output fields. |
+| P1-S7 Audit rollups `groupBy` ignored | Now honored | ✅ Verified. `GET /api/audit/rollups?period=week&groupBy=actor` returns rows shaped `{bucket_start, event_type, group_by:'actor', group_key:'<operator-email>', event_count: 65}` — `group_by` and `group_key` are now first-class output fields. |
 | P1-S8 No `/api/sales/*` namespace | Full sales router | ✅ Verified. `GET /api/sales/team` returns the 6-LO + 1-manager roster with `role / region / manager_email / capacity_per_day / active` (Summit LO 01 = IL, capacity 35; LO 02 = CA; etc.). `GET /api/sales/standup` returns `{date, calls_logged, contacts_reached, callbacks_scheduled, applications_started, dead_leads, by_lo}`; after I logged one disposition, `standup?date=2026-05-12` returned `{calls_logged: 4, contacts_reached: 4, callbacks_scheduled: 3, ..., by_lo: [{lo_email: 'lo01@summit.example', outcomes: {callback_scheduled: 3, connected: 1}, calls_logged: 4}]}`. `GET /api/sales/conversion?from=...&to=...` returns `{from_date, to_date, group_by, rows: [{group_key, calls_attempted, contacts_reached, callbacks_scheduled, applications_started, application_start_rate}]}` — verified live: lo01 = 4 calls / 4 contacts / 3 callbacks / 0 apps. `GET /api/sales/aging` works as above. |
 | P1-S9 No Genie sample questions | Sales Ops routing in Genie | ✅ Verified. Asking the canonical aging question produces `source: "sales_ops"`, generated SQL joining `mip_app.approvals + call_dispositions + lead_assignments`, returns the correct borrower (B-0STSZHO4O5J04), and **no `B-TEST*` / `B-FUZZ*` / `B-AUDIT*` IDs leak through** (the reviewer-blocker overfetch+filter is working). |
 

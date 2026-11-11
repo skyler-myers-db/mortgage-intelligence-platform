@@ -376,7 +376,7 @@ describe('the Triage deck deep link (D-approval-flow-a2)', () => {
 });
 
 describe('the approval-request scope param (flow-02 / shell-06, D-approval-flow-c)', () => {
-  const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const ID = '5eed00a1-0000-4000-8000-0000000000a1';
   const sp = (query: string) => new URLSearchParams(query);
 
   it('parses a lower-cased 8-4-4-4-12 hex UUID and nothing else', () => {

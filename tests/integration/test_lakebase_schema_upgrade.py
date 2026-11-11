@@ -24,11 +24,12 @@ from backend.services.campaign_treatment import (
 )
 from jobs import lakebase_migrate
 from jobs.lakebase_migration_integrity import _campaign_decision_intent
+from jobs.lakebase_migration_seed import render_seed_sql
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _CAMPAIGN_JSON_SHAPE_CONSTRAINTS = (
     "campaigns_criteria_reviewed_shape_chk",
     "campaigns_suppression_policy_reviewed_shape_chk",

@@ -14,7 +14,7 @@ CATALOG = "mip_app_state"
 SYNC_SCHEMA = "mip_sync"
 SYNC_TABLES = ("source_readiness", "segment_population", "funnel_snapshot_daily")
 APP_ID = "app-client-id"
-APP_SCIM_ID = "74635290620767"
+APP_SCIM_ID = "70000000000101"
 WAREHOUSE_ID = "warehouse-id"
 
 

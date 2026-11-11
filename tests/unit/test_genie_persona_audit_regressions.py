@@ -239,7 +239,7 @@ def test_real_contact_data_in_cells_still_flags() -> None:
         "312-555-0142",
         "(312) 555-0142",
         "call 3125550142",
-        "a@b.com",
+        "a@b.example",
         "123-45-6789",
         "CLIP 987654321098",
         "431 Maple Street",

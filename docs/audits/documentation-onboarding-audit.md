@@ -6,8 +6,8 @@
 > local markdown links, and backend module-level docstring coverage.
 
 **Date:** 2026-05-18  
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
-**Active deployment used for runtime sanity:** `01f152e659dd1f42aab69164a47db116`
+**App:** `https://<app-host>`  
+**Active deployment used for runtime sanity:** `<deployment-id>`
 
 ## Headline result
 
@@ -129,7 +129,7 @@ All 14 still hold.
 The documentation tranche is genuinely a documentation-only change at the
 runtime layer — no router, service, schema, or migration was touched.
 `backend/**/*.py` edits in this tranche are module-level docstrings only, so
-the deployed app under `01f152e659dd1f42aab69164a47db116` is unchanged in
+the deployed app under `<deployment-id>` is unchanged in
 behavior, and no Databricks redeploy is required. Engineering's claim that
 "no runtime behavior changed" is accurate against the working tree.
 

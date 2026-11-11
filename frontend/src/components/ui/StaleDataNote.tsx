@@ -47,7 +47,9 @@ export function StaleDataNote({ lastGoodAt, compact = false }: StaleDataNoteProp
   if (lastGoodAt === null) return null;
   const at = typeof lastGoodAt === 'number' ? lastGoodAt : Date.parse(lastGoodAt);
   if (!Number.isFinite(at)) return null;
-  const age = <Timestamp value={lastGoodAt} format={now - at > DAY_MS ? 'datetime' : 'relative'} now={now} nowLabel={JUST_NOW} />;
+  // The Timestamp reads the same minute clock, and with no `now` of its own a
+  // read inside the clock's minute is "just now", never "in 1 minute".
+  const age = <Timestamp value={lastGoodAt} format={now - at > DAY_MS ? 'datetime' : 'relative'} nowLabel={JUST_NOW} />;
   if (compact) {
     return (
       <p role="status" className="chip chip--warning stale-note stale-note--compact" data-testid="stale-data-note">

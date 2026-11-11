@@ -46,12 +46,13 @@ from backend.services.outreach_revoke import RevokeRefused, revoke_approval
 from backend.services.sales_state import SalesStateStore
 from backend.services.workspace_queue_version import QUEUE_VERSION_SQL, queue_version_from_row
 from jobs import lakebase_migrate, sync_lifecycle_state
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _MARKER = "-- Approval requests (maker-checker), revoke and decided_at ---"
 ALICE = "alice.analyst@summit.example"
 BORROWER = "B-0000000000AR1"

@@ -1608,7 +1608,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const today = new Date();
     const from = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
     const fromDate = from.toISOString().slice(0, 10);
-    const toDate = today.toISOString().slice(0, 10);
+    // The window ends tomorrow (UTC): the outcome below is stamped with the
+    // server's now() when it is written, already the next UTC day when this
+    // test starts just before midnight. Both reads use this one window.
+    const toDate = new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const summaryUrl = `${API_URL}/api/sales/outcomes/summary?from=${fromDate}&to=${toDate}`;
 
     const beforeResp = await request.get(summaryUrl, { headers: AUTH_HEADERS });

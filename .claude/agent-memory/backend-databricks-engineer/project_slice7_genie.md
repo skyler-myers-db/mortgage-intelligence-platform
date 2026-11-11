@@ -4,7 +4,7 @@ description: Live Databricks Genie client, resilience gating, and safe-corpus fa
 type: project
 ---
 
-Slice 7 flipped `/api/genie` from a deterministic in-process catalog to the real Mortgage Lead Intelligence Genie Space (default workspace, space id `01f13d4968af1b249dc388fd5b18b195`, repo-committed at `genie/space_id.txt`).
+Slice 7 flipped `/api/genie` from a deterministic in-process catalog to the real Mortgage Lead Intelligence Genie Space (default workspace, space id `<genie-space-id>`, repo-committed at `genie/space_id.txt`).
 
 **Why:** DAIS booth demo must show real Genie-grounded conversational Q&A, but the booth network can't be trusted so we need a visible degraded path that never fabricates data.
 

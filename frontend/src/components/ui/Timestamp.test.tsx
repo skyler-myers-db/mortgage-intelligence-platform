@@ -103,3 +103,48 @@ describe('Timestamp', () => {
     expect(container.querySelector('time')?.textContent).toBe('12 minutes ago');
   });
 });
+
+describe('the shared minute clock', () => {
+  // The clock is the minute it is in. It used to tick every 60 s from the
+  // first mount, so a first mount 50 s into a minute kept it 50 s to 110 s
+  // behind the real time, and a value stamped at that moment read "in 1m"
+  // or "in 2m" (PR #338 review: "Fetched in 1m" on a fresh read).
+  const LATE_MOUNT = Date.parse('2026-07-14T15:00:50Z');
+  const label = () => container.querySelector('time')?.textContent;
+
+  it('labels a value stamped just now as now, however late in its minute the clock started', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(LATE_MOUNT);
+    render(<Timestamp value={Date.now()} relativeStyle="narrow" />);
+    expect(label()).toBe('now');
+    act(() => {
+      vi.advanceTimersByTime(40_000); // 15:01:30
+    });
+    render(<Timestamp value={Date.now()} relativeStyle="narrow" />);
+    expect(label()).toBe('now');
+    act(() => {
+      vi.advanceTimersByTime(75_000); // 15:02:45, the last 15 s of a minute
+    });
+    render(<Timestamp value={Date.now()} relativeStyle="narrow" />);
+    expect(label()).toBe('now');
+  });
+
+  it("moves on at the wall clock's minute, not 60 s after the first mount", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(LATE_MOUNT);
+    render(<Timestamp value="2026-07-14T14:58:00Z" />);
+    expect(label()).toBe('2 minutes ago');
+    act(() => {
+      vi.advanceTimersByTime(10_000); // 15:01:00
+    });
+    expect(label()).toBe('3 minutes ago');
+  });
+
+  it("keeps a value in the next minute ahead of the clock", () => {
+    // Only the clock's own minute reads "now": 15:01:00 is not in 15:00.
+    vi.useFakeTimers();
+    vi.setSystemTime(LATE_MOUNT);
+    render(<Timestamp value="2026-07-14T15:01:00Z" relativeStyle="narrow" />);
+    expect(label()).toBe('in 1m');
+  });
+});
