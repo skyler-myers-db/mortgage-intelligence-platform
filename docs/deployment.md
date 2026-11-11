@@ -3534,8 +3534,8 @@ run time; they are never committed. The profile then requires
 **The run.** Both phases run the same read-only steps as `--phase plan`, with
 the step-0 Genie pin check (no phase guard) and the pre-stop probes in their
 adopt mode, so an adopt or unadopt dispatch carries the `genie_pin` and
-`accepted_exposure_plan` acks those read (`operation_acks`, the dispatch
-preflight above). Until a signed record names the governed Genie space, the
+`accepted_exposure_plan` acks those read (`operation_acks`; see "CI deploy
+(deploy-dev.yml)" below). Until a signed record names the governed Genie space, the
 adopt phases' bundle plan, binds and summary still refuse an unpinned space
 (`no pin names the governed Genie space yet`, bundle_env), whatever
 `genie_pin` says: the cutover runbook's B4(c), a follow-up. They run with
