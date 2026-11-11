@@ -231,7 +231,12 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # The deploy interpreter: a python, or the proof sandbox's recording wrapper.
 _PYTHON = re.compile(r"(?:deploy-)?python(?:[0-9]+(?:\.[0-9]+)*)?")
 _PY_FLAGS = frozenset({"-P", "-I", "-B", "-E", "-s", "-S", "-u", "-O"})
-_TOOL_PATH = re.compile(r"(?:.*/)?(tools(?:/\w+)*/\w+)\.py")
+# A tool by module name, and by path behind any directory. The deploy-file
+# reader (tests/fixtures/portability_checks.py) names tools with both, and the
+# call classifier reads a path with the same TOOL_PATH (review of #330, round
+# 3), so a path one of them reads as a tool the other does too.
+TOOL_MODULE = re.compile(r"tools(?:\.\w+)+")
+TOOL_PATH = re.compile(r"(?:.*/)?(tools(?:/\w+)*/\w+)\.py")
 
 
 def cli_role(argv: Sequence[str]) -> str:
@@ -288,7 +293,7 @@ def _tool(kind: str, value: str | None) -> str | None:
 
     if kind == "module":
         return value
-    if kind == "path" and value is not None and (match := _TOOL_PATH.fullmatch(value)) is not None:
+    if kind == "path" and value is not None and (match := TOOL_PATH.fullmatch(value)) is not None:
         return match.group(1).replace("/", ".")
     return None
 

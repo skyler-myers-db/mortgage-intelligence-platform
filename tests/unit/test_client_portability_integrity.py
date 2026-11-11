@@ -257,6 +257,27 @@ def _scripts_copy(tmp_path: Path, plant: tuple[str, str] | None = None) -> Path:
     return scripts
 
 
+def _shapes(tool: str) -> tuple[str, ...]:
+    """One call of ``tool`` in each shape a deploy file writes one (review of #330, round 3).
+
+    ``-m`` and a path; a quoted ``-m``; a path behind ``$ROOT_DIR`` or ``./``;
+    a ``-m`` continued on the next line; and an array whose body holds ``-m``
+    and the name on lines of their own, as deploy_step_agentic_cutover.sh's
+    ``AI_GATEWAY_PROOF_ARGS`` does.
+    """
+
+    path = tool.replace(".", "/") + ".py"
+    return (
+        f'"$PYTHON" -m {tool} --x',
+        f'"$PYTHON" {path}',
+        f'"$PYTHON" -m "{tool}"',
+        f'"$PYTHON" "$ROOT_DIR/{path}" --x',
+        f'"$PYTHON" ./{path}',
+        f'"$PYTHON" -m \\\n  {tool} \\\n  --x',
+        f'ARGS=(\n  -m\n  {tool}\n  --x\n)\n"$PYTHON" "${{ARGS[@]}}"',
+    )
+
+
 def test_every_tool_a_core_deploy_file_names_is_classed(tmp_path: Path) -> None:
     """Review of #330: a tool only a live run reaches is never planned or run by the proof's dry runs.
 
@@ -270,13 +291,11 @@ def test_every_tool_a_core_deploy_file_names_is_classed(tmp_path: Path) -> None:
 
     assert outside == roles.OUTSIDE_PROOF_MODULES, sorted(outside ^ roles.OUTSIDE_PROOF_MODULES)
     assert {m for m in outside if roles.account_api_reach(m)} == roles.OUTSIDE_PROOF_ACCOUNT_REACH
-    # Positive controls: a tool a live-only branch runs, by -m or by path, is named.
-    preflight = "lib/deploy_step_preflight_gates.sh"
-    for line, tool in (
-        ('if [[ "$DRY_RUN" -eq 0 ]]; then "$PYTHON" -m tools.databricks.account_admin_grant --grant x; fi', "tools.databricks.account_admin_grant"),
-        ('[[ "$DRY_RUN" -eq 0 ]] || "$PYTHON" tools/databricks/account_sp_create.py', "tools.databricks.account_sp_create"),
-    ):
-        assert tool in checks.core_deploy_tools(_scripts_copy(tmp_path / tool, (preflight, line))) - named, line
+    # Positive controls: a tool a live-only branch runs is named in every
+    # shape a deploy file writes a call (review of #330, round 3).
+    for index, line in enumerate(_shapes("tools.databricks.account_admin_grant")):
+        scripts = _scripts_copy(tmp_path / str(index), ("lib/deploy_step_preflight_gates.sh", f'if [[ "$DRY_RUN" -eq 0 ]]; then\n{line}\nfi'))
+        assert checks.core_deploy_tools(scripts) - named == {"tools.databricks.account_admin_grant"}, line
 
 
 def test_the_role_table_fails_closed_for_every_shape_the_deploy_uses() -> None:
@@ -378,7 +397,8 @@ def test_the_agentic_slices_name_exactly_the_committed_tools(tmp_path: Path) -> 
 
     assert checks.agentic_only_modules() == checks.AGENTIC_ONLY_MODULES
     assert not roles.REVIEWED_MODULES & checks.AGENTIC_ONLY_MODULES
-    # Positive controls (review of #330): a new agentic tool, -m or by path, changes the set read from the tree.
-    for index, line in enumerate(('run "$PYTHON" -m tools.databricks.new_agentic_tool', 'run "$PYTHON" tools/databricks/new_agentic_tool.py')):
+    # Positive controls (review of #330, rounds 2 and 3): a new agentic tool,
+    # in any shape a deploy file writes a call, changes the set read from the tree.
+    for index, line in enumerate(_shapes("tools.databricks.new_agentic_tool")):
         scripts = _scripts_copy(tmp_path / str(index), ("lib/deploy_step_agentic_provisioning.sh", line))
         assert checks.agentic_only_modules(scripts) - checks.AGENTIC_ONLY_MODULES == {"tools.databricks.new_agentic_tool"}, line
