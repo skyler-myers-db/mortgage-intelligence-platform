@@ -44,6 +44,16 @@ reads as absent. Any other read error refuses that check, never "absent".
    the catalog exists and ``MIP_UC_CATALOG_STORAGE_ROOT`` is set, it must be
    the catalog's own storage root (a trailing ``/`` aside): a catalog's
    managed location never moves, so a profile naming another one is wrong.
+4b. **metastore owner.** The metastore's owner, read through the very reader
+   the pre-stop owner probe and the treatment converger use
+   (``tools/databricks/uc_metastore_read.current_metastore``: the summary,
+   which must name the workspace's current metastore; never the
+   metastore-admin-only ``metastores.get``), is exactly
+   ``MIP_UC_METASTORE_OWNER``. An owner the summary does not return to the
+   deployer (spike S0(b)'s worst case) and one it returns padded or blank (a
+   data fault) refuse with their own lines. The owner is registered as a
+   runner mask the moment it is read. This check runs in every phase, so a
+   plan's live checks answer S0(b) as the real deployer.
 5. **account principal.** ``MIP_IDENTITY_IDS_JSON.account_principal`` does not
    hold account admin (its account SCIM roles), read with its own
    credential; it may manage the reserved M2M identities only.
@@ -60,6 +70,14 @@ from backend.config import source_names
 from tools.clients.profile import account_host
 from tools.clients.redact import emit_mask
 from tools.clients.schema import ClientProfile
+from tools.clients.shapes import PRINCIPAL_VOCABULARY
+from tools.databricks.uc_metastore_read import (
+    OWNER_ABSENT,
+    OWNER_CANONICAL,
+    MetastoreReadRefused,
+    current_metastore,
+    owner_state,
+)
 
 INSTALL_KEY_PROPERTY = "mip.install_key"
 SHARE_CATALOG_TYPE = "DELTASHARING_CATALOG"
@@ -106,6 +124,7 @@ class InstallChecks:
             self.storage_root()
         elif catalog_exists:
             self.existing_storage_root()
+        self.metastore_owner()
         self.account_principal()
         return self.lines
 
@@ -249,6 +268,44 @@ class InstallChecks:
                 "storage root: MIP_DEFAULT_CATALOG exists with another storage root than "
                 "MIP_UC_CATALOG_STORAGE_ROOT; a catalog's managed location never moves, so set the "
                 "catalog's own root or unset the field"
+            )
+
+    # --- 4b. metastore owner -------------------------------------------------
+
+    def metastore_owner(self) -> None:
+        try:
+            summary = current_metastore(self.workspace)
+        except MetastoreReadRefused as exc:
+            self.lines.append(f"metastore owner: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            self.lines.append(_read_error("metastore owner", exc))
+            return
+        if _text(getattr(summary, "metastore_id", None)).casefold() != self.profile.expect_metastore_id.strip().casefold():
+            self.lines.append("metastore owner: the metastore summary names another metastore than MIP_EXPECT_METASTORE_ID")
+            return
+        state = owner_state(summary)
+        if state == OWNER_ABSENT:
+            self.lines.append(
+                "metastore owner: the metastore summary returns no owner to the deployer (spike S0(b)), so the "
+                "pre-stop owner probe and the treatment-access converger would refuse; the owner-read follow-up "
+                "must land first"
+            )
+            return
+        if state != OWNER_CANONICAL:
+            self.lines.append(
+                "metastore owner: the metastore summary returns an owner that is not a canonical principal name "
+                "(padded, blank or not a string), a fault in the metastore's data, not a withheld read; the owner "
+                "policy refuses it"
+            )
+            return
+        owner = str(summary.owner)
+        if " ".join(owner.split()).casefold() not in PRINCIPAL_VOCABULARY:
+            emit_mask(owner)
+        if owner != self.profile.metastore_owner:
+            self.lines.append(
+                "metastore owner: the metastore's owner is not exactly MIP_UC_METASTORE_OWNER; after the client's "
+                "review set it to the actual owner (a deploy never transfers the metastore)"
             )
 
     # --- 5. account principal ------------------------------------------------

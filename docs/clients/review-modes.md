@@ -53,10 +53,19 @@ review.
   the `profile` ack (`owner_attestation`) on every mutating phase, and the
   operation acks a tool printed (`adopt_plan`, `quiesce_window`,
   `database_instance_update`, `genie_pin`, `accepted_exposure_plan`,
-  `data_ledger_supersede`, `data_ledger_rerun`). The run recomputes each body
-  right before it relies on it and refuses on any difference. An ack for one
-  purpose never satisfies another. An ack binds the reviewed bytes; it does
-  not prove that anyone other than the dispatcher reviewed them.
+  `data_ledger_supersede`, `data_ledger_rerun`, `metastore_app_grants`). The
+  run recomputes each body right before it relies on it and refuses on any
+  difference. An ack for one purpose never satisfies another. An ack binds the
+  reviewed bytes; it does not prove that anyone other than the dispatcher
+  reviewed them.
+- **The metastore owner's attestation** (`metastore_app_grants`, spike
+  S0(b′)) is the one ack whose content the run cannot re-read: a deployer that
+  is not a metastore admin is denied the App's metastore grants. The run
+  recomputes its body from what it does read (the metastore's id and owner, the
+  App's id) for each date of the last 30 days and each reviewed privilege set,
+  and admits it only in `plan`, `adopt`, `unadopt` and `release`. So it binds
+  the owner's read on that date, not the grants at run time: a grant made
+  after it is the attestation's residual, bounded by the 30 days.
 - **The human-run tools.** `bootstrap_account` and `github_environment` refuse
   under CI or without a terminal, open a fresh interactive login every run,
   and apply only the exact plan digest the operator reviewed

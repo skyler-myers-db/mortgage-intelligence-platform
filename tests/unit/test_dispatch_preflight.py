@@ -207,6 +207,8 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
         "MIP_ACK_ACCEPTED_EXPOSURE_PLAN",
         "MIP_ACK_DATA_LEDGER_SUPERSEDE",
         "MIP_ACK_DATA_LEDGER_RERUN",
+        # tools/databricks/metastore_app_grants.py (spike S0(b′)).
+        "MIP_ACK_METASTORE_APP_GRANTS",
     }
 
 

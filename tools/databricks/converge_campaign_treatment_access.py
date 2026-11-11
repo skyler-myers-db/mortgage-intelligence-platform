@@ -34,9 +34,14 @@ from tools.databricks.m2m_access_policy import (
     assert_non_admin_service_principal,
     resolve_effective_groups,
 )
+from tools.databricks.metastore_app_grants import (
+    SAFE_METASTORE_PRIVILEGES,
+    app_metastore_privileges,
+)
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )
+from tools.databricks.uc_metastore_read import current_metastore
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     MetastoreOwnerPolicy,
@@ -52,7 +57,7 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _TABLE = "campaign_treatment_snapshot"
 _SCHEMA = "audit"
-_SAFE_METASTORE_PRIVILEGES = {"USE_MARKETPLACE_ASSETS"}
+_SAFE_METASTORE_PRIVILEGES = SAFE_METASTORE_PRIVILEGES
 Mode = Literal["quiesce", "runtime"]
 _PRIVILEGE_RE = re.compile(r"^[A-Z]+(?:_[A-Z]+)*$")
 _REVIEWED_ORDER = ("USE_CATALOG", "USE_SCHEMA", "SELECT", "MODIFY")
@@ -350,20 +355,21 @@ def _assert_metastore_boundary(
     ``owner_policy`` is the ``MetastoreOwnerPolicy`` (plan 4.12), not the
     install's approved-owner policy: neither the approved owners nor the
     deployer may own the metastore unless the profile names them as its owner.
+    The metastore is read through its summary (``uc_metastore_read``), never
+    the metastore-admin-only ``metastores.get``. The App's metastore
+    privileges are read live only by a metastore-admin deployer; any other
+    deployer needs the owner's exact attestation, and a denied read refuses
+    (``metastore_app_grants``, spike S0(b′)), never reads as "none".
     """
 
-    assignment = workspace.metastores.current()
-    metastore_id = str(getattr(assignment, "metastore_id", "") or "").strip()
-    if not metastore_id:
-        raise RuntimeError("Current workspace has no authoritative metastore identifier")
-    metastore = workspace.metastores.get(metastore_id)
+    metastore = current_metastore(workspace)
     owner_policy.assert_objects((metastore,))
-    actual = _effective_privileges(
+    actual = app_metastore_privileges(
         workspace,
-        securable_type="metastore",
-        full_name=metastore_id,
+        metastore=metastore,
         principal=principal,
-    )
+        effective=_effective_privileges,
+    ).privileges
     forbidden = actual - _SAFE_METASTORE_PRIVILEGES
     if forbidden:
         raise RuntimeError(

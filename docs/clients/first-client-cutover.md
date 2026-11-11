@@ -52,9 +52,10 @@ journals the tools write name resources: keep them in `<private-dir>`.
 ## Blockers on main (code follow-ups, not runbook steps)
 
 Read against `main` (which holds #334 and #337), five gaps stop the governed path, and
-one owed spike may stop it too. Each gap is a code change; nothing in this
+two metastore reads gate it (S0(b) and S0(b′)). Each gap is a code change; nothing in this
 runbook works around one. **Do not start step 7 until B1, B2, B4 and B5 have
-landed, B3 has landed or is about to land, and S0(b) is answered:** steps 7 to 12
+landed, B3 has landed or is about to land, plan #1 (step 6) has answered S0(b),
+and the owner can take S0(b′)'s attestation (below):** steps 7 to 12
 run as one sequence inside a 14-day window (step 7), and a sequence started
 while 10B cannot run leaves the install half handed over.
 
@@ -65,13 +66,15 @@ while 10B cannot run leaves the install half handed over.
 | B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
 | B4 | step 10B, and its rollback | Two acks the adopt phases read are admitted only in other phases: `genie_pin` (`MIP_GENIE_PIN_ACK`) in `release` only, `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) in `plan` and `release` only. (a) The step-0 preflight runs `provision_genie_space --plan-pin` in every live phase (`scripts/lib/deploy_step_preflight_gates.sh`). Before adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well), and the live space carries the profile's title, so the check refuses: `one Genie space carries the governed title but no pin names it, and no ack names it`, then `the governed Genie space pin was refused before the lease` (exit 2). (b) The pre-stop probes run in `adopt` and `unadopt` and load the accepted-exposure policy with its ack required; client #1's policy is not empty (step 2), so they refuse `accepted_exposure`. A dispatch carrying either ack in an adopt phase refuses at the dispatch preflight: `genie_pin is never read by --phase adopt`. So even the first, read-only 10B dispatch stops before it prints either plan digest, and so does `phase=unadopt`. | Admit `genie_pin` and `accepted_exposure_plan` in phases `adopt` and `unadopt` (or exempt those two reads in the adopt phases). |
 | B5 | step 10B | The deploy job's checkout is shallow: `actions/checkout@v6` with no `fetch-depth` (depth 1, `.github/workflows/deploy-dev.yml`), and nothing in `scripts/` or `tools/` fetches more. adopt-live resolves the live App's health `git_sha` in that checkout (`rev-parse`, then an ancestor check against `origin/main`) and reads `app.yaml` and the closure at it. The App 10A starts reports the commit the emergency recipe last shipped, an older `main` commit that a depth-1 clone does not hold, so adopt-live refuses `health_sha_not_on_main` (`the health sha resolves to no single commit in this checkout (fetch full history)`), then `adopt-live (adopt) refused before the lease` (exit 2). docs/deployment.md ("Signing the live deployment as an adopted blue") already says a CI checkout needs the full history; the workflow does not fetch it. | Give the deploy job's checkout `fetch-depth: 0`, or fetch the health sha in the adopt phase. |
-| S0(b) | steps 10B, 11 and 12 | An owed spike, not yet a known gap. The pre-stop owner probe (in `adopt`, `plan` and `release`) and the release's treatment-access converger read the metastore with `metastores.get` as the deployer (`tools/databricks/prestop_owner_policy.py`, `tools/databricks/converge_campaign_treatment_access.py`). The SDK documents that read as metastore-admin only; the deployer is a workspace admin holding `CREATE_CATALOG`, and by decision the legacy owner stays the metastore owner. Whether a non-admin read returns the owner is spike S0(b), still owed (docs/deployment.md, "Metastore owner"). Worst case: `[mip-prestop] REFUSED: owner_policy: cannot evaluate the approved-owner policy before step 0a: ...` in 10B, plan #3 and the release, before the lease. | Measure it read-only before step 7, as an identity of the deployer's shape (a workspace admin that neither owns nor administers the metastore, for example a throwaway `mip-spike-*` service principal the owner deletes afterwards). If the read is denied, a code follow-up must read the owner another way before step 7. |
+| S0(b) | steps 10B, 11 and 12 | **Fixed in code; plan #1 measures it.** The pre-stop owner probe, the owner-equivalent probe, the treatment-access converger and the client live checks read the metastore's owner from `metastores.summary()` through one reader (`tools/databricks/uc_metastore_read.py`), never the metastore-admin-only `metastores.get` (docs/deployment.md, "Metastore owner"). A throwaway non-admin service principal received the owner on 2026-11-11. Check 4b of the live checks reads it as the real CI deployer, so step 6's plan #1 answers S0(b) for this client. | Read plan #1's live-check lines with the decision rule in step 6. If the summary withholds the owner from the CI deployer, stop before step 7: a follow-up must read the owner another way (`system.information_schema.metastores` through a warehouse, after B1, or an owner attestation). |
+| S0(b′) | steps 10B, 11 and 12, and `phase=unadopt` | **A proof route is in code; it needs the owner.** Once the owner is read, the converger, adopt-live's `treatment_unverified` fact and the pre-stop owner probe prove that the App's service principal holds no metastore privilege outside `USE_MARKETPLACE_ASSETS`. That read (`grants.get_effective` on the metastore for the App) is denied to a deployer that is not a metastore admin (HTTP 403, measured 2026-11-11), and the CI deployer is not one. So every `plan`, `adopt`, `unadopt` and `release` run refuses before the lease, `[mip-prestop] REFUSED: metastore_authority: the deploying identity is not a metastore admin ...`, unless it carries the metastore owner's attestation: `metastore_app_grants=<sha256>` in `operation_acks` (docs/deployment.md, "Metastore authority"). Closing S0(b) does not clear this. | The owner takes the attestation (step 10B, first block) at most 29 days before each run that reads it, and again after any change to the App's metastore grants. |
 
-The order a live `phase=adopt` run meets them: the client live checks, then
-B1 (the warehouse), then B4(a) (the Genie pin), then the pre-stop probes with
-B4(b) and S0(b), then the bind plan, then adopt-live's plan with B5, and
-last, on the acked dispatch, B2. A fix that clears one gap only moves the run
-to the next.
+The order a live `phase=adopt` run meets them: the client live checks (S0(b),
+check 4b), then B1 (the warehouse), then B4(a) (the Genie pin), then the
+pre-stop probes with B4(b) and S0(b′) (`metastore_authority`), then the bind
+plan, then adopt-live's plan with B5 (and S0(b′) again, as
+`treatment_unverified`), and last, on the acked dispatch, B2. A fix that
+clears one gap only moves the run to the next.
 
 Two smaller gaps are noted at their steps: the freeze marker needs a signing
 key no shell holds (step 1), and an open quiesce window that the owner
@@ -125,9 +128,9 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 7 | Unity Catalog ownership handover | owner | **wait** for the blockers (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
-| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2, B4, B5; S0(b) owed)** |
-| 11 | Plan #3 | CI | after 10 (S0(b) owed) |
-| 12 | Release (run 1) | CI | **blocked (B3; S0(b) owed)** |
+| 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B2, B4, B5)**; needs the S0(b′) attestation |
+| 11 | Plan #3 | CI | after 10; needs the S0(b′) attestation |
+| 12 | Release (run 1) | CI | **blocked (B3)**; needs the S0(b′) attestation |
 | 13 | Post-release verification | agent, owner | after 12 |
 | 14 | Data phase | CI | after 13 |
 | 15 | Refresh on, after 7 green days | owner | later |
@@ -388,6 +391,30 @@ and the run stops there (exit 2, nothing changed). The expected set:
   is the one plan #2 shows (below); find out which grant allows it before
   step 7.
 
+**S0(b), answered here.** The live checks never short-circuit, so plan #1
+also runs check 4b, the metastore owner, as the real CI deployer and through
+the very reader the pre-stop probe and the converger use. Read it with this
+rule, and only when its positive control holds: the same run shows the
+`adoption: existing install not adopted` line (the install checks ran) and no
+`live checks could not read the workspace` line. Then:
+
+- **no `metastore owner:` line**: the summary returned the owner to the
+  deployer and it is exactly `MIP_UC_METASTORE_OWNER`. S0(b) is closed. S0(b′)
+  is not: the step 10B attestation is still needed for 10B, 11 and 12;
+- `metastore owner: the metastore summary returns no owner to the deployer
+  (spike S0(b)) ...`: **stop before step 7**; the owner-read follow-up must
+  land first (Blockers, S0(b));
+- `metastore owner: the metastore summary returns an owner that is not a
+  canonical principal name ...`: a fault in the metastore's own data, not a
+  withheld read; the metastore's owner reads and corrects it, then plan #1
+  again;
+- `metastore owner: the metastore's owner is not exactly
+  MIP_UC_METASTORE_OWNER ...`: correct the profile value after review (never a
+  metastore transfer), then plan #1 again;
+- `metastore owner: the metastore summary names another metastore ...` or
+  `metastore owner: could not be read (...)`: stop and find out why before
+  step 7.
+
 The two-line set of an unadopted install from before the marker (`adoption:
 ...` plus `install marker: MIP_DEFAULT_CATALOG exists without
 mip.install_key`, "adopt it first") first appears at plan #2, once step 7 has
@@ -404,7 +431,7 @@ a mutating phase then needs `protections_unverified_ack=<sha256>`, the exact
 ack the refusal prints); an OIDC proof mismatch, `tree_scan`, or any live-check
 line outside the expected set above (the Cotality share, the account
 principal, a marker naming another install, a storage root that differs from
-an existing catalog's): **stop the cutover** and fix the cause.
+an existing catalog's, a `metastore owner:` line): **stop the cutover** and fix the cause.
 
 **Rollback:** read-only.
 
@@ -417,11 +444,13 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 **Preconditions:**
 
 - **Every blocker of steps 10B and 12 has landed on `main`** (B1, B2, B4 and
-  B5, and B3, or B3 is about to land before step 12), and spike S0(b) is
-  answered with a read that returns the owner, or its follow-up has landed
-  (Blockers, above). This step starts a sequence that must finish inside the
-  pairs' 14 days; started while 10B cannot run, it leaves UC (and, after
-  step 8, Lakebase) handed over with no adoption to follow.
+  B5, and B3, or B3 is about to land before step 12); plan #1 showed no
+  `metastore owner:` line beside its positive control (step 6), so S0(b) is
+  closed; and the owner is ready to take S0(b′)'s attestation before 10B
+  (Blockers, above). Closing S0(b) alone does not clear this step. This step
+  starts a sequence that must finish inside the pairs' 14 days; started while
+  10B cannot run, it leaves UC (and, after step 8, Lakebase) handed over with
+  no adoption to follow.
 - Step 6 showed only the expected set; the interim membership (step 4) is in
   place.
 
@@ -600,7 +629,8 @@ the cause.
 adopt-live signs only a **running** App: a stopped App has no active
 deployment and refuses `deployment_unstable`. Immediately before 10B the owner
 starts it, raw, with their own profile. **Do not start it while any 10B
-blocker stands** (B1, B2, B4, B5, or an unanswered S0(b)): 10B would refuse
+blocker stands** (B1, B2, B4, B5, an unanswered S0(b), or no S0(b′)
+attestation the owner can take): 10B would refuse
 before the lease, and the App, which the owner keeps stopped until 10B can
 follow, would be up with nothing to adopt it. The start creates a new SNAPSHOT
 deployment of the App's default-source folder (spike S7), which adopt-live then
@@ -635,21 +665,40 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_verif
 again if the owner wants it stopped, and fix the folder first (a fresh
 emergency deploy of a current commit is the remedy for `closure_differs`).
 
-### 10B. Adopt (CI): **blocked by B1, B2, B4 and B5; S0(b) owed**
+### 10B. Adopt (CI): **blocked by B1, B2, B4 and B5**
 
 **Preconditions:** 10A; steps 7 and 8 done; B1, B2, B4 and B5 fixed on
-`main`, and S0(b) answered (Blockers, above).
+`main`; S0(b) closed by plan #1 (step 6).
+
+**First, the owner attests the App's metastore privileges (S0(b′)).** The CI
+deployer is not a metastore admin, so it cannot read them; every run of steps
+10B, 11 and 12 (and `phase=unadopt`) reads this attestation instead. As the
+metastore's owner (the legacy owner), read-only:
 
 ```bash
-gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
-gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="adopt_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.metastore_app_grants --app-name <app-name>
+```
+
+It prints the App's effective metastore privileges (expect
+`USE_MARKETPLACE_ASSETS`, from `account users`), the UTC date, the last run
+start that accepts it (29 days on), and `metastore_app_grants=<sha256>`. It
+names no principal or id. It refuses, printing no digest, if the caller is not
+the metastore's owner (or in its owning group), or if the App holds any other
+metastore privilege (revoking that is the owner's decision). Pass the digest in
+`operation_acks` below and in steps 11 and 12. Take it again if a run would
+start after that date, or after any change to the App's metastore grants.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks="adopt_plan=<sha256> metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
 ```
 
 These are the dispatches as `main` accepts them today, and on `main` both
 refuse before the lease. In order: B1 (the warehouse), B4(a) (the Genie pin:
 `one Genie space carries the governed title but no pin names it, and no ack
-names it`), B4(b) (`[mip-prestop] REFUSED: accepted_exposure`), S0(b) at worst
-(`owner_policy`), and B5 (`health_sha_not_on_main`). Each follow-up that
+names it`), B4(b) (`[mip-prestop] REFUSED: accepted_exposure`), S0(b′) without
+the attestation (`[mip-prestop] REFUSED: metastore_authority`), and B5
+(`health_sha_not_on_main`). Each follow-up that
 fixes a gap may add an input to these dispatches (B4's acks in
 `operation_acks`, B2's adopt-live ack); use the dispatch its PR documents.
 
@@ -674,14 +723,17 @@ the 2 jobs the legacy install never had; the active deployment is unchanged (the
 **Refusals:** before the bind plan: the warehouse (B1), the Genie pin (B4(a),
 exit 2: `the governed Genie space pin was refused before the lease`), and the
 pre-stop probes (`[mip-prestop] REFUSED: <code>`; `accepted_exposure` is
-B4(b), `owner_policy` may be S0(b)); bind plan: `missing`, `renamed`, `foreign_bound`,
+B4(b); `metastore_authority` is S0(b′): the attestation is missing, too old,
+or for another App or owner, so take it again; `owner_policy` with `the
+metastore summary returned no owner` is S0(b) and means stop); bind plan: `missing`, `renamed`, `foreign_bound`,
 `bound_elsewhere`, `duplicate_id`, `deployer_state_orphan`,
 `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
 `state_mismatch`, `malformed_state`, `read_failed`; post-bind gate:
 `instance_change`, `create_set_mismatch`, `dashboard_recreate`,
 `dashboard_move`, `rename_collision`; adopt-live: `deployment_unstable`,
 `env_names_not_proxyless`, `bindings_invalid`, `bindings_differ`,
-`acl_unreadable`, `treatment_unverified`, `health_unreadable`,
+`acl_unreadable`, `treatment_unverified` (with `cannot prove the App's
+metastore privileges`: S0(b′), as above), `health_unreadable`,
 `main_unresolved`, `source_not_on_main`, `health_sha_not_on_main` (B5 in CI),
 `tree_drift`, `app_yaml_differs`, `closure_differs`, `record_present`,
 `tier_agentic`. Each is in docs/deployment.md ("Adopting an existing install",
@@ -689,7 +741,8 @@ B4(b), `owner_policy` may be S0(b)); bind plan: `missing`, `renamed`, `foreign_b
 undo is unproven; dispatch `phase=unadopt`.
 
 **Rollback:** dispatch `phase=unadopt` (with its own acks: `adopt_plan` for
-its unbind plan and, once B2 is fixed, adopt-live's `unadopt` ack): the exact
+its unbind plan, `metastore_app_grants` for its pre-stop probes and, once B2
+is fixed, adopt-live's `unadopt` ack): the exact
 unbind plus a tombstone record version. Nothing is deleted. `phase=unadopt`
 meets B4 as well (the same Genie pin check and pre-stop probes, and no
 record names the space until adopt-live signs one), so it needs B4's fix too.
@@ -702,7 +755,7 @@ roll back.
 **Who:** CI.
 
 ```bash
-gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f operation_acks="accepted_exposure_plan=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f operation_acks="accepted_exposure_plan=<sha256> metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
 ```
 
 **Proof:** 0 refusals; blue is the adopted record; the bundle plan gate shows
@@ -725,24 +778,29 @@ refuses.
 `window_start_source_drift`, `window_journal_open`, `window_facts_incomplete`
 (docs/deployment.md, "Keep blue serving"); `accepted_exposure` (the ack is
 missing or names another plan: the refusal line names the exact digest);
-`owner_policy` (`cannot evaluate`: spike S0(b)'s worst case, stop). No Genie
+`metastore_authority` (S0(b′): the attestation from 10B is missing, too old or
+stale; take it again); `owner_policy` with `the metastore summary returned no
+owner` (S0(b)'s worst case, stop). No Genie
 pin refusal is expected: after 10B the adopted v7 record names the space the
 App binds (`genie_space_id`), and the pin check uses it. A pin refusal here
 (the record and a pin disagree, or the space is gone) means stop and read it.
 
 **Rollback:** read-only.
 
-## Step 12. Release (run 1): **blocked by B3; S0(b) owed**
+## Step 12. Release (run 1): **blocked by B3**
 
 **Who:** CI. **Preconditions:** step 11 clean; B3 fixed on `main`; the App
 running; the Genie budget restored; the announcement made.
 
 ```bash
-gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="quiesce_window=<sha256> accepted_exposure_plan=<sha256>" -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="quiesce_window=<sha256> accepted_exposure_plan=<sha256> metastore_app_grants=<sha256>" -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true
 ```
 
 Add `genie_pin=<sha256>` or `database_instance_update=<sha256>` to
-`operation_acks` only when plan #3 printed them. Never set
+`operation_acks` only when plan #3 printed them. `metastore_app_grants` is
+the 10B attestation (S0(b′)): the pre-stop probe and the treatment converger
+both read it, so a run that would start after its last accepted start needs a
+fresh one. Never set
 `rebase_unverified_app`: it stops an App that has no signed record, and this
 App has one.
 
@@ -766,9 +824,10 @@ PAUSED; the runtime secrets and the pii-salt were not rewritten; observed
 downtime equals the predicted window plus one rollover.
 
 **Refusals:** the pre-stop probe codes (`[mip-prestop] REFUSED: <code>`, before
-the lease, App untouched; `owner_policy` with `cannot evaluate` is S0(b)'s
-worst case, and the release's treatment-access converger reads the metastore
-the same way); `window_unacked` (the digest moved: plan and ack
+the lease, App untouched; `metastore_authority` is S0(b′), as in step 11, and
+`owner_policy` with `the metastore summary returned no owner` is S0(b)'s worst
+case; the release's treatment-access converger reads the metastore and the
+attestation the same way); `window_unacked` (the digest moved: plan and ack
 again); the release postflight's live run_as check (exit 4, before any grant,
 when a jobs-identity job or the pipeline does not run as the jobs identity);
 `no_rollback_proof`, `unverified_frontend_unacked` (B3).
