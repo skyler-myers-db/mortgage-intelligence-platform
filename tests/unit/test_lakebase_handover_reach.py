@@ -115,12 +115,35 @@ def test_what_the_target_reaches_or_the_grants_job_skips_plans_clean() -> None:
         PgObject("TABLE", "public", "provider_table", "", "cloud_admin"),  # the grants job skips it
         PgObject("TABLE", "extras", "already_the_targets", "", DEPLOYER),
     )
-    server.acl[SYNCED] = {(DEPLOYER, APP_ROLE, "TRIGGER"): False}  # any privilege, from anyone
+    server.acl[SYNCED] = {(DEPLOYER, APP_ROLE, "REFERENCES"): False}  # a column privilege, from anyone
     server.acl["TABLE:public.provider_table"] = {}
     assert _refusals(server) == []
     assert _refusals(FakeServer()) == [], "every mip_app object the legacy role owns moves to the target"
     del server.acl["TABLE:mip_app.app_owned_scratch"]
     assert _refusals(server) == ["target_needs_object_privilege"], "another role's mip_app table the target holds nothing on"
+
+
+@pytest.mark.parametrize(
+    ("kind", "privilege", "counts"),
+    [
+        ("TABLE", "TRIGGER", True),
+        ("TABLE", "DELETE", True),
+        ("TABLE", "TRUNCATE", True),
+        ("VIEW", "TRIGGER", True),
+        ("SEQUENCE", "USAGE", True),
+        ("TABLE", "INSERT", False),
+        ("TABLE", "REFERENCES", False),
+        ("SEQUENCE", "UPDATE", False),
+    ],
+)
+def test_only_a_privilege_the_revoke_accepts_reaches_an_object(kind: str, privilege: str, counts: bool) -> None:
+    """Round 2: REVOKE ALL on a relation checks every column too, where only a column privilege counts (PostgreSQL 16.15)."""
+
+    item = PgObject(kind, "extras", "held", "", LEGACY)
+    server = _with(_extras(), item)
+    server.acl[SYNCED] = {(DEPLOYER, LEGACY, "SELECT"): False}
+    server.acl[item.key] = {**owner_entries(f"{kind}:", LEGACY), (DEPLOYER, LEGACY, privilege): False}
+    assert _refusals(server) == (["target_needs_object_privilege"] if counts else [])
 
 
 def test_preconditions_print_one_grant_per_object_the_legacy_owner_can_grant_and_refuse_the_rest() -> None:

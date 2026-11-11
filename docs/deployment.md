@@ -3679,13 +3679,19 @@ it in your terminal or the mode-0600 report, never in a shared log):
 5. `GRANT <one privilege> ON <object> TO "<deployer>";` for every table,
    view, sequence and routine the handover leaves to another owner (anything
    outside `mip_app`, and a `mip_app` object another role owns) that the
-   deployer holds no privilege on: `SELECT` on a table, view or sequence,
-   `EXECUTE` on a routine. The grants job run as the
+   deployer holds no privilege on that its revoke accepts: `SELECT` on a
+   table, view or sequence, `EXECUTE` on a routine. The grants job run as the
    deployer revokes the App roles' privileges on every one of them, and
    PostgreSQL refuses a revoke outright from a role that holds nothing on the
    object: with step 4 alone, a legacy-owned table in a usable schema
    planned clean and the grants job failed "permission denied for table"
-   after the apply (PostgreSQL 16.15, PR #336 review). The step prints a grant only where the legacy owner can
+   after the apply (PostgreSQL 16.15, PR #336 review). Its `REVOKE ALL` on a
+   table, view or sequence also revokes each column, where only a column
+   privilege counts: the deployer's `SELECT`, `INSERT`, `UPDATE` or
+   `REFERENCES` on a table or view, or `SELECT` or `UPDATE` on a sequence,
+   is enough, and `TRIGGER`, `DELETE` or `TRUNCATE` alone on a table, or
+   `USAGE` alone on a sequence, failed "permission denied for column
+   tableoid" (round 2). The step prints a grant only where the legacy owner can
    give one (it owns the object, or holds its owner's privileges); each other
    object refuses `target_needs_object_privilege` until its owner grants the
    deployer a privilege on it. Who owns a synced-table schema's tables on the
@@ -3726,8 +3732,8 @@ once per schema and by count only, a non-system schema the target cannot use
 (`target_needs_schema_usage`): the grants job the deployer runs after the
 handover revokes on every table in every non-system schema and failed
 "permission denied for schema" without it (spike S3); each object the
-handover leaves to another owner that the target holds no privilege on
-(`target_needs_object_privilege`, step 5); and an entry
+handover leaves to another owner that the target holds no privilege on that
+its revoke accepts (`target_needs_object_privilege`, step 5); and an entry
 naming the target that the revert could not restore exactly
 (`target_grant_unrevertible`, below). The rehearsal reads the same
 preconditions first. The apply moves

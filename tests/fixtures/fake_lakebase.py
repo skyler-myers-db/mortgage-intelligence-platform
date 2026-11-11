@@ -129,6 +129,17 @@ OWNER_PRIVILEGES = {
 
 # PostgreSQL's acldefault for PUBLIC: what an object with no explicit ACL grants everyone.
 PUBLIC_DEFAULTS = {"FUNCTION": ("EXECUTE",), "PROCEDURE": ("EXECUTE",), "DATABASE": ("CONNECT", "TEMPORARY"), "TYPE": ("USAGE",), "DOMAIN": ("USAGE",)}
+# What lets a role that is not the owner issue REVOKE ALL on each kind, as
+# PostgreSQL 16.15 measured it (round 2 of the PR #336 review): on a relation
+# the REVOKE also checks every column, where only a column privilege counts,
+# so TRIGGER, DELETE or TRUNCATE alone on a table and USAGE alone on a
+# sequence are refused. The fake's own copy, never the shipped list.
+_REVOKE_ENABLING = {
+    "TABLE": ("SELECT", "INSERT", "UPDATE", "REFERENCES"),
+    "SEQUENCE": ("SELECT", "UPDATE"),
+    "FUNCTION": ("EXECUTE",),
+    "PROCEDURE": ("EXECUTE",),
+}
 # The GRANT ... ON keyword of each kind the grants job revokes on.
 _REVOKED_KINDS = {
     "TABLE": "TABLE",
@@ -477,7 +488,8 @@ class FakeCursor:
             keyword = _REVOKED_KINDS[item.kind]
             # Moved by the handover, or the provider's own (the grants job skips it).
             left_out = (item.schema == schema and owner == legacy) or (item.schema == "public" and owner == "cloud_admin")
-            if not left_out and not server.has_privilege(target, item.key):
+            enabling = _REVOKE_ENABLING[keyword]
+            if not left_out and not any(server.has_privilege(target, item.key, privilege) for privilege in enabling):
                 rows.append((keyword, item.schema, item.name, item.signature, owner in server.effective(server.caller)))
         return sorted(rows)
 

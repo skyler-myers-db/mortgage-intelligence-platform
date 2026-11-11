@@ -15,7 +15,8 @@ on it after the apply.
 ``unreachable_objects`` reads, by the grants job's own predicates, every such
 object the handover does not move to the target (everything outside
 ``mip_app``, and each ``mip_app`` object another role owns) that the target
-holds no privilege on. The plan refuses each one by count
+holds no privilege on that the REVOKE accepts (``PRIVILEGES_BY_KIND``: on a
+relation, only a column privilege counts). The plan refuses each one by count
 (``target_needs_object_privilege``). ``--preconditions`` prints, for each one
 the legacy owner can grant on (it owns it, or holds its owner's privileges),
 the GRANT of one reviewed privilege (``REMEDY_PRIVILEGES``) that ends the
@@ -59,8 +60,8 @@ _PREDICATE = "\n  AND ".join(NON_SYSTEM_SCHEMA_PREDICATE)
 _ANY = {kind: ", ".join(privileges) for kind, privileges in PRIVILEGES_BY_KIND.items()}
 # Read-only. ``moving`` is the legacy role: the handover gives the target each
 # mip_app object it owns. The privilege lists are PRIVILEGES_BY_KIND (any one
-# held is enough); a CASE keeps a sequence function off a table and the
-# reverse. The database is DATABASE_OWNER_SQL's.
+# held is enough for the REVOKE); a CASE keeps a sequence function off a table
+# and the reverse. The database is DATABASE_OWNER_SQL's.
 OBJECT_REACH_SQL = f"""
 WITH target_role AS (
     SELECT oid FROM pg_roles WHERE rolname = %(target)s

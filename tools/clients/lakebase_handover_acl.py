@@ -140,11 +140,17 @@ ORDER BY 1, 2, 3, 4, 5, 7
 REVIEWED_PRIVILEGES = frozenset(
     {"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "EXECUTE", "USAGE", "CREATE", "CONNECT", "TEMPORARY", "MAINTAIN"}
 )
-# Every PostgreSQL 16 privilege of each kind the grants job revokes on (a
-# has_*_privilege list: any one held is a privilege on the object).
+# The privileges of each kind the grants job revokes on that let a role that
+# holds one issue its REVOKE ALL (a has_*_privilege list: any one is enough).
+# REVOKE ALL on a relation also revokes every column's privileges, system
+# columns included, and that per-column check counts only column privileges
+# (SELECT, INSERT, UPDATE, REFERENCES; a sequence's are SELECT and UPDATE):
+# with TRIGGER, DELETE or TRUNCATE alone on a table, view or materialized
+# view, or USAGE alone on a sequence, PostgreSQL 16.15 refused it
+# "permission denied for column tableoid" (round 2 of the PR #336 review).
 PRIVILEGES_BY_KIND = {
-    "TABLE": ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"),
-    "SEQUENCE": ("USAGE", "SELECT", "UPDATE"),
+    "TABLE": ("SELECT", "INSERT", "UPDATE", "REFERENCES"),
+    "SEQUENCE": ("SELECT", "UPDATE"),
     "FUNCTION": ("EXECUTE",),
 }
 # GRANT ... ON <keyword>: a view and a materialized view are granted ON TABLE.

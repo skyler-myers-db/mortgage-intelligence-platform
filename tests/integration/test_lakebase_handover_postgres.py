@@ -430,3 +430,79 @@ def test_with_the_owners_set_alone_the_grants_job_run_as_the_target_fails(instal
     install.close_public_schema(install.target)
     with pytest.raises(psycopg.errors.InsufficientPrivilege, match="permission denied for schema public"):
         install.grants_job(install.target)
+
+
+def test_an_object_whose_owner_the_legacy_role_cannot_act_for_prints_no_grant(install: Install, tmp_path: Path) -> None:
+    """Round 2: ``caller_can_grant`` on real PostgreSQL. A GRANT the legacy owner cannot run is never printed."""
+
+    vendor, target = install.role("vendor"), _identifier(install.target)
+    install.run(install.legacy, "CREATE SCHEMA extras", f"GRANT USAGE ON SCHEMA extras TO {target}, {_identifier(vendor)}")
+    with psycopg.connect(make_conninfo(install.dsn, dbname=install.database), autocommit=True) as admin:
+        admin.execute("CREATE TABLE extras.vendor (id integer)")
+        admin.execute(f"ALTER TABLE extras.vendor OWNER TO {_identifier(vendor)}")
+    assert install.plan().refusals == ["target_needs_object_privilege"]
+    assert install.preconditions() == ([], ["target_needs_object_privilege"])
+    install.run(vendor, f"GRANT SELECT ON extras.vendor TO {target}")  # its owner grants it
+    assert install.plan().refusals == [] and install.preconditions() == ([], [])
+    assert install.apply(tmp_path / "j.json").status == "applied"
+    install.grants_job(install.target)
+
+
+def test_only_a_privilege_the_revoke_accepts_reaches_an_object(install: Install, tmp_path: Path) -> None:
+    """Round 2: the reach SQL's privilege lists, then the grants job run as the target.
+
+    REVOKE ALL on a relation also checks every column, where only a column
+    privilege counts: TRIGGER alone on a table and USAGE alone on a sequence
+    refuse, and --preconditions prints SELECT for each; REFERENCES and UPDATE,
+    privileges other than the remedy's, are enough.
+    """
+
+    _extras(install)
+    target = _identifier(install.target)
+    install.run(
+        install.legacy,
+        f"GRANT USAGE ON SCHEMA extras TO {target}",
+        f"GRANT TRIGGER ON extras.synced TO {target}",
+        f"GRANT USAGE ON SEQUENCE extras.standalone TO {target}",
+        f"GRANT EXECUTE ON FUNCTION extras.refresh(date) TO {target}",
+    )
+    assert install.plan().refusals == ["target_needs_object_privilege"] * 2
+    assert install.preconditions() == (
+        [f'GRANT SELECT ON SEQUENCE "extras"."standalone" TO {target};', f'GRANT SELECT ON TABLE "extras"."synced" TO {target};'],
+        [],
+    )
+    install.run(
+        install.legacy,
+        f"GRANT REFERENCES ON extras.synced TO {target}",
+        f"GRANT UPDATE ON SEQUENCE extras.standalone TO {target}",
+    )
+    assert install.plan().refusals == [] and install.preconditions() == ([], [])
+    assert install.apply(tmp_path / "j.json").status == "applied"
+    install.grants_job(install.target)
+
+
+@pytest.mark.parametrize(
+    ("held", "relation"),
+    [("TRIGGER ON TABLE", "synced"), ("USAGE ON SEQUENCE", "standalone")],
+    ids=("trigger_on_a_table", "usage_on_a_sequence"),
+)
+def test_with_a_privilege_the_revoke_does_not_accept_the_grants_job_fails(
+    install: Install, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held: str, relation: str
+) -> None:
+    """Positive control at the broken layer: the fix round's "any privilege" lists planned these clean."""
+
+    _extras(install)
+    target = _identifier(install.target)
+    reached = {"synced": "SELECT ON TABLE", "standalone": "SELECT ON SEQUENCE"}
+    reached[relation] = held
+    install.run(
+        install.legacy,
+        f"GRANT USAGE ON SCHEMA extras TO {target}",
+        f"GRANT EXECUTE ON FUNCTION extras.refresh(date) TO {target}",
+        *(f"GRANT {privilege} extras.{name} TO {target}" for name, privilege in reached.items()),
+    )
+    monkeypatch.setattr(handover, "unreachable_objects", lambda *_args, **_kwargs: [])
+    assert install.plan().refusals == []
+    assert install.apply(tmp_path / "j.json").status == "applied"
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match=f'permission denied for column "tableoid" of relation "{relation}"'):
+        install.grants_job(install.target)
