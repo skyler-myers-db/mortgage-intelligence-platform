@@ -104,6 +104,26 @@ def test_the_step_text_records_every_send_and_applies_a_description_only_differe
     assert "APP_ROLE_REGRANT_OWED=0" in (LIB.parent / "deploy.sh").read_text(encoding="utf-8")
 
 
+def test_the_docs_scope_the_wr1_only_send_to_the_release_binding_step() -> None:
+    """Round 2 of #337: the WR1 bullet said only a WR1 window sends resources.
+
+    Step 0a's signed-blue restore and the rollbacks send them too, in a
+    governed run with no window (``core_blue_restore``,
+    ``app_deployment_rollback``), and leave the re-grant to the next release.
+    """
+
+    text = (LIB.parents[1] / "docs" / "deployment.md").read_text(encoding="utf-8")
+    start = text.index("- **WR1** binding diff")
+    wr1 = " ".join(text[start : text.index("- **WR2**", start)].split())
+    flat = " ".join(text.split())
+
+    assert "only a WR1 window sends them" not in wr1
+    assert "the release's binding step sends them only in a WR1 window" in wr1
+    assert "restores at step 0a and in the rollbacks send them outside any window" in wr1
+    assert "resources go out only in a WR1 window" not in flat
+    assert "the binding step sends resources only in a WR1 window or an ungoverned run" in flat
+
+
 def _binding_branch() -> str:
     """The step file's real lines from the no-WR1 test through the send branch's end."""
 

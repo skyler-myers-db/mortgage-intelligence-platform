@@ -2856,11 +2856,13 @@ only for a **window reason** the read-only plan predicted
   is equal) on their access contract (kind, target, permission; a binding's
   own `description` is display text, reported apart and never a reason), or a
   binding id is unresolved. Every update that carries resources re-grants
-  CREATE ON DATABASE to the App's Lakebase role (spike S2, below), so only a
-  WR1 window sends them, it always runs the migration job after its binding
+  CREATE ON DATABASE to the App's Lakebase role (spike S2, below), so the
+  release's binding step sends them only in a WR1 window (the signed-blue
+  restores at step 0a and in the rollbacks send them outside any window; see
+  below). A WR1 window always runs the migration job after its binding
   update, and its acked body names that re-grant
   (`app_role_regrant: ["binding_send"]`). An App description-only difference
-  is no reason: the release applies it online (below);
+  is no reason: the release applies it online while blue serves (below);
 - **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
   drifts for the App role, the AI Gateway verifier role or the jobs
   identity's `jobs_reader` role (M2-PR5), or a `noop` migration plan reads
@@ -2935,9 +2937,15 @@ are re-read under the lease and must still equal the bundle's as a set; a
 description-only difference is applied online with
 `tools/databricks/app_description_fixup.py`, a create-update masked to
 `description`, identity-pinned, which restarts nothing and re-grants
-nothing). A window opened for another reason (WR4 opens before the binding
-step) skips the send the same way: resources go out only in a WR1 window or
-an ungoverned run. The App role
+nothing; a bundle that declares no description leaves the live one as it
+is, and the plan owes no fix-up for it). A window opened for another reason
+(WR4 opens before the binding step) skips the send the same way: the binding
+step sends resources only in a WR1 window or an ungoverned run. It also
+leaves a description-only difference to a later release, because the App is
+stopped there and every create-update the spikes measured ran on a serving
+App; the window plan's `online_fixups` names the fix-up only when no window
+is open at the binding step (a WR1 window's update carries the description
+itself). The App role
 converger refuses any rotation the plan did not predict, the verifier and
 jobs-reader roles are re-checked under the lease right before their converges
 (drift exits 2, blue serving), and the migration job is skipped because the
