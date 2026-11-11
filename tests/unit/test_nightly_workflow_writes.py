@@ -2,9 +2,9 @@
 
 The companion of tests/unit/test_nightly_workflow_contract.py:
 
-* no test nightly runs writes a lead outcome, disposition, snooze or
-  assignment (tests/fixtures/nightly_write_scan.py), and a ``prod`` App has a
-  path to a green run;
+* nothing nightly runs (a test, a script, an inline script) writes a lead
+  outcome, disposition, snooze or assignment (tests/fixtures/nightly_write_scan.py
+  and nightly_step_scan.py), and a ``prod`` App has a path to a green run;
 * the Genie semantic scorecard runs where the warehouse env it needs is
   exported;
 * the browser job mints only for the profile the validator jobs read, and
@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.fixtures import nightly_step_scan as step_scan
 from tests.fixtures import nightly_write_scan as scan
 from tools import live_validation_gate as gate
 from tools.clients import validation_app
@@ -47,8 +48,12 @@ SPEC_WRITERS = {
 }
 
 
+def _workflow() -> dict[str, Any]:
+    return yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+
+
 def _jobs() -> dict[str, dict[str, Any]]:
-    return yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))["jobs"]
+    return _workflow()["jobs"]
 
 
 def _steps(job: str) -> list[dict[str, Any]]:
@@ -91,17 +96,20 @@ def _playwright_steps(jobs: dict[str, dict[str, Any]] | None = None) -> list[tup
     ]
 
 
-def _all_findings(jobs: dict[str, dict[str, Any]]) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]]]:
-    """(findings, suite writers, spec writers) over every pytest, Playwright and tools module nightly runs."""
+def _all_findings(workflow: dict[str, Any]) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]], list[Path]]:
+    """(findings, suite writers, spec writers, the files steps run) over everything nightly runs."""
 
-    findings: list[str] = []
+    jobs = workflow["jobs"]
+    findings = step_scan.workflow_string_findings(workflow)
     suite_writers: set[tuple[str, str]] = set()
     spec_writers: set[tuple[str, str]] = set()
-    modules: set[str] = set()
-    for data in jobs.values():
+    files: list[Path] = []
+    for job, data in jobs.items():
         for step in data["steps"]:
             run = step.get("run", "")
-            modules.update(re.findall(r"python -m (tools(?:\.[a-z0-9_]+)+)", run))
+            found, ran = step_scan.step_findings(REPO, f"{job}: {step.get('name', step.get('uses'))}", run)
+            findings += found
+            files += ran
             if "pytest" in run:
                 deselected = _deselected(run)
                 for suite in sorted(_suites(run)):
@@ -114,26 +122,65 @@ def _all_findings(jobs: dict[str, dict[str, Any]]) -> tuple[list[str], set[tuple
             findings += found
             titles = {test.title for test in scan.spec_calls((FRONTEND / spec).read_text(encoding="utf-8")) if test.kind == "test"}
             spec_writers.update((spec, title) for title in titles if any(writer.endswith(f" {title}") for writer in writers))
-    for module in sorted(modules):
-        path = scan._module_path(REPO, module)
-        assert path is not None, module
-        findings += scan.whole_module_findings(REPO, [path])
-    return findings, suite_writers, spec_writers
+    findings += scan.whole_module_findings(REPO, files)
+    return findings, suite_writers, spec_writers, files
 
 
 def test_no_test_nightly_runs_writes_a_lead_outcome_disposition_snooze_or_assignment() -> None:
-    """Every pytest suite, Playwright spec and tools module a step runs, with their imports and conftests.
+    """Every pytest suite, Playwright spec, script, inline script and module a step runs, with what they load.
 
     None of these writes carries the run marker, and no cleanup undoes one (a
     funded-loan outcome reaches attribution, an application_submitted one the
     Sales ops KPIs), so the tests that make them are deselected on every install.
     """
 
-    findings, suite_writers, spec_writers = _all_findings(_jobs())
+    findings, suite_writers, spec_writers, _files = _all_findings(_workflow())
 
     assert suite_writers == SUITE_WRITERS, "positive control: the suite scan finds the outcome, disposition and assignment replay"
     assert spec_writers == SPEC_WRITERS, "positive control: the spec scan finds the four browser tests that write"
     assert findings == []
+
+
+def test_the_scan_reads_the_scripts_nightly_runs_by_path_and_what_they_run() -> None:
+    """``python tools/x.py``, ``bash tools/x.sh``, a script a script runs or sources, a tool a module runs as a child."""
+
+    loaded = {str(path.relative_to(REPO)) for path in scan.loaded_files(REPO, _all_findings(_workflow())[3])}
+
+    assert {
+        "tools/wait_app_ready.py",
+        "tools/genie_eval.py",
+        "tools/kill_drill/run_drill.sh",
+        "tools/kill_drill/lib_warehouse_on_demand.sh",
+        "tools/kill_drill/real_infra.py",
+        "tools/cleanup_live_campaign_fixtures.py",
+        "tools/clients/validation_session.py",
+        "tools/oauth_m2m_mint.py",
+    } <= loaded, loaded
+
+
+M2M_SMOKE = "Authenticated non-admin smoke (M2M)"
+GENIE_SCORECARD = "Genie semantic eval scorecard (deployed app)"
+PLANTED_POST = 'urllib.request.urlopen(urllib.request.Request(app_url + "/api/leads/B-0000000000000/outcome", method="POST", data=b"{}"))\n'
+
+
+@pytest.mark.parametrize(
+    ("step", "old", "new"),
+    [
+        (M2M_SMOKE, "if failed:\n", PLANTED_POST + "if failed:\n"),
+        (GENIE_SCORECARD, "tools/wait_app_ready.py", "tools/wait_app_ready_moved.py"),
+        (GENIE_SCORECARD, "python tools/genie_eval.py", 'python "$RUNNER_TEMP/genie_eval.py"'),
+    ],
+    ids=["heredoc-writes", "path-form-tool-moved", "script-outside-the-repo"],
+)
+def test_the_nightly_scan_reports_a_write_or_an_unread_script_in_a_step(step: str, old: str, new: str) -> None:
+    workflow = _workflow()
+    (target,) = [each for data in workflow["jobs"].values() for each in data["steps"] if each.get("name") == step]
+    assert target["run"].count(old) == 1
+    target["run"] = target["run"].replace(old, new)
+
+    findings = _all_findings(workflow)[0]
+
+    assert findings and all(step in finding for finding in findings), findings
 
 
 def test_the_real_uc_step_deselects_each_browser_writer_and_nothing_else() -> None:
@@ -347,6 +394,106 @@ def test_the_spec_scan_attributes_a_write_to_the_one_test_that_holds_it(tmp_path
     findings, _writers = scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", None, "first reads")
     assert len(findings) == 1 and "outer second writes" in findings[0], findings
     assert scan.spec_findings(tmp_path, "tests/e2e/planted.spec.ts", "first reads", None)[0] == [], "a --grep that leaves the writer out"
+
+
+TOOL_WRITE = 'import urllib.request\n\n\ndef main():\n    urllib.request.urlopen("http://app/api/leads/B/outcome", data=b"{}")\n'
+SHELL_WRITE = 'curl -X POST "$APP_URL/api/leads/B/disposition"\n'
+
+
+def _step_tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    for relative, text in files.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def _step_scan(root: Path, run: str) -> list[str]:
+    findings, files = step_scan.step_findings(root, "planted: step", run)
+    return findings + step_scan.workflow_string_findings({"run": run}) + scan.whole_module_findings(root, files)
+
+
+@pytest.mark.parametrize(
+    ("run", "files"),
+    [
+        ("python tools/planted.py \\\n  --base \"$MIP_APP_URL\"\n", {"tools/planted.py": TOOL_WRITE}),
+        ("bash tools/planted.sh --target genie\n", {"tools/planted.sh": SHELL_WRITE}),
+        ("bash tools/drill.sh\n", {"tools/drill.sh": '"$pybin" "$REPO_ROOT/tools/planted.py" stop\n', "tools/planted.py": TOOL_WRITE}),
+        ("bash tools/drill.sh\n", {"tools/drill.sh": '. "$REPO_ROOT/tools/lib.sh"\n', "tools/lib.sh": SHELL_WRITE}),
+        ("bash tools/drill.sh\n", {"tools/drill.sh": '"$pybin" -m tools.planted\n', "tools/planted.py": TOOL_WRITE}),
+        ("bash tools/drill.sh\n", {"tools/drill.sh": '"$pybin" - <<\'PY\'\nfrom tools.planted import main\nmain()\nPY\n', "tools/planted.py": TOOL_WRITE}),
+        ("python -m tools.runner\n", {"tools/runner.py": 'MINT = REPO / "tools" / "planted.py"\n', "tools/planted.py": TOOL_WRITE}),
+        ("python - <<'PY'\nimport urllib.request\napp_url = 'http://app'\n" + PLANTED_POST + "PY\n", {}),
+        ("python - <<'PY'\nfrom tools.planted import main\nmain()\nPY\n", {"tools/planted.py": TOOL_WRITE}),
+        ("python -c 'import urllib.request; urllib.request.urlopen(\"http://app/api/leads/B/snooze\")'\n", {}),
+        ("pytest -p tests.fixtures.planted_plugin -q tests/integration/test_reads.py\n", {"tests/fixtures/planted_plugin.py": PLANTED_PLUGIN}),
+        ("python scripts/planted.py\n", {"scripts/planted.py": TOOL_WRITE}),
+        ("timeout 60 python \"$GITHUB_WORKSPACE/scripts/planted.py\"\n", {"scripts/planted.py": TOOL_WRITE}),
+        ("python tools/missing.py\n", {}),
+        ("python -m tools.missing\n", {}),
+        ('bash "$RUNNER_TEMP/planted.sh"\n', {}),
+        ("python -m planted_package\n", {}),
+        ("python - <<'PY'\nthis is not ( python\nPY\n", {}),
+    ],
+    ids=[
+        "path-form-python",
+        "path-form-bash",
+        "bash-runs-a-tool-by-path",
+        "bash-sources-a-lib",
+        "bash-runs-a-tools-module",
+        "bash-heredoc-imports-a-tool",
+        "module-runs-a-tool-as-a-child",
+        "heredoc-writes",
+        "heredoc-imports-a-tool",
+        "inline-c-writes",
+        "pytest-p-plugin",
+        "repo-script-outside-tools",
+        "workspace-prefixed-script",
+        "tool-path-that-is-no-file",
+        "tools-module-that-is-no-module",
+        "script-outside-the-repo",
+        "module-this-scan-does-not-read",
+        "python-heredoc-that-does-not-parse",
+    ],
+)
+def test_the_step_scan_finds_a_write_or_an_unread_script_in_every_shape_a_step_runs(tmp_path: Path, run: str, files: dict[str, str]) -> None:
+    root = _step_tree(tmp_path, files)
+
+    assert _step_scan(root, run)
+
+
+def test_the_step_scan_passes_a_step_that_only_reads(tmp_path: Path) -> None:
+    """Installs, a read-only tool by path or module, an inline script, a suite, a shell heredoc, plain shell, a stale comment."""
+
+    run = (
+        "set -euo pipefail\n"
+        "# tools/retired_probe.py moved to tools/reads.py\n"
+        "python -m pip install --only-binary=:all: -r requirements.txt\n"
+        "python tools/reads.py --base \"$MIP_APP_URL\" && bash tools/reads.sh\n"
+        "python -m tools.reads_module\n"
+        "python - <<'PY'\nfrom tools.reads_module import main\nprint(main('/api/sales/outcomes/summary'))\nPY\n"
+        "cat <<EOF >> \"$GITHUB_STEP_SUMMARY\"\nbash and python, in prose (not code)\nEOF\n"
+        "pytest -q tests/integration/test_reads.py\n"
+        "if [ -n \"$X\" ]; then echo ok; fi\n"
+    )
+    root = _step_tree(
+        tmp_path,
+        {
+            "tools/reads.py": 'GET = "/api/leads/B/assignment"\n',
+            "tools/reads.sh": 'curl "$APP_URL/api/geo/assignment-overlay"\n',
+            "tools/reads_module.py": "def main(path):\n    return path\n",
+        },
+    )
+
+    assert _step_scan(root, run) == []
+
+
+def test_the_workflow_scan_reads_every_string_a_step_holds() -> None:
+    """A github-script body or an env value is code or data a step runs with, not only ``run:``."""
+
+    step = {"uses": "actions/github-script@v9", "with": {"script": "await github.request('POST /api/leads/B/outcome');"}}
+    assert step_scan.workflow_string_findings({"jobs": {"planted": {"steps": [step]}}}) == [".jobs.planted.steps[0].with.script: /outcome in the workflow text"]
+    assert step_scan.workflow_string_findings({"env": {"PROBE": "/api/sales/distribute"}}) == [".env.PROBE: /sales/distribute in the workflow text"]
+    assert step_scan.workflow_string_findings({"env": {"READ": "/api/sales/outcomes/summary"}}) == []
 
 
 def test_a_prod_app_has_a_path_to_a_green_run() -> None:

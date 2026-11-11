@@ -28,6 +28,7 @@ nightly's specs drive none today, and the docs list what they write.
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -87,32 +88,105 @@ def _plugin_specs(tree: ast.Module) -> tuple[list[str], list[int]]:
     return names, unreadable
 
 
-def _imported(root: Path, path: Path, tree: ast.Module, prefixes: tuple[str, ...]) -> set[Path]:
-    """The repo modules ``tree`` imports (any depth, relative imports and ``pytest_plugins`` included) under ``prefixes``."""
+@functools.cache
+def _python_names(package: str, source: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]:
+    """(the modules ``source`` imports or lists in ``pytest_plugins``, the tools scripts it names, the
+    lines of a ``pytest_plugins`` it cannot read): from the text alone, so a cached answer is never stale."""
 
-    package = ".".join(path.relative_to(root).with_suffix("").parts[:-1])
-    found: set[Path] = {module for name in _plugin_specs(tree)[0] if name.startswith(prefixes) and (module := _module_path(root, name))}
+    tree = ast.parse(source)
+    names, unreadable = _plugin_specs(tree)
     for node in ast.walk(tree):
-        names: list[str] = []
         if isinstance(node, ast.Import):
-            names = [alias.name for alias in node.names]
+            names += [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
             base = node.module or ""
             if node.level:
                 parts = package.split(".") if package else []
                 parts = parts[: len(parts) - (node.level - 1)] if node.level > 1 else parts
                 base = ".".join([*parts, *([base] if base else [])])
-            names = [base, *(f"{base}.{alias.name}" for alias in node.names)]
-        for name in names:
-            if name.startswith(prefixes) and (module := _module_path(root, name)) is not None:
-                found.add(module)
+            names += [base, *(f"{base}.{alias.name}" for alias in node.names)]
+    return tuple(names), tuple(sorted(_tool_path_literals(tree))), tuple(unreadable)
+
+
+def _names(root: Path, path: Path, source: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]:
+    return _python_names(".".join(path.relative_to(root).with_suffix("").parts[:-1]), source)
+
+
+def _imported(root: Path, path: Path, source: str, prefixes: tuple[str, ...] = ("tests.", "tools.")) -> set[Path]:
+    """The repo modules ``source`` imports (any depth, relative imports and ``pytest_plugins`` included) under ``prefixes``."""
+
+    return {module for name in _names(root, path, source)[0] if name.startswith(prefixes) and (module := _module_path(root, name)) is not None}
+
+
+def _scripts(root: Path, path: Path, source: str) -> list[Path]:
+    """The tools scripts a Python module names by path that are files (a child process runs one)."""
+
+    return [root / name for name in _names(root, path, source)[1] if (root / name).is_file()]
+
+
+# ---------------------------------------------------------------- what a file runs or loads
+
+
+# A tools script named by path, and a tools module run with ``-m``.
+TOOL_PATH = re.compile(r"(?<![\w.-])tools/[\w./-]*\.(?:py|sh)(?![\w.-])")
+TOOL_MODULE = re.compile(r"(?<![\w-])-m\s+(tools(?:\.\w+)+)")
+_HEREDOC = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
+
+
+def split_heredocs(text: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """(the shell lines outside here-document bodies, (opening line, body) of each ``<<WORD`` one)."""
+
+    lines = text.splitlines()
+    outside: list[str] = []
+    documents: list[tuple[str, str]] = []
+    i = 0
+    while i < len(lines):
+        outside.append(lines[i])
+        match = _HEREDOC.search(lines[i])
+        if match is None:
+            i += 1
+            continue
+        end = next((j for j in range(i + 1, len(lines)) if lines[j].strip() == match[2]), len(lines))
+        documents.append((lines[i], "\n".join(lines[i + 1 : end])))
+        i = end + 1
+    return outside, documents
+
+
+def heredoc_modules(root: Path, body: str) -> set[Path] | None:
+    """The tests/tools modules a here-document imports, or None when it does not parse as Python."""
+
+    try:
+        return _imported(root, root / "heredoc.py", body)
+    except SyntaxError:
+        return None
+
+
+def _tool_path_literals(tree: ast.Module) -> set[str]:
+    """The tools scripts a module names: a string, or strings joined by ``/`` (``REPO / "tools" / "x.py"``)."""
+
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        parts: list[str] = []
+        each = node
+        while isinstance(each, ast.BinOp) and isinstance(each.op, ast.Div) and isinstance(each.right, ast.Constant) and isinstance(each.right.value, str):
+            parts.insert(0, each.right.value)
+            each = each.left
+        if isinstance(each, ast.Constant) and isinstance(each.value, str):
+            parts.insert(0, each.value)
+        if TOOL_PATH.fullmatch("/".join(parts)):
+            found.add("/".join(parts))
     return found
 
 
-def whole_module_findings(root: Path, paths: Iterable[Path], prefixes: tuple[str, ...] = ("tests.", "tools.")) -> list[str]:
-    """Every write path in these modules and, transitively, the repo modules they import."""
+def loaded_files(root: Path, paths: Iterable[Path]) -> set[Path]:
+    """These files and, transitively, every repo file they run or load.
 
-    findings: list[str] = []
+    A Python module loads what it imports (``pytest_plugins`` included) and the
+    tools scripts it names by path (a child process runs one); a shell script
+    loads the tools scripts it names (run or sourced), the tools modules it
+    runs with ``-m`` and what a here-document that parses as Python imports.
+    """
+
     seen: set[Path] = set()
     todo = list(paths)
     while todo:
@@ -120,17 +194,33 @@ def whole_module_findings(root: Path, paths: Iterable[Path], prefixes: tuple[str
         if path in seen:
             continue
         seen.add(path)
+        text = path.read_text(encoding="utf-8")
+        if path.suffix == ".py":
+            todo.extend(_imported(root, path, text))
+            todo.extend(_scripts(root, path, text))
+        else:
+            todo.extend(root / name for name in sorted(set(TOOL_PATH.findall(text))) if (root / name).is_file())
+            todo.extend(module for name in TOOL_MODULE.findall(text) if (module := _module_path(root, name)) is not None)
+            for _opening, body in split_heredocs(text)[1]:
+                todo.extend(heredoc_modules(root, body) or ())
+    return seen
+
+
+def whole_module_findings(root: Path, paths: Iterable[Path]) -> list[str]:
+    """Every write path in these files and, transitively, the repo files they run or load."""
+
+    findings: list[str] = []
+    for path in loaded_files(root, paths):
         source = path.read_text(encoding="utf-8")
         for match in LEAD_STATE_WRITE.finditer(source):
-            findings.append(f"{path.relative_to(root)}:{_line_of(source, match.start())}: {match.group()} in a module nightly loads")
-        tree = ast.parse(source)
-        findings += _unreadable_plugin_findings(root, path, tree)
-        todo.extend(_imported(root, path, tree, prefixes))
+            findings.append(f"{path.relative_to(root)}:{_line_of(source, match.start())}: {match.group()} in a file nightly loads")
+        if path.suffix == ".py":
+            findings += _unreadable_plugin_findings(root, path, source)
     return sorted(findings)
 
 
-def _unreadable_plugin_findings(root: Path, path: Path, tree: ast.Module) -> list[str]:
-    return [f"{path.relative_to(root)}:{line}: a pytest_plugins this scan cannot read" for line in _plugin_specs(tree)[1]]
+def _unreadable_plugin_findings(root: Path, path: Path, source: str) -> list[str]:
+    return [f"{path.relative_to(root)}:{line}: a pytest_plugins this scan cannot read" for line in _names(root, path, source)[2]]
 
 
 def _conftests(root: Path, suite: Path) -> list[Path]:
@@ -199,9 +289,8 @@ def python_findings(root: Path, suite: str, deselected: set[str]) -> tuple[list[
             findings.append(f"{suite}:{node.lineno}: {name} writes and pytest runs it by name")
         elif name not in reached:
             findings.append(f"{suite}:{node.lineno}: {name} writes and no test reaches it")
-    findings += _unreadable_plugin_findings(root, path, tree)
-    imported = _imported(root, path, tree, ("tests.", "tools."))
-    findings += whole_module_findings(root, [*imported, *_conftests(root, path)])
+    findings += _unreadable_plugin_findings(root, path, source)
+    findings += whole_module_findings(root, [*_imported(root, path, source), *_scripts(root, path, source), *_conftests(root, path)])
     return findings, sorted(name for name in writers if name.startswith("test"))
 
 
