@@ -294,15 +294,15 @@ def test_live_workflows_propagate_the_resource_namespace():
     for variable in variables:
         assert variable in controls
         assert f"MIP_CLIENT_VAR__{variable}: ${{{{ vars.{variable} }}}}" in deploy
-        assert f"vars.{variable}" in nightly
-    for variable in (
-        "BUNDLE_VAR_app_name",
-        "BUNDLE_VAR_lakebase_instance_name",
-        "BUNDLE_VAR_lakebase_catalog_name",
-        "BUNDLE_VAR_lakebase_database_name",
-    ):
-        assert f"{variable}:" in nightly
-
+    # nightly.yml (M1-PR8) binds only the App's name and catalog from the
+    # client's environments, one by one; the App resolves its Lakebase and
+    # Genie resources, and no bundle variable or live-install default remains.
+    assert "MIP_CLIENT_VAR__MIP_APP_NAME: ${{ vars.MIP_APP_NAME }}" in nightly
+    assert "MIP_CLIENT_VAR__MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG }}" in nightly
+    for variable in variables[1:]:
+        assert f"MIP_CLIENT_VAR__{variable}" not in nightly
+    assert "BUNDLE_VAR_" not in nightly and "toJSON(vars)" not in nightly
+    assert "|| 'mip-app'" not in nightly and "|| 'mip'" not in nightly
     assert "LAKEBASE_INSTANCE_NAME: mip-app-state" not in nightly
     assert "MIP_APP_NAME: mip-app" not in nightly
 
