@@ -24,7 +24,7 @@ job ``client-portability-proof`` runs both):
   with those that reach an account API pinned), and the ledger fails closed
   for every call shape, planned or executed (review of #330), inline code
   included: it is held to a reviewed allowlist of what it may name, and
-  every way round 3 found to start a process or load code by name is
+  every way rounds 3 and 4 found to start a process or load code by name is
   refused while the deploy's own inline code, written other ways, is not.
 
 The owner hardware-key attestation layer is deferred (M1-PR5): the integrity
@@ -35,6 +35,7 @@ signature.
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import shutil
 import subprocess
@@ -48,7 +49,7 @@ from tests.fixtures import portability_checks as checks
 from tests.fixtures import role_ledger as roles
 from tests.fixtures.bootstrap_harness import FakeSink, plan_and_apply, run_tool
 from tests.fixtures.fake_databricks_account import FakeEstate
-from tests.fixtures.inline_code_review import INLINE_MODULES
+from tests.fixtures.inline_code_review import INLINE_MODULES, INLINE_REPO_MODULES
 from tests.fixtures.role_ledger import READ, Execution, account_admin_needs, sdk_role
 from tools.clients import dispatch_acks
 from tools.clients import profile as views
@@ -425,6 +426,20 @@ INLINE_BYPASSES = (
     "import yaml\nyaml.unsafe_load('x: 1')",
     "import json\njson.decoder.scanstring('x', 0)",
     "import concurrent.futures\nconcurrent.futures.ProcessPoolExecutor()",
+    # Round 4. A reviewed module's public name that is a getattr by string:
+    # pathlib binds operator.attrgetter, which "any public attribute" let through.
+    "import pathlib, json\npathlib.attrgetter('__globals__')(json.loads)['__builtins__']['__import__']('os').system('x')",
+    "from pathlib import attrgetter\nimport json\nattrgetter('__globals__')(json.loads)['__builtins__']['__import__']('os')",
+    # A class pattern reads its keywords as attributes, with no attribute node.
+    "import json\nmatch json.loads:\n    case object(__globals__={'__builtins__': {'__import__': imp}}):\n        imp('os').system('x')",
+    "g = (x for x in [1])\nmatch g:\n    case object(gi_frame=object(f_builtins={'__import__': imp})):\n        imp('os').system('x')",
+    # A private repository helper that runs a caller's argv, from a module no
+    # inline code is reviewed to import; and a private name of a reviewed one.
+    "from tools.deps_report.advisories import _json_command\n_json_command(['sh', '-c', 'x'], 'x')",
+    "from pathlib import Path\nfrom tools.databricks.app_runtime_closure import _git\n_git(Path('.'), '-c', 'alias.zz=!sh', 'zz')",
+    "from backend.schemas.lender_identity_record import _unique_object\nprint(_unique_object([]))",
+    # A tool the table does not review, run in process: by ``-m`` it is unclassified.
+    "from tools.databricks.provision_agentic_resources import main\nmain(['--plan-only'])",
 )
 # Not rigid: what the deploy's own inline code does, written the other ways a
 # heredoc would write it (round 3 asked that legitimate code stay workspace).
@@ -438,20 +453,47 @@ INLINE_ACCEPTED = (
     "def main():\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main())",
     "from pathlib import Path\nprint(Path('.env.local').exists() and Path('.env.local').read_text(encoding='utf-8'))",
     "from backend.schemas.lender_identity_record import as_configured\nprint(as_configured({}))",
+    # Round 4's explicit sets keep the reviewed siblings of what the dry runs use.
+    "import json, re, sys\nbody = json.loads(sys.stdin.read())\nprint(re.sub(r'\\s+', ' ', body.get('x', '')), re.fullmatch('a', 'a'))",
+    "import os.path\nfrom pathlib import PurePath\nprint(os.path.basename(os.path.abspath('.')), PurePath('a').suffix)",
+    "from backend.schemas import lender_identity_record\nimport backend.services.ai_gateway_proof_attestation as gateway\n"
+    "print(lender_identity_record.LEGACY_ENV_NAMES, gateway.derive_gateway_proof_verify_key)",
 )
 
 
+def _exposed_modules(value: object) -> list[str]:
+    """How a reviewed value exposes a module: it is one, or a class with a public attribute that is one (3.13's ``Path.parser``)."""
+
+    if inspect.ismodule(value):
+        return ["itself"]
+    if not isinstance(value, type):
+        return []
+    return [name for name in dir(value) if not name.startswith("_") and inspect.ismodule(getattr(value, name, None))]
+
+
 def test_inline_code_is_held_to_the_reviewed_allowlist() -> None:
-    """Review of #330, round 3: an allowlist of what inline code may name, not a list of literal names it may not."""
+    """Review of #330, rounds 3 and 4: an allowlist of what inline code may name, not a list of literal names it may not."""
 
     for code in INLINE_BYPASSES:
         assert _executed("-c", code) == _executed("-", stdin=code) == roles.UNCLASSIFIED, code
     for code in INLINE_ACCEPTED:
         assert _executed("-c", code) == _executed("-", stdin=code) == roles.WORKSPACE, code
-    # No stale entry: each reviewed module exists, and each reviewed attribute is one it has.
+    # No stale entry: each reviewed module exists, and each reviewed attribute
+    # is one it has. A value reached through an attribute is held only to the
+    # private and frame rule, so none may be a module or a class exposing one.
     for module, attributes in INLINE_MODULES.items():
         imported = importlib.import_module(module)
-        assert all(hasattr(imported, name) for name in attributes or ()), module
+        for name in attributes:
+            assert hasattr(imported, name), f"{module}.{name}"
+            assert not _exposed_modules(getattr(imported, name)), f"{module}.{name}"
+    repo = roles.repository()
+    for module in INLINE_REPO_MODULES:
+        assert roles.module_files(module) and not roles.account_api_reach(module), module
+        imported = importlib.import_module(module)
+        public = [name for name in dir(imported) if not name.startswith("_") and repo.defines(module, name)]
+        assert public and not {name: found for name in public if (found := _exposed_modules(getattr(imported, name)))}, module
+    # The check's positive control: a class whose public attribute is a module, as Python 3.13's Path.parser is.
+    assert _exposed_modules(type("Shaped", (), {"parser": importlib})) == ["parser"]
 
 
 def test_the_agentic_slices_name_exactly_the_committed_tools(tmp_path: Path) -> None:

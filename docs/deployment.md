@@ -4570,9 +4570,15 @@ The proof fails in any of these cases:
   directly: it may not name an account API or import a module that reaches
   one, and everything else it names must be on a reviewed allowlist
   (`tests/fixtures/inline_code_review.py`, read from the inline code the dry
-  runs execute). The allowlist lists the modules it may import and their
-  attributes, and the builtins it may use, so no import form or alias starts
-  a process or loads code by name;
+  runs execute). The allowlist lists the modules it may import, outside the
+  repository and in it, the attributes it may use of each and the builtins
+  it may name, and it refuses a `match` statement and any private, dunder or
+  frame attribute, so every module name and builtin the code reaches, by any
+  import form or alias, is on that list. It does not model what an object a
+  reviewed call returns does through its own public attributes, nor what the
+  code writes for a later process to load. Such a write can land outside the
+  sandbox: the sandbox clone's `.venv` links to the interpreter prefix that
+  runs the tests;
 - a bundle call addresses another target than `client`, whether it is
   planned, run through the CLI or run through the `bundle_env` wrapper, or a
   bundle variable databricks.yml declares resolves to a client-#1 default;

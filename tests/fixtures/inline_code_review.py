@@ -1,4 +1,4 @@
-"""What inline Python the deploy interpreter runs may name (M3-PR4, review of #330, round 3).
+"""What inline Python the deploy interpreter runs may name (M3-PR4, review of #330, rounds 3 and 4).
 
 tests/fixtures/role_ledger.py classes each call the deploy interpreter ran. A
 tool is classed by a reviewed table; inline code (``-c``, or a heredoc on
@@ -11,11 +11,14 @@ and release dry runs execute (measured 2026-11-11: 72 heredoc calls and up to
 5 ``-c`` calls a dispatch, 11 distinct scripts):
 
 * a module outside the repository is imported only when ``INLINE_MODULES``
-  lists it, and only the attributes it lists are used (``None``: any public
-  attribute that is not itself a module, read by importing it here);
-* a repository module's attribute is one its own source defines, never a
-  name its imports bind (``from tools.x import os`` re-exports a module);
-  a submodule is held to the same rule, one attribute at a time;
+  lists it, and only the attributes it lists are used, each module with an
+  explicit set (round 4: pathlib's namespace binds ``operator.attrgetter``, a
+  getattr by string, so "any public attribute" reached the builtins);
+* a repository module is imported only when ``INLINE_REPO_MODULES`` lists it
+  (or it is a package on the way to one), and its attribute is a public name
+  its own source defines: never a name its imports bind (``from tools.x
+  import os`` re-exports a module), nor a private helper (round 4:
+  ``from tools.deps_report.advisories import _json_command`` runs any argv);
 * a name an import binds to a module is used only as the root of an
   attribute chain: never passed, assigned or rebound, so no alias escapes
   the chain rule;
@@ -24,17 +27,28 @@ and release dry runs execute (measured 2026-11-11: 72 heredoc calls and up to
   the code, and no attribute is private, a dunder or an interpreter frame's
   (``f_globals``, ``gi_frame``): the routes from an object back to a
   module's namespace or the builtins;
+* no ``match`` statement: a class pattern reads its keywords as attributes
+  of the subject with no attribute node (round 4: ``case
+  object(__globals__=...)``);
 * no relative or star import.
 
 So ``sys.path`` and ``sys.modules`` (not reviewed ``sys`` attributes),
-``builtins``, ``pkgutil``, ``importlib``, ``asyncio`` and ``subprocess`` (not
-reviewed modules), ``getattr(os, "system")`` (not a safe builtin) and every
-``os`` call but the reviewed reads are refused, by whatever name an import
-binds them to.
+``builtins``, ``pkgutil``, ``importlib``, ``asyncio``, ``operator`` and
+``subprocess`` (not reviewed modules), ``getattr(os, "system")`` (not a safe
+builtin) and every ``os`` call but the reviewed reads are refused, by
+whatever name an import binds them to.
 
-It reads what the code names, not what it writes: code that writes a file a
-later process loads is not modelled here, and that later call is classed by
-its own arguments.
+Two things are not modelled. A value's own public attributes (an object a
+reviewed call returns) are held only to the private and frame rule; the
+integrity module checks that no reviewed attribute is a module or a class
+with a public attribute that is one. And the review reads what the code
+names, not what it writes: code that writes a file a later process loads is
+not modelled, and that later call is classed by its own arguments. Such a
+write can land outside the sandbox and outlive the test: the sandbox clone's
+``.venv`` is a link to the interpreter prefix that runs pytest
+(tests/fixtures/deploy_sandbox.py ``venv_prefix``), so a ``.pth`` written
+into its site-packages runs in every later interpreter start there, and no
+check of the clone's tree would see it.
 
 Standard library only: role_ledger imports it, and the stub CLI imports
 role_ledger from the sandbox clone.
@@ -45,23 +59,31 @@ from __future__ import annotations
 import ast
 import builtins
 import functools
-import importlib
-import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 # The modules outside the repository inline code may import, and the
-# attributes it may use of each: None for any public attribute that is not
-# itself a module. Read from the inline code the dry runs execute: json, sys,
-# re, os (environ), pathlib (Path), yaml (safe_load), dotenv (dotenv_values)
-# and pydantic (imported only, as an availability check), with a few reviewed
-# siblings of the same kind.
-INLINE_MODULES: Mapping[str, frozenset[str] | None] = {
-    "json": None,
-    "re": None,
-    "pathlib": None,
-    "os.path": None,
+# attributes it may use of each. Read from the inline code the dry runs
+# execute: json (load, dumps), re (compile), pathlib (Path), os (environ), sys
+# (argv, stdin, version_info), yaml (safe_load), dotenv (dotenv_values) and
+# pydantic (imported only, as an availability check), with a few reviewed
+# siblings of the same kind. None is a module or a getattr by string.
+INLINE_MODULES: Mapping[str, frozenset[str]] = {
+    "json": frozenset({"load", "loads", "dump", "dumps", "JSONDecodeError"}),
+    "re": frozenset(
+        {
+            "compile", "escape", "findall", "finditer", "fullmatch", "match", "search", "split", "sub", "subn", "error",
+            "ASCII", "DOTALL", "IGNORECASE", "MULTILINE", "VERBOSE",
+        }
+    ),
+    "pathlib": frozenset({"Path", "PurePath"}),
+    "os.path": frozenset(
+        {
+            "abspath", "basename", "dirname", "exists", "expanduser", "isabs", "isdir", "isfile", "join", "normpath",
+            "realpath", "relpath", "sep", "split", "splitext",
+        }
+    ),
     # os starts processes and sys reaches the import system: reviewed reads only.
     "os": frozenset({"environ", "getenv", "fspath", "getcwd", "sep", "linesep", "pathsep"}),
     "sys": frozenset({"argv", "stdin", "stdout", "stderr", "exit", "version_info"}),
@@ -70,6 +92,10 @@ INLINE_MODULES: Mapping[str, frozenset[str] | None] = {
     "dotenv": frozenset({"dotenv_values"}),
     "pydantic": frozenset(),
 }
+# The repository modules inline code may import: the two the dry runs' inline
+# code imports. The integrity module checks each exists, reaches no account
+# API and binds no module to a public name.
+INLINE_REPO_MODULES = frozenset({"backend.schemas.lender_identity_record", "backend.services.ai_gateway_proof_attestation"})
 # The builtins inline code may name: values, containers and pure functions,
 # and every exception class. Not reflection (getattr, setattr, vars, dir,
 # globals, locals), code (__import__, eval, exec, compile, breakpoint) or the
@@ -95,22 +121,15 @@ FRAME_ATTRIBUTES = frozenset(
 )
 
 
-_MISSING = object()
-
-
 @dataclass(frozen=True)
 class Repository:
     """The repository's modules as the review reads them: its packages, and each module's source files."""
 
     packages: frozenset[str]
     sources: Callable[[str], Sequence[Path]]
-    is_package_dir: Callable[[str], bool]
 
     def owns(self, name: str) -> bool:
         return name.split(".")[0] in self.packages
-
-    def is_module(self, name: str) -> bool:
-        return bool(self.sources(name)) or self.is_package_dir(name)
 
     def defines(self, module: str, name: str) -> bool:
         """Whether ``module``'s own source binds ``name`` at its top level, and no import of it does."""
@@ -152,23 +171,24 @@ class _Review:
         self.modules: dict[str, str] = {}  # a name an import binds to a module -> that module
 
     def is_module(self, name: str) -> bool:
-        return self.repo.is_module(name) if self.repo.owns(name) else name in INLINE_MODULES
+        """Whether ``name`` is a reviewed module, or a repository package on the way to one."""
+
+        if self.repo.owns(name):
+            return any(module == name or module.startswith(f"{name}.") for module in INLINE_REPO_MODULES)
+        return name in INLINE_MODULES
 
     def attribute(self, module: str, name: str) -> bool:
-        """Whether ``module.name`` (not itself a module) is reviewed."""
+        """Whether ``module.name`` (not itself a module) is reviewed: listed, or a public name a reviewed repository module defines."""
 
+        if name.startswith("_"):
+            return False
         if self.repo.owns(module):
-            return self.repo.defines(module, name)
-        allowed = INLINE_MODULES.get(module, frozenset())
-        if allowed is not None:
-            return name in allowed
-        value = getattr(importlib.import_module(module), name, _MISSING)
-        return not name.startswith("_") and value is not _MISSING and not inspect.ismodule(value)
+            return module in INLINE_REPO_MODULES and self.repo.defines(module, name)
+        return name in INLINE_MODULES.get(module, frozenset())
 
     def importable(self, name: str) -> bool:
         parts = name.split(".")
-        prefixes = [".".join(parts[: index + 1]) for index in range(len(parts))]
-        return self.repo.is_module(name) if self.repo.owns(name) else all(prefix in INLINE_MODULES for prefix in prefixes)
+        return all(self.is_module(".".join(parts[: index + 1])) for index in range(len(parts)))
 
     def bind(self, name: str, module: str) -> None:
         if self.modules.setdefault(name, module) != module:
@@ -220,7 +240,9 @@ class _Review:
         roots = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
         refused = (set(dir(builtins)) - SAFE_BUILTINS) | {"__builtins__"}
         for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute):
+            if isinstance(node, ast.Match):
+                self.refusals.append("match statement")
+            elif isinstance(node, ast.Attribute):
                 if node.attr.startswith("_") or node.attr in FRAME_ATTRIBUTES:
                     self.refusals.append(f"attribute {node.attr}")
                 self.chain(node)

@@ -31,15 +31,17 @@ the table against the code: no tool reviewed as ``workspace`` reaches an
 account API through its imports (``account_api_reach``).
 
 Inline code has no table entry, so it is held to that same rule directly
-(review of #330): it is ``workspace`` only when its text names no account
-API, every repository module it imports exists and none of them reaches an
-account API, and everything else it names is on the reviewed allowlist of
-tests/fixtures/inline_code_review.py (round 3: the modules, attributes and
-builtins the dry runs' own inline code uses, so no import form or alias
-starts a process or loads code); otherwise it is ``unclassified``
-(``account_admin`` when it imports the human bootstrap). A ``databricks
-api`` call is ``workspace`` only on a reviewed workspace path, and any path
-with an ``accounts`` segment is an account call.
+(review of #330): it is ``account_admin`` when it imports the human
+bootstrap, and ``workspace`` only when its text names no account API, none
+of the repository modules it imports reaches an account API, and everything
+it names is on the reviewed allowlist of tests/fixtures/inline_code_review.py
+(rounds 3 and 4: the modules and attributes, the repository modules and the
+builtins the dry runs' own inline code uses, and no ``match``). That module
+says what it does not model: a returned value's own public attributes, and
+what the code writes for a later process to load. Otherwise inline code is
+``unclassified``. A ``databricks api`` call is ``workspace`` only on a
+reviewed workspace path, and any path with an ``accounts`` segment is an
+account call.
 
 A read is ``read``: the human bootstrap reads the account under the account
 admin's own fresh login (tools/clients/bootstrap_session.py), and no CI step
@@ -426,11 +428,7 @@ class Execution:
 def repository(repo: Path = REPO) -> Repository:
     """The repository's modules, as the inline-code review reads them."""
 
-    return Repository(
-        packages=REPO_PACKAGES,
-        sources=lambda name: module_files(name, repo),
-        is_package_dir=lambda name: repo.joinpath(*name.split(".")).is_dir(),
-    )
+    return Repository(packages=REPO_PACKAGES, sources=lambda name: module_files(name, repo))
 
 
 def inline_imports(code: str | None, repo: Path = REPO) -> frozenset[str]:
@@ -453,11 +451,12 @@ def inline_role(code: str | None, repo: Path = REPO) -> str:
         tree = ast.parse(code)
     except SyntaxError:
         return UNCLASSIFIED
-    if ACCOUNT_API.search(code) or inline_refusals(tree, repository(repo)):
-        return UNCLASSIFIED
     modules = inline_imports(code, repo)
+    # The human bootstrap is no reviewed inline import: read it first, so it is named as the need it is.
     if modules & HUMAN_ONLY_MODULES:
         return ACCOUNT_ADMIN
+    if ACCOUNT_API.search(code) or inline_refusals(tree, repository(repo)):
+        return UNCLASSIFIED
     return UNCLASSIFIED if any(account_api_reach(module, repo) for module in modules) else WORKSPACE
 
 
