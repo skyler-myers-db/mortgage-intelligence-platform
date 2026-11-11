@@ -46,7 +46,8 @@ from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceAlreadyExists, ResourceDoesNotExist
 
-from tests.fixtures.measured_apps import HIDDEN_READS, StartVisibility, check_create_update_mask
+from tests.fixtures.measured_app_updates import UpdateLedger, apply_create_update, apply_patch
+from tests.fixtures.measured_apps import HIDDEN_READS, StartVisibility
 from tools.databricks import app_release_contract as contract
 from tools.databricks import quiesce_window_deadman as deadman
 from tools.databricks.app_release_source import PublishPlan
@@ -171,6 +172,9 @@ class FakeApps:
     updates: int = 0
     # The App's resource bindings: app-level, so a start or a deploy keeps them.
     resources: list[dict[str, Any]] = field(default_factory=list)
+    # Its description, and what each update did (measured_app_updates, spike S2).
+    description: str = ""
+    update_ledger: UpdateLedger = field(default_factory=UpdateLedger)
     get_calls: int = 0
     deployments: dict[str, SimpleNamespace] = field(default_factory=dict)
     # The App's last active deployment; a STOPPED (or STARTING) App's GET omits it.
@@ -210,11 +214,11 @@ class FakeApps:
             default_source_code_path=self.default_source,
             url="https://mip.example",
             resources=copy.deepcopy(self.resources),
-            description="",
+            description=self.description,
         )
         app.as_dict = lambda: {
             "name": APP_NAME,
-            "description": "",
+            "description": self.description,
             "resources": copy.deepcopy(self.resources),
         }
         return app
@@ -341,18 +345,24 @@ class FakeApps:
         )
 
     def update(self, _name: str, app: object) -> object:
-        """A binding update: resources only; a default_source_code_path in it is ignored (S7-2)."""
+        """A PATCH as measured (S2): it clears an omitted description; never a deployment or compute.
+
+        A default_source_code_path in it is ignored (S7-2).
+        """
 
         self.updates += 1
-        self.resources = copy.deepcopy(app.as_dict()["resources"])
+        apply_patch(self, app, self.update_ledger)
         return self._app()
 
-    def create_update(self, _name: str, update_mask: str, *, app: object = None) -> object:
-        """The mask check S7-2 measured: default_source_code_path is rejected."""
+    def create_update(self, app_name: str, update_mask: str, *, app: object = None) -> object:
+        """Only the masked fields, as measured (S2, S2b); a resources mask re-grants CREATE.
 
-        check_create_update_mask(update_mask)
+        The mask check S7-2 measured (default_source_code_path is rejected) runs
+        inside apply_create_update, on measured_apps' one mask set.
+        """
+
         self.updates += 1
-        return SimpleNamespace(response=self._app())
+        return apply_create_update(self, app_name, update_mask, app, self.update_ledger)
 
     def deploy_and_wait(self, _name: str, app_deployment: object, *, timeout: object) -> object:
         self.deploys += 1

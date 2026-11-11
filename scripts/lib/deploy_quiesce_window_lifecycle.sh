@@ -60,6 +60,7 @@ collect_quiesce_window_binding_payload() {
      "$PYTHON" -m tools.databricks.app_resource_bindings build \
        --bundle-summary "$summary" \
        --app-name "$_GRANTS_APP_NAME" \
+       --salesforce-bindings "${MIP_SALESFORCE_BINDINGS:?the preflight resolves MIP_SALESFORCE_BINDINGS}" \
        "${OTEL_RESOURCE_BINDING_ARGS[@]}" \
        --out "$out"; then
     rm -f "$summary"

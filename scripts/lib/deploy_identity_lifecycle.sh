@@ -62,6 +62,41 @@ deployment_control_value() {
   printf '%s' "${value:-$default_value}"
 }
 
+# The App's optional Salesforce secret bindings (spike S2b): the client
+# profile's MIP_SALESFORCE_BINDINGS, off when unset. The release's binding
+# payload, the window plan's and the App payload read this one export, so a
+# client without the connector never gains its three bindings. An unset
+# switch never drops a connector the operator configured: with every
+# Salesforce input set (env or .env.local) it refuses before any mutation,
+# and the owner says on or off (review of #337). Every connector input is
+# required, so with no SALESFORCE_INSTANCE_URL nothing is configured and the
+# payload builder's check (which owns the placeholder rules) is not imported;
+# isolated fixture trees without it pass. Once the URL is set the check runs
+# and any failure refuses. Pure: it also runs in DRY_RUN.
+resolve_salesforce_bindings_switch() {
+  local requested
+  requested="$(deployment_control_value MIP_SALESFORCE_BINDINGS "")"
+  if [[ -n "$requested" && "$requested" != "off" && "$requested" != "on" ]]; then
+    echo "${RED}[deploy] MIP_SALESFORCE_BINDINGS must be off or on.${RST}" >&2
+    exit 2
+  fi
+  if [[ -z "$requested" && -n "$(deployment_control_value SALESFORCE_INSTANCE_URL "")" ]] && \
+     ! "$PYTHON" -c '
+import sys
+from tools.databricks.app_deploy_payload import salesforce_switch_refusal
+
+refusal = salesforce_switch_refusal()
+if refusal:
+    print(f"[deploy] {refusal}.", file=sys.stderr)
+sys.exit(2 if refusal else 0)
+'; then
+    echo "${RED}[deploy] the Salesforce bindings switch refused; nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  MIP_SALESFORCE_BINDINGS="${requested:-off}"
+  export MIP_SALESFORCE_BINDINGS
+}
+
 # deployment_control_value under the rule every Python reader of the two
 # pinned lender names applies (pinned_inputs in backend/schemas/
 # lender_identity_record.py, the client profile, bundle_env.py and the App

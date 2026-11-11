@@ -1,0 +1,197 @@
+"""The window plan carries the App role's CREATE ON DATABASE re-grant and the description fix-up (S2).
+
+Spike S2 measured, on a throwaway App, that every update that carries
+resources (an identical array included) grants CREATE ON DATABASE to the
+App's Lakebase role again with no restart, that only the migration job's
+revoke takes it back, and that a create-update masked to ``description``
+changes the description alone. So:
+
+* WR1 (a binding diff, compared as a set by name) names its re-grant in the
+  acked body (``app_role_regrant: ["binding_send"]``) and budgets the
+  migration job its window runs after the binding update;
+* a re-grant an earlier send left behind (the migration plan's
+  ``app_role_regrant: owed``) is a restorable WR2 window, never a contract
+  WR3 and never a skip;
+* a description-only difference opens no window and leaves the digest as it
+  was; the public summary names it as an ``online_fixups`` entry.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from tools.databricks import quiesce_window_facts as window_facts
+from tools.databricks.quiesce_window_plan import (
+    STEP_BUDGET_S,
+    WindowFacts,
+    body_sha256,
+    predicted_seconds,
+    window_plan,
+)
+
+TREE = "a" * 64
+BLUE = WindowFacts(
+    applicable=True,
+    blue_deployment_id="deployment-blue-PLACEHOLDER",
+    blue_current=True,
+    restore_source="/Workspace/Users/deployer-PLACEHOLDER/app-src/release",
+    default_source_code_path="/Workspace/Users/deployer-PLACEHOLDER/app-src/release",
+    env_names_sha256="b" * 64,
+    source_tree_sha256=TREE,
+    artifact_tree_sha256=TREE,
+)
+WR1 = replace(BLUE, binding_state="diff", binding_lines=("binding database: missing (update adds it)",))
+
+
+def _acked(facts: WindowFacts) -> object:
+    digest = window_plan(facts, position="pre-apply", acknowledgement="").sha256
+    return window_plan(facts, position="pre-apply", acknowledgement=digest)
+
+
+def test_a_binding_send_names_its_re_grant_and_budgets_the_migration_job() -> None:
+    plan = _acked(WR1)
+
+    assert plan.code == "window" and plan.reasons == ("WR1",) and plan.blue_restorable is True
+    assert plan.canonical["app_role_regrant"] == ["binding_send"]
+    assert plan.public_summary()["app_role_regrant"] == ["binding_send"]
+    assert plan.predicted_seconds == (
+        STEP_BUDGET_S["stop"]
+        + STEP_BUDGET_S["WR1"]
+        + STEP_BUDGET_S["migrate"]
+        + STEP_BUDGET_S["start"]
+        + STEP_BUDGET_S["repin"]
+    )
+    without = {key: value for key, value in plan.canonical.items() if key != "app_role_regrant"}
+    assert body_sha256(without) != plan.sha256, "the ack covers the re-grant"
+
+
+def test_a_wr3_window_already_budgets_the_migration_job_once() -> None:
+    assert predicted_seconds(("WR1", "WR3"), blue_restorable=True) == (
+        STEP_BUDGET_S["stop"]
+        + STEP_BUDGET_S["WR1"]
+        + STEP_BUDGET_S["WR3"]
+        + STEP_BUDGET_S["start"]
+        + STEP_BUDGET_S["repin"]
+    )
+
+
+def test_an_observed_re_grant_under_a_noop_plan_is_a_restorable_wr2_window() -> None:
+    facts = replace(BLUE, app_role_regrant="owed")
+
+    assert facts.reasons() == ("WR2",)
+    plan = _acked(facts)
+    assert (plan.code, plan.blue_restorable, plan.closes_at) == ("window", True, "start_repin")
+    assert plan.canonical["app_role_regrant"] == ["observed"]
+    both = _acked(replace(WR1, app_role_regrant="owed"))
+    assert both.reasons == ("WR1", "WR2")
+    assert both.canonical["app_role_regrant"] == ["binding_send", "observed"]
+
+
+@pytest.mark.parametrize(
+    ("decision", "reasons"), (("apply", ("WR3",)), ("refuse", ())), ids=("apply", "refuse")
+)
+def test_a_re_grant_is_no_wr2_when_the_migration_job_runs_anyway_or_the_plan_refuses(
+    decision: str, reasons: tuple[str, ...]
+) -> None:
+    facts = replace(
+        BLUE,
+        app_role_regrant="owed" if decision == "apply" else "unchecked",
+        migration_decision=decision,
+        migration_pending=("0042",) if decision == "apply" else (),
+    )
+
+    assert facts.reasons() == reasons
+
+
+def test_a_description_only_difference_opens_no_window_and_keeps_the_digest() -> None:
+    differs = window_plan(replace(BLUE, description_state="differs"), position="pre-apply", acknowledgement="")
+    equal = window_plan(BLUE, position="pre-apply", acknowledgement="")
+
+    assert (differs.code, differs.reasons, differs.ack) == ("none", (), "not_required")
+    assert differs.sha256 == equal.sha256 and differs.canonical == equal.canonical
+    assert differs.public_summary()["online_fixups"] == ["description"]
+    assert equal.public_summary()["online_fixups"] == []
+    assert "app_role_regrant" not in equal.canonical, "a plan with no reason keeps M0-PR8's body"
+
+
+@pytest.mark.parametrize(
+    "facts",
+    (
+        replace(WR1, description_state="differs"),
+        replace(BLUE, description_state="differs", instance_update_sha256="c" * 64),
+    ),
+    ids=("wr1-update-carries-it", "wr4-window-stopped-the-app"),
+)
+def test_a_window_open_at_the_binding_step_names_no_online_fix_up(facts: WindowFacts) -> None:
+    """Round 2 of #337: the plan names only what the binding step applies online, blue serving.
+
+    A WR1 window's binding update carries the bundle's description. A WR4
+    window opens before the non-App apply and has stopped the App, where no
+    spike measured a create-update, so the step leaves the description.
+    """
+
+    plan = _acked(facts)
+
+    assert plan.code == "window" and set(plan.reasons) & {"WR1", "WR4"}
+    assert plan.public_summary()["online_fixups"] == []
+    equal = _acked(replace(facts, description_state="equal"))
+    assert equal.sha256 == plan.sha256, "the fix-up is never part of the window's digest"
+
+
+def test_a_wr2_or_wr3_window_still_names_the_online_fix_up_it_opens_after() -> None:
+    """WR2 and WR3 open after the binding step: blue still serves when the fix-up runs."""
+
+    wr2 = replace(BLUE, description_state="differs", role_state="drift")
+
+    plan = _acked(wr2)
+
+    assert (plan.code, plan.reasons) == ("window", ("WR2",))
+    assert plan.public_summary()["online_fixups"] == ["description"]
+
+
+def test_an_unreviewed_description_state_never_reaches_a_public_summary() -> None:
+    plan = window_plan(replace(BLUE, description_state="edited"), position="pre-apply", acknowledgement="")
+
+    with pytest.raises(ValueError, match="description state"):
+        plan.public_summary()
+
+
+_PLAN = {
+    "mode": "plan",
+    "blue_restorable": True,
+    "migrations": {"pending": []},
+    "jobs_reader_grants": "exact",
+}
+
+
+@pytest.mark.parametrize("decision", ("noop", "apply"))
+@pytest.mark.parametrize("value", (None, "unchecked", "drift"), ids=("missing", "unchecked", "unreviewed"))
+def test_a_plan_that_never_read_the_re_grant_is_incomplete_unless_it_refused(
+    decision: str, value: str | None
+) -> None:
+    """A noop plan without ``app_role_regrant`` would read as exact and skip the revoke (S2)."""
+
+    plan = {**_PLAN, "decision": decision}
+    if value is not None:
+        plan["app_role_regrant"] = value
+
+    with pytest.raises(ValueError, match="CREATE ON DATABASE"):
+        window_facts._migration(plan)
+
+
+@pytest.mark.parametrize("value", (None, "unchecked"), ids=("missing", "unchecked"))
+def test_a_refusing_plan_records_the_re_grant_as_unchecked(value: str | None) -> None:
+    plan = {**_PLAN, "decision": "refuse"}
+    if value is not None:
+        plan["app_role_regrant"] = value
+
+    assert window_facts._migration(plan)["app_role_regrant"] == "unchecked"
+
+
+@pytest.mark.parametrize("value", ("exact", "owed"))
+def test_a_plan_that_read_the_re_grant_carries_it(value: str) -> None:
+    assert window_facts._migration({**_PLAN, "decision": "noop", "app_role_regrant": value})[
+        "app_role_regrant"
+    ] == value

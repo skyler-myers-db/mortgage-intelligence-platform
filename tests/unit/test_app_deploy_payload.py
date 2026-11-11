@@ -70,6 +70,7 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(app_deploy_payload.PREVIOUS_SECRET_KID_ENV, raising=False)
     monkeypatch.delenv("MIP_PRESENTER_MODE", raising=False)
+    monkeypatch.delenv("MIP_SALESFORCE_BINDINGS", raising=False)
     for name in source_names.ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-mask-secret")
@@ -581,6 +582,8 @@ def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:
 def test_payload_binds_salesforce_secrets_only_for_complete_idempotent_connector(
     monkeypatch,
 ) -> None:
+    # The profile binds the connector's secrets into the App (spike S2b).
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "on")
     for name, value in {
         "SALESFORCE_INSTANCE_URL": "https://summit.example.my.salesforce.com",
         "SALESFORCE_CLIENT_ID": "connected-app-id",
@@ -643,6 +646,7 @@ def test_a_placeholder_salesforce_secret_input_counts_as_unset(
     """The provisioner keeps a stored salesforce-* key whose input is a placeholder
     (runtime_secret_text reads it as unset). The payload must not bind it, or the
     connector runs on an earlier deploy's credential (post-W5 L3-G1)."""
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "on")
     for name, value in {
         "SALESFORCE_INSTANCE_URL": "https://summit.example.my.salesforce.com",
         "SALESFORCE_CLIENT_ID": "connected-app-id",
@@ -698,3 +702,82 @@ def test_rum_is_on_by_default_and_an_explicit_opt_out_is_forwarded(monkeypatch) 
     assert env["MIP_RUM_ENABLED"] == {"name": "MIP_RUM_ENABLED", "value": "0"}
 
     assert Settings.model_fields["mip_rum_enabled"].default is False
+
+
+_CONFIGURED_SALESFORCE = {
+    "SALESFORCE_INSTANCE_URL": "https://summit.example.my.salesforce.com",
+    "SALESFORCE_CLIENT_ID": "connected-app-id",
+    "SALESFORCE_USERNAME": "mip-integration@example.com",
+    "SALESFORCE_EXTERNAL_ID_FIELD": "MIP_Activation_Id__c",
+    "SALESFORCE_CLIENT_SECRET": "sf-client-secret",
+    "SALESFORCE_PASSWORD": "sf-password",
+    "SALESFORCE_SECURITY_TOKEN": "sf-security-token",
+}
+
+
+def test_a_configured_connector_binds_nothing_while_the_profile_switch_is_off(monkeypatch, capsys) -> None:
+    """Spike S2b: a valueFrom naming a binding the App lacks does not fail the
+    deployment, it starts the App with the env var unset. With the profile's
+    MIP_SALESFORCE_BINDINGS explicitly off the release applies none of the
+    three Salesforce bindings, so the payload must name none of them."""
+
+    for name, value in _CONFIGURED_SALESFORCE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "off")
+
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
+
+    assert not set(app_deploy_payload.SALESFORCE_SECRET_ENVS) & set(env)
+    assert not any(str(item.get("value_from", "")).startswith("salesforce_") for item in env.values())
+    err = capsys.readouterr().err
+    assert app_deploy_payload.SALESFORCE_UNBOUND_NOTICE in err
+    assert "sf-client-secret" not in err and "sf-password" not in err
+
+
+def test_a_configured_connector_with_the_switch_unset_refuses_rather_than_drop_it(monkeypatch, capsys) -> None:
+    """Review of #337: the default never turns off a connector the operator configured."""
+
+    for name, value in _CONFIGURED_SALESFORCE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("MIP_SALESFORCE_BINDINGS", raising=False)
+
+    with pytest.raises(ValueError, match="MIP_SALESFORCE_BINDINGS is unset") as refused:
+        build_payload(source_code_path="/Workspace/app/files", install_class="customer")
+    assert str(refused.value) == app_deploy_payload.SALESFORCE_SWITCH_UNSET_REFUSAL
+    assert app_deploy_payload.salesforce_switch_refusal() == app_deploy_payload.SALESFORCE_SWITCH_UNSET_REFUSAL
+    monkeypatch.delenv("SALESFORCE_PASSWORD")
+    assert app_deploy_payload.salesforce_switch_refusal() is None, "a partial connector is not configured"
+    build_payload(source_code_path="/Workspace/app/files", install_class="customer")
+
+
+def test_the_cli_prints_the_unset_switch_refusal_and_exits_2_with_no_payload(monkeypatch, capsys) -> None:
+    """Round 2 of #337: the refusal escaped ``main`` as a traceback (exit 1)."""
+
+    for name, value in _CONFIGURED_SALESFORCE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("MIP_SALESFORCE_BINDINGS", raising=False)
+
+    status = app_deploy_payload.main(["--source-code-path", "/Workspace/app/files", "--install-class", "customer"])
+
+    captured = capsys.readouterr()
+    assert status == 2 and captured.out == ""
+    assert f"app_deploy_payload: refused: {app_deploy_payload.SALESFORCE_SWITCH_UNSET_REFUSAL}" in captured.err
+    assert "Traceback" not in captured.err
+    assert not any(value in captured.err for value in _CONFIGURED_SALESFORCE.values())
+
+
+def test_the_switch_on_binds_all_three_and_an_unreviewed_value_refuses(monkeypatch) -> None:
+    for name, value in _CONFIGURED_SALESFORCE.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "on")
+
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
+    assert {name: env[name]["value_from"] for name in app_deploy_payload.SALESFORCE_SECRET_ENVS} == {
+        "SALESFORCE_CLIENT_SECRET": "salesforce_client_secret",
+        "SALESFORCE_PASSWORD": "salesforce_password",
+        "SALESFORCE_SECURITY_TOKEN": "salesforce_security_token",
+    }
+
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "yes")
+    with pytest.raises(ValueError, match="MIP_SALESFORCE_BINDINGS must be off or on"):
+        build_payload(source_code_path="/Workspace/app/files", install_class="customer")

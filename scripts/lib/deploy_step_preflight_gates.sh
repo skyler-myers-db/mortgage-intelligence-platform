@@ -501,6 +501,7 @@ PYEOF
     exit 2
   fi
 fi
+resolve_salesforce_bindings_switch  # spike S2b: the App's optional Salesforce bindings
 MIP_DEPLOYMENT_SOURCE_GIT_SHA="$SOURCE_GIT_SHA"
 export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID
 export MIP_DEPLOYMENT_SOURCE_GIT_SHA

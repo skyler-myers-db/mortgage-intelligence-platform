@@ -138,6 +138,7 @@ OUTSIDE_PROOF_MODULES = frozenset(
         "tools.databricks.app_deployment_freeze",
         "tools.databricks.app_deployment_lease",
         "tools.databricks.app_deployment_rollback",
+        "tools.databricks.app_description_fixup",
         "tools.databricks.app_first_install_journal",
         "tools.databricks.app_release_contract",
         "tools.databricks.app_resource_bindings",

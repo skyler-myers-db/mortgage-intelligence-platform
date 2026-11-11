@@ -558,12 +558,19 @@ DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.converge_static_a
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
   --release-id <release-id> --release-manifest <manifest> --expected-git-sha <sha> \
   --expected-principal <owner> --expected-target dev --expected-root-leaf dev
-MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
+MIP_GIT_SHA=<sha> MIP_SALESFORCE_BINDINGS=<salesforce-bindings> python -m tools.databricks.app_deploy_payload \
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
   --install-class demo --app-env sandbox --catalog mip --schema gold \
   --lakebase-instance <lakebase-instance> > <payload>
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
+
+`<salesforce-bindings>` is the profile's `MIP_SALESFORCE_BINDINGS` for the
+live App: `off` unless that App already binds the three Salesforce secrets,
+then `on`. The recipe never changes the App's bindings, so it must match
+them. The payload builder refuses an unset switch when every connector
+input is set (`app_deploy_payload: refused:`, exit 2, no payload), so the
+recipe always names it.
 
 **The freeze marker (M2-PR7).** During the cutover the owner freezes this
 recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
@@ -2939,15 +2946,28 @@ only for a **window reason** the read-only plan predicted
 (`tools/databricks/quiesce_window_plan.py`):
 
 - **WR1** binding diff: the App's live resource bindings differ from the
-  bundle's (any diff, until spike S2 proves an unchanged database binding
-  leaves a running App and its role alone), or a binding id is unresolved;
+  bundle's, compared as a set keyed by binding name (an order-only difference
+  is equal) on their access contract (kind, target, permission; a binding's
+  own `description` is display text, reported apart and never a reason), or a
+  binding id is unresolved. Every update that carries resources re-grants
+  CREATE ON DATABASE to the App's Lakebase role (spike S2, below), so the
+  release's binding step sends them only in a WR1 window (the signed-blue
+  restores at step 0a and in the rollbacks send them outside any window; see
+  below). A WR1 window always runs the migration job after its binding
+  update, and its acked body names that re-grant
+  (`app_role_regrant: ["binding_send"]`). An App description-only difference
+  is no reason: the release applies it online while blue serves (below);
 - **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
   drifts for the App role, the AI Gateway verifier role or the jobs
   identity's `jobs_reader` role (M2-PR5), or a `noop` migration plan reads
   the jobs reader's grants as drift, an absent role included (a rotation
   drops the role's grants, which only the migration job re-applies, and that
   job runs only inside a window). Blue never reads as the jobs reader, so its
-  re-grant keeps blue restorable. The first roll-forward that brings the
+  re-grant keeps blue restorable. The same holds for a `noop` migration plan
+  that reads the App role's CREATE ON DATABASE as re-granted
+  (`app_role_regrant: owed`, an earlier binding send outside a window, spike
+  S2): the window's migration job revokes it, the schema is unchanged, and
+  blue stays restorable. The first roll-forward that brings the
   jobs identity to an installed signed blue therefore plans a WR2 window to
   create and grant that role. The grants alone are no reason under an
   `apply` plan: its WR3 window runs the migration job, which re-grants the
@@ -3015,7 +3035,19 @@ the App's active deployment. Until then any failure, in the EXIT trap or the
 final-proof rollback, stops the App and refuses the tier-b blue restore.
 
 With no reason, nothing stops: the binding update is skipped (the bindings
-are re-read under the lease and must still equal the bundle's), the App role
+are re-read under the lease and must still equal the bundle's as a set; a
+description-only difference is applied online with
+`tools/databricks/app_description_fixup.py`, a create-update masked to
+`description`, identity-pinned, which restarts nothing and re-grants
+nothing; a bundle that declares no description leaves the live one as it
+is, and the plan owes no fix-up for it). A window opened for another reason
+(WR4 opens before the binding step) skips the send the same way: the binding
+step sends resources only in a WR1 window or an ungoverned run. It also
+leaves a description-only difference to a later release, because the App is
+stopped there and every create-update the spikes measured ran on a serving
+App; the window plan's `online_fixups` names the fix-up only when no window
+is open at the binding step (a WR1 window's update carries the description
+itself). The App role
 converger refuses any rotation the plan did not predict, the verifier and
 jobs-reader roles are re-checked under the lease right before their converges
 (drift exits 2, blue serving), and the migration job is skipped because the
@@ -3050,7 +3082,9 @@ clause the live side does not compare (a parameter `DEFAULT` or `COMMENT`,
 rendered source always means "run"; only the rule's own exit 0 skips.
 
 **Stop contract** (attack O16). The window library and the EXIT-trap
-compensation are the only shell files that stop or start the App, and
+compensation are the only shell files that stop or start the App (the binding
+step's online description fix-up, a create-update masked to `description`,
+is the one App update another step file runs; spike S2), and
 `tools/databricks/stop_primitive_map.py` maps every SDK `apps.stop`, `start`,
 `deploy` and `update` call in `tools/` (also through a name bound from
 `.apps`) to the CLI modes that reach it; only those two files may call a
@@ -3073,11 +3107,59 @@ deployment becomes active and moves the default source, so blue is current
 (tier a, the plan's `blue_current`, the dead-man) only while nothing is
 pending, blue is the newest deployment of ANY state and SUCCEEDED, the
 default source is blue's folder and, on a running App, blue is active.
-`default_source_code_path` is not settable. Spike S2: whether
-`apps update` with an unchanged database binding touches a running App or its
-role. Until then the code assumes the worst case for both. The live shape of
+`default_source_code_path` is not settable. The live shape of
 `information_schema.routines.routine_definition` is also derived, not
 captured; a reformatted body only ever means "run".
+
+**Spike S2 is recorded** (throwaway Apps, 2026-11-06 and 2026-11-10, with
+S2b). An `apps update` or
+`apps create-update` that carries resources, an identical array included,
+grants CREATE ON DATABASE to the App's Lakebase role again (`=c` to `=Cc`,
+TEMPORARY not), with no restart, no new deployment and no compute change.
+Only the migration job's revoke takes it back. A PATCH (`apps update`)
+without a description clears it to `""`. A create-update masked to
+`description` changes the description and `update_time` only. So:
+
+- the release's own sends (the binding step's `apps update`, only in a WR1
+  window or an ungoverned run, and the first install's `apps create`) are
+  followed by the migration job in the same run: the step files record them
+  (`APP_ROLE_REGRANT_OWED`), a WR1 window runs the job after its binding
+  update whatever the migration plan says (its budget counts it: every window
+  without WR3 adds `migrate`), and a migration skip with a send recorded
+  refuses;
+- the signed-blue restore (`restore_signed_app_resource_contract`, step 0a
+  and the rollbacks) sends a create-update masked to `resources`, so the App
+  description survives, and re-sends each kept binding's live description
+  (what the API does with a sent binding that omits one is unmeasured). No
+  restore runs the migration job: step 0a restores before any window opens,
+  and a rollback restores after a window's migration already ran. So the role
+  keeps CREATE ON DATABASE until the NEXT release: the restore says so on
+  stderr, that release's migration plan reports it as
+  `app_role_regrant: owed`, and its window plan makes it a restorable WR2;
+- the migration plan's verify sets that one privilege apart and reports it
+  (`app_role_regrant`); `--mode verify` and apply's postflight still refuse it;
+- the bindings compare as a set by name on their access contract, and the
+  App description is an online fix-up, never a window. A binding's own
+  description is display text: `app_resource_bindings diff` and the
+  post-update verifier name the bindings whose text differs and pass; only a
+  resources send carries the bundle's text (no online fix exists).
+
+S2b also proved an online `REVOKE CREATE, TEMPORARY ON DATABASE` by the
+database owner safe while the App serves. The release does not use it: the
+grantor it needs after the ownership handover is inferred, not tested, so the
+revoke stays the migration job's, inside a window.
+
+Cutover run 1 on client #1, on the shape S2 read live (an empty description,
+the eleven bindings, the scheduler binding in another position, and three
+secret bindings, `cotality_id_mask_secret`, `genie_action_current_secret`
+and `genie_action_previous_secret`, with no description of their own while
+the bundle declares one for each), now plans no WR1 window and one online
+description fix-up (`tests/unit/test_cutover_run1_binding_plan.py`). The
+three bindings keep reading undescribed: the plan names them and nothing
+repairs them until a later WR1 send carries the bundle's text. Whether run 1
+needs another window depends on facts the plan reads and the spike did not:
+the live App role's CREATE ON DATABASE (a WR2 if a past restore left it
+re-granted) and WR2-WR4's other inputs.
 
 ### The job budget and the dead-man (M0-PR9)
 
@@ -3091,9 +3173,13 @@ opens only while the job's remaining budget covers it:
     MIP_JOB_DEADLINE_EPOCH - now >= predicted window + predicted restore + 15 min
 
 The predicted window is the plan's `predicted_seconds` (stop, each reason's
-step, then start and re-pin when blue is restorable; a contract window, which
-stays open with the App stopped until green activation, adds that tail, the
-reviewed `green_activation` budget). The predicted restore is
+step, the migration job's `migrate` budget unless a WR3 already budgets it,
+since every window runs the job (spike S2), then start and re-pin when blue is
+restorable; a contract window, which stays open with the App stopped until
+green activation, adds that tail, the reviewed `green_activation` budget).
+Step 0a's start and re-pin of a stopped blue (spike S7) is not part of it: it
+runs before any window opens, and the release phase budgets it as
+`step0a_start` (below). The predicted restore is
 `predicted_restore_seconds`: the EXIT trap's tier-a start and re-pin after a
 failure at the window's last mutation (start + re-pin budgets), and nothing for
 a contract window, which restores nothing. Both, the 15-minute margin and their
@@ -4418,6 +4504,40 @@ credentials is a deliberate replacement or an owner-approved key delete (see
 the `provision_runtime_secrets.py` notes under "Databricks App"). A partial connector
 remains honestly staged and cannot claim delivery.
 
+**The three Salesforce bindings are the profile's to switch on** (spike S2b).
+`databricks.yml` declares them (`salesforce_client_secret`,
+`salesforce_password`, `salesforce_security_token`) beside the App's other
+eleven, and stays their one definition. The release applies them only when
+the client profile's `MIP_SALESFORCE_BINDINGS` is `on`; unset or `off` (the
+default) keeps the eleven, client #1's live set
+(`tools/databricks/app_optional_bindings.py`). The binding payload
+(`app_resource_bindings build --salesforce-bindings`), the window plan, the
+adopt phase's reviewed bindings and the App payload all read that one value.
+With the switch off the App payload names no Salesforce secret, even with the
+connector's inputs set: a `valueFrom` naming an unbound binding does not fail
+a deployment, it starts the App with the env var unset (S2b), so the payload
+prints a names-only `Salesforce notice:` instead. The default never turns a
+configured connector off: with every connector input set (env or
+`.env.local`) and the switch unset, the preflight
+(`resolve_salesforce_bindings_switch`) refuses before any mutation, so the
+owner says `on` or `off`. Switching it on adds three
+bindings: a resources send, so a WR1 window with its migration job. Each key
+must exist in the runtime scope first (a missing key refuses the whole
+update, S2b); `provision_runtime_secrets.py` writes an absent one as a
+disabled sentinel.
+
+**Owner patch: `.env.example`.** Agents cannot edit the template, so this is
+the line the owner adds under the public profile fields:
+
+```bash
+# Optional (client profile): bind the App's three Salesforce connector secrets
+# (salesforce_client_secret, salesforce_password, salesforce_security_token).
+# off when unset; on adds the three bindings in a WR1 window. Set it (on or off)
+# whenever every SALESFORCE_* connector input is set: unset then refuses
+# (docs/deployment.md, "Optional Salesforce activation").
+MIP_SALESFORCE_BINDINGS=
+```
+
 ## Optional OTLP log export
 
 The shipped default is stdout-safe JSON only. To prove durable
@@ -5226,7 +5346,7 @@ environment). Variables, the public fields: `MIP_CLIENT`,
 `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`, plus, when they apply,
 `MIP_IDENTITY_PREFIX`, `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS`,
 `MIP_PRESENTER_MODE`, `MIP_LAKEBASE_READABLE_SECONDARIES`,
-`MIP_COTALITY_SOURCE_CATALOG`, `MIP_COTALITY_SOURCE_SCHEMA`,
+`MIP_SALESFORCE_BINDINGS`, `MIP_COTALITY_SOURCE_CATALOG`, `MIP_COTALITY_SOURCE_SCHEMA`,
 `MIP_COTALITY_SOURCE_TABLE_PREFIX` and `MIP_LENDER_IDENTITY_SHA256`. Secrets,
 the identifying fields: `DATABRICKS_HOST`, `MIP_EXPECT_WORKSPACE_ID`,
 `MIP_EXPECT_METASTORE_ID`, `DATABRICKS_ACCOUNT_ID`, `MIP_IDENTITY_IDS_JSON`,

@@ -34,6 +34,10 @@ from backend.schemas.lender_identity_record import (  # noqa: E402
     present_env,
     reviewed_lender_identity_from_env,
 )
+from tools.databricks.app_optional_bindings import (  # noqa: E402
+    SWITCH_ENV as SALESFORCE_BINDINGS_ENV,
+)
+from tools.databricks.app_optional_bindings import salesforce_bindings_on  # noqa: E402
 from tools.databricks.lakebase_instance_contract import (  # noqa: E402
     DEFAULT_LAKEBASE_INSTANCE_NAME,
     validated_lakebase_instance_name,
@@ -170,6 +174,28 @@ SALESFORCE_REQUIRED_VARS = (
 SALESFORCE_SECRET_ENVS = frozenset(
     {"SALESFORCE_CLIENT_SECRET", "SALESFORCE_PASSWORD", "SALESFORCE_SECURITY_TOKEN"}
 )
+# A configured connector whose secrets the profile leaves unbound (spike S2b):
+# a valueFrom naming an unbound resource would not fail the deployment, only
+# start the App with that env var unset, so the payload never names one.
+SALESFORCE_UNBOUND_NOTICE = (
+    "Salesforce notice: the connector's inputs are set but MIP_SALESFORCE_BINDINGS is off, so its "
+    "salesforce-* secrets are not bound and delivery reports salesforce_not_configured; set "
+    "MIP_SALESFORCE_BINDINGS=on in the client profile to bind them."
+)
+# The default (an unset switch) never turns off a connector the operator
+# configured: with every input set, the profile must say on or off. An
+# explicit off keeps the notice above (review of #337).
+SALESFORCE_SWITCH_UNSET_REFUSAL = (
+    "every Salesforce connector input is set but MIP_SALESFORCE_BINDINGS is unset: set it to on "
+    "to bind the connector's three secrets (a WR1 window adds the bindings) or to off to leave "
+    "the connector unbound"
+)
+
+
+class SalesforceSwitchRefused(ValueError):
+    """``SALESFORCE_SWITCH_UNSET_REFUSAL``: ``main`` prints it as a refusal and exits 2, no payload."""
+
+
 PREVIOUS_SECRET_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_SECRET_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 
@@ -212,6 +238,26 @@ def _salesforce_input(key: str, dotenv: dict[str, str]) -> str:
     if key in SALESFORCE_SECRET_ENVS:
         return runtime_secret_text(value) or ""
     return value
+
+
+def salesforce_connector_configured(dotenv: dict[str, str] | None = None) -> bool:
+    """Every connector input set (a placeholder secret reads unset), env first, then ``.env.local``."""
+
+    values = _dotenv_overlay() if dotenv is None else dotenv
+    return all(_salesforce_input(name, values) for name in SALESFORCE_REQUIRED_VARS)
+
+
+def salesforce_switch_refusal(dotenv: dict[str, str] | None = None) -> str | None:
+    """``SALESFORCE_SWITCH_UNSET_REFUSAL`` for a configured connector whose switch is unset, else None.
+
+    The deploy preflight runs this before any mutation
+    (``resolve_salesforce_bindings_switch``); ``build_payload`` repeats it.
+    """
+
+    values = _dotenv_overlay() if dotenv is None else dotenv
+    if _env_value(SALESFORCE_BINDINGS_ENV, values):
+        return None
+    return SALESFORCE_SWITCH_UNSET_REFUSAL if salesforce_connector_configured(values) else None
 
 
 def _salesforce_placeholder_notice(dotenv: dict[str, str]) -> str | None:
@@ -564,10 +610,16 @@ def build_payload(
 
     if salesforce_notice := _salesforce_placeholder_notice(dotenv):
         print(salesforce_notice, file=sys.stderr)
-    salesforce_configured = all(
-        _salesforce_input(name, dotenv) for name in SALESFORCE_REQUIRED_VARS
-    )
-    if salesforce_configured:
+    salesforce_configured = salesforce_connector_configured(dotenv)
+    # The profile's switch decides whether the App binds the secrets at all
+    # (tools/databricks/app_optional_bindings.py); off is the default, and an
+    # unset switch refuses a configured connector rather than drop it.
+    salesforce_bound = salesforce_bindings_on(_env_value(SALESFORCE_BINDINGS_ENV, dotenv))
+    if refusal := salesforce_switch_refusal(dotenv):
+        raise SalesforceSwitchRefused(refusal)
+    if salesforce_configured and not salesforce_bound:
+        print(SALESFORCE_UNBOUND_NOTICE, file=sys.stderr)
+    if salesforce_configured and salesforce_bound:
         for name in sorted(SALESFORCE_SECRET_ENVS):
             if name == "SALESFORCE_SECURITY_TOKEN" and not _salesforce_input(name, dotenv):
                 continue
@@ -652,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
             otel_header_resource=args.otel_header_resource,
             agentic_tier=args.agentic_tier,
         )
-    except LenderIdentityRefused as refusal:
+    except (LenderIdentityRefused, SalesforceSwitchRefused) as refusal:
         # A fixed sentence that names the field and the rule, never a value.
         print(f"app_deploy_payload: refused: {refusal}", file=sys.stderr)
         return 2

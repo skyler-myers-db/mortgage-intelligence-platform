@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
+from datetime import timedelta
 from typing import Any
 
 from databricks.sdk.service.apps import App
@@ -104,18 +106,90 @@ def app_resource_contract_digest(resources: list[dict[str, object]]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+# The resource send is a create-update masked to ``resources``: it changes the
+# bindings alone. ``apps update`` (PATCH) would clear the description it does
+# not carry (spike S2: very likely why a restored App's description reads "").
+RESOURCES_UPDATE_MASK = "resources"
+RESOURCE_UPDATE_TIMEOUT = timedelta(minutes=10)
+# Spike S2: every update that carries resources, an identical array included,
+# grants CREATE ON DATABASE to the App's Lakebase role again, with no restart.
+# Only the Lakebase migration job's revoke restores the role contract, and the
+# migration plan reports the re-grant (``app_role_regrant``), which the next
+# quiesce window plan reads as WR2 (tools/databricks/quiesce_window_plan.py).
+ROLE_REGRANT_NOTICE = (
+    "[mip-app-rollback] the signed App resource bindings were restored: the App's "
+    "Lakebase role holds CREATE ON DATABASE again (spike S2) until the migration job "
+    "revokes it; the next release's window plan reads it as WR2"
+)
+
+BINDING_DESCRIPTION_NOTICE = (
+    "[mip-app-rollback] binding descriptions the restore re-sent did not survive (display text, "
+    "outside the signed contract)"
+)
+
+
+def _plain_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _binding_descriptions(app: object) -> dict[str, str]:
+    """Each live binding's own description, by name (display text the signed contract leaves out)."""
+
+    found: dict[str, str] = {}
+    for item in list(getattr(app, "resources", None) or []):
+        plain = _plain(item)
+        if isinstance(plain, dict):
+            name, text = _plain_text(plain.get("name")), _plain_text(plain.get("description"))
+            if name and text:
+                found[name] = text
+    return found
+
+
+def _with_live_descriptions(
+    expected: list[dict[str, object]], descriptions: dict[str, str]
+) -> list[dict[str, object]]:
+    """The signed bindings to send, each carrying the description the live App gives it.
+
+    The signed contract holds no description (display text, outside the
+    rollback proof), and what the Apps API does with a sent binding that
+    omits one is unmeasured: no spike sent one. Re-sending each live
+    description by name keeps it whichever way the API answers. A binding the
+    restore adds has none live, so it is sent without one; the next release's
+    resources send carries the bundle's.
+    """
+
+    return [
+        {**binding, "description": descriptions[str(binding["name"])]}
+        if str(binding["name"]) in descriptions
+        else dict(binding)
+        for binding in expected
+    ]
+
+
 def restore_signed_app_resource_contract(
     workspace: Any,
     *,
     app_name: str,
     resources: object,
-) -> None:
-    """Restore signed bindings without changing source deployment or compute."""
+) -> bool:
+    """Restore signed bindings; never the description, the source deployment or the compute.
+
+    The send carries each kept binding's live description by name
+    (``_with_live_descriptions``), so a restore clears neither the App's
+    description nor a binding's. Returns True when it sent the bindings.
+    Every send re-grants CREATE ON DATABASE to the App's Lakebase role (spike
+    S2), and no restore runs the migration job itself (step 0a restores
+    before any window opens; a rollback restores after a window's migration
+    already ran): a True return leaves the role out of its contract until
+    the NEXT release's migration job revokes it. The restore says so on stderr (``ROLE_REGRANT_NOTICE``,
+    names only) and that release's migration plan reports it as
+    ``app_role_regrant: owed``, a WR2 window.
+    """
 
     expected = validated_app_resource_contract(resources)
     before = workspace.apps.get(app_name)
     if app_resource_contract(workspace, app_name=app_name) == expected:
-        return
+        return False
 
     def state(app: object) -> tuple[str, str, str]:
         def deployment_id(field: str) -> str:
@@ -130,15 +204,30 @@ def restore_signed_app_resource_contract(
         )
 
     before_state = state(before)
-    workspace.apps.update(
-        app_name,
-        App.from_dict({"name": app_name, "resources": expected}),
-    )
+    before_description = _plain_text(getattr(before, "description", None))
+    kept = _binding_descriptions(before)
+    workspace.apps.create_update(
+        app_name=app_name,
+        update_mask=RESOURCES_UPDATE_MASK,
+        app=App.from_dict({"name": app_name, "resources": _with_live_descriptions(expected, kept)}),
+    ).result(timeout=RESOURCE_UPDATE_TIMEOUT)
     after = workspace.apps.get(app_name)
     if state(after) != before_state:
         raise RuntimeError("App resource rollback changed deployment or compute state")
+    if _plain_text(getattr(after, "description", None)) != before_description:
+        raise RuntimeError("App resource rollback changed the App description")
     if app_resource_contract(workspace, app_name=app_name) != expected:
         raise RuntimeError("App resource rollback did not restore the signed contract")
+    restored = {str(binding["name"]) for binding in expected}
+    after_descriptions = _binding_descriptions(after)
+    lost = sorted(
+        name for name, text in kept.items() if name in restored and after_descriptions.get(name) != text
+    )
+    if lost:
+        # Display text, outside the signed contract: names only, never a refusal.
+        print(f"{BINDING_DESCRIPTION_NOTICE}: {', '.join(lost)}", file=sys.stderr)
+    print(ROLE_REGRANT_NOTICE, file=sys.stderr)
+    return True
 
 
 def _resolve_reference(value: object, *, resources: dict[str, object]) -> object:

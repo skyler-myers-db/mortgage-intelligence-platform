@@ -79,6 +79,8 @@ def _hermetic(monkeypatch, tmp_path) -> None:
         "MIP_PRESENTER_MODE",
     ):
         monkeypatch.delenv(name, raising=False)
+    # The parity is the bind rule's when the profile binds the connector at all (S2b).
+    monkeypatch.setenv("MIP_SALESFORCE_BINDINGS", "on")
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "synthetic-mask-" + "m" * 32)
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "synthetic-current-" + "c" * 32)
     for name, value in NON_SECRET_INPUTS.items():

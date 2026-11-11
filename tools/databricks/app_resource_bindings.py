@@ -13,9 +13,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
+from tools.databricks.app_optional_bindings import salesforce_bindings_on, select_bindings
 from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
 _RESOURCE_REFERENCE_RE = re.compile(
@@ -23,6 +25,7 @@ _RESOURCE_REFERENCE_RE = re.compile(
     r"(?P<field>[A-Za-z0-9_]+)\}\Z"
 )
 _SECRET_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_PREFIX = "[mip-app-bindings]"
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -62,10 +65,18 @@ def build_resource_binding_payload(
     summary: dict[str, Any],
     *,
     app_name: str,
+    salesforce_bindings: bool = False,
     otel_header_secret_scope: str = "",
     otel_header_secret_key: str = "",
 ) -> dict[str, Any]:
-    """Return the exact source-free App create/update body."""
+    """Return the exact source-free App create/update body.
+
+    The bundle declares every binding; ``salesforce_bindings`` (the profile's
+    ``MIP_SALESFORCE_BINDINGS``, spike S2b; off, the profile's default, when
+    a caller omits it) decides whether the three optional Salesforce secret
+    bindings are among the ones applied
+    (tools/databricks/app_optional_bindings.py). The CLI has no default.
+    """
 
     resources = summary.get("resources")
     if not isinstance(resources, dict):
@@ -84,6 +95,7 @@ def build_resource_binding_payload(
     bindings = _resolve_value(configured_bindings, resources)
     if not isinstance(bindings, list):  # defensive: recursive resolver preserves lists
         raise ValueError("resolved App resource bindings are invalid")
+    bindings = select_bindings(bindings, salesforce=salesforce_bindings)
     if bool(otel_header_secret_scope.strip()) != bool(otel_header_secret_key.strip()):
         raise ValueError("OTLP header secret scope and key must be configured together")
     if otel_header_secret_scope:
@@ -140,10 +152,16 @@ def _assert_exact_transition(
     app_name = str(expected.get("name") or "")
     if str(after.get("name") or "") != app_name:
         raise ValueError("updated App identity does not match the binding payload")
-    if str(after.get("description") or "") != str(expected.get("description") or ""):
+    if description_differs(expected=expected, live=after):
         raise ValueError("updated App description does not exactly match the binding payload")
-    if after.get("resources") != expected.get("resources"):
+    updated = _bindings_by_name(after.get("resources") or [], label="updated")
+    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
+    if _access_contract(updated) != _access_contract(reviewed):
         raise ValueError("updated App resource bindings do not exactly match the bundle")
+    drift = binding_description_drift(expected=expected, live=after)
+    if drift:
+        # Display text, never the bindings' contract: names only, no failure.
+        print(f"{_PREFIX} {_description_drift_line(drift)}", file=sys.stderr)
     if before is not None:
         for field in ("active_deployment", "pending_deployment"):
             if after.get(field) != before.get(field):
@@ -158,6 +176,25 @@ def _assert_exact_transition(
         state = str((after.get("compute_status") or {}).get("state") or "")
         if state != "STOPPED":
             raise ValueError(f"first-install App compute is not stopped: {state!r}")
+
+
+# A binding's own ``description`` is display text. It grants nothing and
+# selects no resource, and the signed rollback contract and adopt-live's
+# reviewed bindings already leave it out (``validated_app_resource_contract``
+# keeps only the name and the kind's target and permission). The diff and the
+# post-update verifier compare that same access contract; the per-binding
+# description is reported apart (``binding_description_drift``) and is never
+# a window reason. Client #1's live App has three secret bindings with no
+# description (spike S2's read-only ``apps get``): a WR1 window for that
+# would restart the App and re-grant CREATE ON DATABASE to its role for text.
+BINDING_DISPLAY_FIELDS = frozenset({"description"})
+
+
+def _access_contract(bindings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        name: {key: value for key, value in binding.items() if key not in BINDING_DISPLAY_FIELDS}
+        for name, binding in bindings.items()
+    }
 
 
 def _bindings_by_name(value: Any, *, label: str) -> dict[str, dict[str, Any]]:
@@ -184,23 +221,48 @@ def _differing_fields(expected: Any, live: Any, prefix: str = "") -> list[str]:
     return [] if expected == live else [prefix or "value"]
 
 
-def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
-    """Describe, symbolically, how the live App differs from the binding payload.
+def description_differs(*, expected: dict[str, Any], live: dict[str, Any]) -> bool:
+    """Whether the live App's description is not the binding payload's (an unset one reads "")."""
 
-    Empty exactly when the post-update verifier would accept ``live`` as an
-    exact match for ``expected`` (same description, same bindings, same order).
-    Reviewed binding names come from the bundle and are printed; live-only
-    names are counted. No resource id, name or other value is ever printed.
+    return str(live.get("description") or "") != str(expected.get("description") or "")
+
+
+def description_fixup_owed(*, expected: dict[str, Any], live: dict[str, Any]) -> bool:
+    """Whether the binding step's online fix-up has text to apply (``app_description_fixup``).
+
+    Only a payload that declares a description owes one: the fix-up never
+    clears a live description, so a bundle that declares none leaves the
+    live text as it is and owes nothing (the read-only plan and the fix-up
+    must agree, or every release would refuse after its non-App apply).
+    The post-update verifier still compares with ``description_differs``.
+    """
+
+    declared = bool(str(expected.get("description") or "").strip())
+    return declared and description_differs(expected=expected, live=live)
+
+
+def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """Describe, symbolically, how the live App's resource bindings differ from the payload's.
+
+    The bindings are compared as a set keyed by binding name: an order-only
+    difference is equal. Empty exactly when the post-update verifier would
+    accept ``live``'s bindings as the payload's. Neither description is part
+    of the comparison. The App's ``description_differs`` reads apart, because
+    spike S2 measured that a create-update masked to ``description`` changes
+    it with no restart and no role change, while every send of resources
+    re-grants CREATE ON DATABASE to the App's Lakebase role. A binding's own
+    description is display text (``BINDING_DISPLAY_FIELDS``), reported by
+    ``binding_description_drift``. Reviewed binding names come from the
+    bundle and are printed; live-only names are counted. No resource id, name
+    or other value is ever printed.
     """
 
     _assert_source_free(expected)
     if str(live.get("name") or "") != str(expected.get("name") or ""):
         raise ValueError("live App identity does not match the binding payload")
-    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
-    observed = _bindings_by_name(live.get("resources") or [], label="live")
+    reviewed = _access_contract(_bindings_by_name(expected.get("resources"), label="expected"))
+    observed = _access_contract(_bindings_by_name(live.get("resources") or [], label="live"))
     lines: list[str] = []
-    if str(live.get("description") or "") != str(expected.get("description") or ""):
-        lines.append("description: differs (update replaces it)")
     for name, binding in reviewed.items():
         if name not in observed:
             lines.append(f"binding {name}: missing (update adds it)")
@@ -211,9 +273,33 @@ def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]
     unreviewed = [name for name in observed if name not in reviewed]
     if unreviewed:
         lines.append(f"{len(unreviewed)} unreviewed live binding(s) (update removes them)")
-    if not lines and live.get("resources") != expected.get("resources"):
-        lines.append("binding order differs (update reorders them)")
     return lines
+
+
+def binding_description_drift(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """The reviewed bindings present live whose own description is not the bundle's (names only).
+
+    Display text, never a window reason: no online fix exists (only a send
+    of resources carries it, and every send re-grants CREATE ON DATABASE), so
+    the release's own resources send carries the bundle's descriptions and
+    nothing else repairs them. A missing description reads "".
+    """
+
+    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
+    observed = _bindings_by_name(live.get("resources") or [], label="live")
+    return sorted(
+        name
+        for name, binding in reviewed.items()
+        if name in observed
+        and str(binding.get("description") or "") != str(observed[name].get("description") or "")
+    )
+
+
+def _description_drift_line(names: list[str]) -> str:
+    return (
+        f"binding descriptions differ (display text, never a window; a resources send carries "
+        f"the bundle's): {', '.join(names)}"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -223,6 +309,9 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--bundle-summary", type=Path, required=True)
     build.add_argument("--app-name", required=True)
     build.add_argument("--out", type=Path, required=True)
+    # Required, with no default: a call site that forgot the profile's switch
+    # never builds a binding set silently (spike S2b).
+    build.add_argument("--salesforce-bindings", choices=("off", "on"), required=True)
     build.add_argument("--otel-header-secret-scope", default="")
     build.add_argument("--otel-header-secret-key", default="")
 
@@ -233,7 +322,11 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--require-stopped-without-deployment", action="store_true")
 
     diff = subparsers.add_parser(
-        "diff", help="Read-only: print the symbolic binding diff and exit 3 when it is non-empty."
+        "diff",
+        help=(
+            "Read-only: print the symbolic binding diff (bindings as a set by name) and exit 3 "
+            "when it is non-empty; a description-only difference exits 0."
+        ),
     )
     diff.add_argument("--expected", type=Path, required=True)
     diff.add_argument("--live", type=Path, required=True)
@@ -243,16 +336,28 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "diff":
-        lines = binding_diff(expected=_load_object(args.expected), live=_load_object(args.live))
+        expected, live = _load_object(args.expected), _load_object(args.live)
+        lines = binding_diff(expected=expected, live=live)
         for line in lines:
-            print(f"[mip-app-bindings] diff: {line}")
+            print(f"{_PREFIX} diff: {line}")
         if not lines:
-            print("[mip-app-bindings] live App resource bindings equal the bundle payload")
+            print(f"{_PREFIX} live App resource bindings equal the bundle payload (as a set)")
+        if description_fixup_owed(expected=expected, live=live):
+            # Never a drift code: the release applies it online (spike S2).
+            print(
+                f"{_PREFIX} description: differs (an online fix-up: a create-update "
+                "masked to description, no window)"
+            )
+        elif description_differs(expected=expected, live=live):
+            print(f"{_PREFIX} description: the bundle declares none; the live one is left as it is")
+        if drift := binding_description_drift(expected=expected, live=live):
+            print(f"{_PREFIX} {_description_drift_line(drift)}")
         return CHECK_DRIFT if lines else CHECK_EXACT
     if args.command == "build":
         payload = build_resource_binding_payload(
             _load_object(args.bundle_summary),
             app_name=args.app_name,
+            salesforce_bindings=salesforce_bindings_on(args.salesforce_bindings),
             otel_header_secret_scope=args.otel_header_secret_scope,
             otel_header_secret_key=args.otel_header_secret_key,
         )

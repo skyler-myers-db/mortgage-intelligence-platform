@@ -50,6 +50,8 @@ REAL_APP_INSTALL_FLOOR_S = 300
 # "the start response, then one GET" never sees it, as measured.
 HIDDEN_READS = 3
 # The create-update error text the spike captured for the default-source mask.
+# The one set every fake checks: measured_app_updates.apply_create_update (S2)
+# refuses through check_create_update_mask too.
 CREATE_UPDATE_MASKS = frozenset(
     {
         "description",
