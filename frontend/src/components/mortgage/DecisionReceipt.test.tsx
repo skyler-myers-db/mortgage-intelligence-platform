@@ -59,7 +59,7 @@ const LEDGER: DecisionReceiptPayload = {
   borrower_id: 'B-0000000000001',
   offer_code: 'refi_plus_heloc',
   offer_label: 'Refinance + home-equity review',
-  campaign_id: '7e373ef5-d4b6-4fea-b555-0cb925987a72',
+  campaign_id: '5eed00a4-0000-4000-8000-0000000000a4',
   variant_name: 'Supervisor B',
   channel: 'email',
   rationale_code: null,
@@ -175,7 +175,7 @@ describe('DecisionReceipt', () => {
     expect(field('borrower')).toBe('B-0000000000001');
     expect(field('offer')).toBe('Refinance + home-equity review');
     expect(field('channel')).toBe('Email');
-    expect(field('campaign')).toBe('7e373ef5-d4b · Supervisor B');
+    expect(field('campaign')).toBe('5eed00a4-000 · Supervisor B');
     expect(field('copy-hash')).toBe('c'.repeat(64));
     expect(field('copy-generation')).toBe('22222222-2222-4222-8222-222222222222');
     expect(field('approver')).toBe('ledger.approver@summit.example');

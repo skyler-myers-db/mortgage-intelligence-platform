@@ -105,6 +105,8 @@ APP_RELEASE_ID=aaaaaaaaaaaa-bbbbbbbbbbbb; APP_RELEASE_STAGE_ROOT=.databricks/app
 APP_RELEASE_MANIFEST=.databricks/app-release/manifest.json; CLIENT_DEPLOYER=deployer; CLIENT_KEY=client-key
 QUIESCE_WINDOW_DEADMAN_RUN_ID=""; QUIESCE_WINDOW_WATCHDOG_PID=""
 run_job_with_retry() { echo "job: $*" >> "$CALLS"; }
+# The identity library's reader (its strip rule is pinned in test_lakebase_seed_operator.py).
+nonblank_control_value() { printf '%s' "${!1:-}"; }
 """
 
 
@@ -543,6 +545,34 @@ def test_the_core_tier_plans_no_verifier_role_and_asserts_its_absence(tmp_path: 
     migration = next(call for call in calls if "lakebase_migrate.py --mode plan" in call)
     assert "--ai-gateway-verifier-absent" in migration
     assert "--require-ai-gateway-verifier" not in migration and "--ai-gateway-verifier-client-id" not in migration
+
+
+def test_the_migration_plan_renders_the_resolved_seed_operator(tmp_path: Path) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+        MIP_SEED_OPERATOR_EMAIL="demo.operator@summit.example",
+    )
+    assert result.returncode == 0, result.stderr
+    migration = next(call for call in calls if "lakebase_migrate.py --mode plan" in call)
+    assert "--seed-operator-email demo.operator@summit.example" in migration
+
+
+def test_an_undecidable_seed_operator_refuses_before_the_migration_plan(tmp_path: Path) -> None:
+    # M1-PR4 review: the reader refuses (2) when it cannot decide blank; a
+    # substitution inside the command's arguments would swallow that and plan
+    # the synthetic operator.
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        "nonblank_control_value() { return 2; }\n"
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+    )
+    assert result.returncode == 2 and "MIP_SEED_OPERATOR_EMAIL could not be resolved" in result.stderr
+    assert not _has(calls, "lakebase_migrate.py --mode plan") and not _has(calls, "quiesce_window plan")
 
 
 def test_an_undecided_jobs_reader_role_check_refuses_the_plan(tmp_path: Path) -> None:

@@ -98,8 +98,8 @@ const CASES: Case[] = [
     'an approval-request scope (flow-02), only when set',
     undefined,
     { state: 'IL' },
-    { approvalRequestBatch: '0f8fad5b-d9cb-469f-a165-70867728950e', growthAgentProof: null },
-    '/api/v1/leads?state=IL&approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e',
+    { approvalRequestBatch: '5eed00a1-0000-4000-8000-0000000000a1', growthAgentProof: null },
+    '/api/v1/leads?state=IL&approval_request_batch=5eed00a1-0000-4000-8000-0000000000a1',
   ],
   ['an unset approval-request scope', undefined, { state: 'IL' }, { approvalRequestBatch: undefined, growthAgentProof: null }, '/api/v1/leads?state=IL'],
 ];

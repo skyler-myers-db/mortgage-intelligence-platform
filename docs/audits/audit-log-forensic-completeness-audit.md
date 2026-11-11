@@ -8,8 +8,8 @@
 > timeline from the ledger.
 
 **Date:** 2026-05-18  
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
-**Active deployment:** `01f1532b4e1314e7964cb093feade193` (RUNNING, ACTIVE)
+**App:** `https://<app-host>`  
+**Active deployment:** `<deployment-id>` (RUNNING, ACTIVE)
 
 ## Headline Result
 
@@ -245,20 +245,20 @@ Deployment + live validation:
 
 - `./scripts/deploy.sh -t dev --no-confirm` completed successfully.
 - Built-in `scripts/smoke_live.sh` passed against
-  `https://mip-app-2543889327043640.aws.databricksapps.com`.
+  `https://<app-host>`.
 - Health smoke passed for `/api/v1/health`, deprecated compat `/api/health`,
   and `/api/v1/admin/health`.
 - Live borrower used for forensic proof: `B-102FL7THC6Q3L`.
 - `VIEW_BORROWER` correlation
-  `forensic-view-bd995da0-5aa7-4905-afc6-e187eab35130` persisted with
+  `forensic-view-<correlation-id>` persisted with
   `decision_inputs`.
 - `RECOMMEND_OFFER` correlation
-  `forensic-recommend-8ebadbc0-0a73-466d-ac3a-7adbf7a3968a` persisted with
+  `forensic-recommend-<correlation-id>` persisted with
   `decision_inputs`.
 - `APPROVE` correlation
-  `forensic-approve-13b80462-5b30-463a-b717-219d6c3e1127` persisted with
+  `forensic-approve-<correlation-id>` persisted with
   `decision_inputs` and request id
-  `8a310e10-da79-4d82-a79f-0eb101906026`.
+  `<request-id>`.
 
 Every live row carried exactly these seven `decision_inputs` keys:
 
@@ -363,7 +363,7 @@ The audit-store contract tests (`test_audit_store_contract.py` — 17 functions)
   is one tuple edit + one extractor field. Adding a new validation rule
   is one block in `_assert_decision_inputs_value_policy`.
 - Live deployment evidence from engineering's signoff: deployment
-  `01f1532b4e1314e7964cb093feade193`, RUNNING/ACTIVE, with persisted
+  `<deployment-id>`, RUNNING/ACTIVE, with persisted
   audit rows for `VIEW_BORROWER`, `RECOMMEND_OFFER`, `APPROVE` against
   live borrower `B-102FL7THC6Q3L`, each carrying matching request
   `correlation_id` and the exact 7-key `decision_inputs` set.

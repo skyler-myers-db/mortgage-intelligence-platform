@@ -67,7 +67,7 @@ def _body(**overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "question_hash": QUESTION_HASH,
         "refusal_reason": "unreviewed_criterion",
-        "conversation_id": "01f13d4968af1b249dc388fd5b18b195",
+        "conversation_id": "01f1c0de000000000000000000000001",
         "message_id": None,
     }
     body.update(overrides)
@@ -92,7 +92,7 @@ def test_report_writes_one_row_and_one_audit_event_in_order() -> None:
     assert report["actor_email"] == ACTOR
     assert report["question_hash"] == QUESTION_HASH
     assert report["refusal_reason"] == "unreviewed_criterion"
-    assert report["conversation_id"] == "01f13d4968af1b249dc388fd5b18b195"
+    assert report["conversation_id"] == "01f1c0de000000000000000000000001"
     assert report["message_id"] is None
     assert str(report["audit_event_id"]) == body["audit_event_id"]
     audit = lakebase.audit_rows[0]
@@ -164,7 +164,7 @@ def test_phone_shaped_join_cases_really_hit_the_ledger_fallback() -> None:
     assert contains_pii_marker(_PHONE_SHAPED_GENIE_ID)
     ledger = InMemoryAuditStore()
     live = GenieMessageResponse(
-        conversation_id="01f13d4968af1b249dc388fd5b18b195",
+        conversation_id="01f1c0de000000000000000000000001",
         message_id=_PHONE_SHAPED_GENIE_ID,
         question=payload.question,
         answer="Unsafe generated text.",
@@ -190,7 +190,7 @@ def test_letter_image_of_the_report_digest_is_the_question_seeded_digest() -> No
         # Mixed case and runs of whitespace: any case/space folding on one
         # side only would split the join.
         ("Target  HISPANIC   neighborhoods with this Offer.", None),
-        ("Which  ZYRPLAX borrowers are   eligible for a HELOC?", "01f13d4968af1b249dc388fd5b18b195"),
+        ("Which  ZYRPLAX borrowers are   eligible for a HELOC?", "01f1c0de000000000000000000000001"),
         # Its 16-hex ledger label carries a ten-digit (phone-shaped) run, so
         # the ledger's entity_id is the question-seeded geniehash fallback.
         (_PHONE_SHAPED_LABEL_PROMPT, None),
@@ -259,7 +259,7 @@ def _assert_block_is_reported_and_joins(
 def test_report_audit_joins_the_response_blocked_ledger_row(message_id: str) -> None:
     payload = GenieMessageRequest(question="How many  In-The-Money borrowers are in Ohio?")
     live = GenieMessageResponse(
-        conversation_id="01f13d4968af1b249dc388fd5b18b195",
+        conversation_id="01f1c0de000000000000000000000001",
         message_id=message_id,
         question=payload.question,
         answer="Unsafe generated text.",
@@ -424,16 +424,16 @@ def test_report_accepts_the_id_shapes_genie_issues() -> None:
     response = client.post(
         REPORT_PATH,
         json=_body(
-            conversation_id="01F13D4968AF1B249DC388FD5B18B195",
-            message_id="3f2b8c1e-9d4a-4f6b-8e2c-1a7d5b9c0e4f",
+            conversation_id="01F1C0DE000000000000000000000001",
+            message_id="5eed00b3-0000-4000-8000-0000000000b3",
         ),
         headers=ACTOR_HEADERS,
     )
 
     assert response.status_code == 200, response.text
     report = next(iter(lakebase.reports.values()))
-    assert report["conversation_id"] == "01F13D4968AF1B249DC388FD5B18B195"
-    assert report["message_id"] == "3f2b8c1e-9d4a-4f6b-8e2c-1a7d5b9c0e4f"
+    assert report["conversation_id"] == "01F1C0DE000000000000000000000001"
+    assert report["message_id"] == "5eed00b3-0000-4000-8000-0000000000b3"
 
 
 def test_report_requires_json_and_surfaces_lakebase_outage_safely() -> None:

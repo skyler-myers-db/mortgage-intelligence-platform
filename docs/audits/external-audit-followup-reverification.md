@@ -7,8 +7,8 @@
 
 **Date:** 2026-05-22
 **Branch/commit:** `hardening/module0-release-readiness` @ `bee6540` (worktree clean)
-**Deployment:** `mip-app` deployment `01f1556546f613c7a8701d44660b397a`, live at
-`https://mip-app-2543889327043640.aws.databricksapps.com`
+**Deployment:** `mip-app` deployment `<deployment-id>`, live at
+`https://<app-host>`
 **Method:** git/diff review → evidence-file inspection → live Chrome probes (API
 + UI), filters emphasis.
 

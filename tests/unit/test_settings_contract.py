@@ -34,6 +34,9 @@ DIRECT_ENV_READS = {
 DIRECT_ENV_READS_PENDING_TEMPLATE = {
     "MIP_LENDER_IDENTITY_JSON",
     "MIP_LENDER_IDENTITY_SHA256",
+    # jobs/lakebase_migrate.py's demo seed operator (M1-PR4); its template line
+    # is in docs/deployment.md, "Demo seed operator and other required inputs".
+    "MIP_SEED_OPERATOR_EMAIL",
 }
 # Settings fields whose .env.example lines only the owner can add: agents may
 # not read or edit the template (.claude/settings.json), so docs/deployment.md,
@@ -409,12 +412,12 @@ def test_ai_gateway_proof_freshness_has_a_hard_26_hour_ceiling() -> None:
         (
             "https://<workspace-host>.cloud.databricks.com",
             "valid-token",
-            "da02d15a9490650b",
+            "a0b1c2d3e4f5a6b7",
         ),
         (
             "https://dbc-valid.cloud.databricks.com",
             "<pat-or-leave-unset-for-oauth>",
-            "da02d15a9490650b",
+            "a0b1c2d3e4f5a6b7",
         ),
         (
             "https://dbc-valid.cloud.databricks.com",
@@ -424,7 +427,7 @@ def test_ai_gateway_proof_freshness_has_a_hard_26_hour_ceiling() -> None:
         (
             "https://dbc.example",
             "valid-token",
-            "da02d15a9490650b",
+            "a0b1c2d3e4f5a6b7",
         ),
     ],
 )

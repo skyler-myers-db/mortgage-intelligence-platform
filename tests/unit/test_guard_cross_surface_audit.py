@@ -147,7 +147,7 @@ def test_campaign_text_accepts_unrounded_averages_and_cities() -> None:
         "SSN 123-45-6789 on file",
         "Call 312-555-0142 today",
         "Ask John Smith for the list",
-        "Reach him at a@b.com tomorrow",
+        "Reach him at a@b.example tomorrow",
         "John Smith at 431 Maple Street wants a HELOC",
     ],
 )

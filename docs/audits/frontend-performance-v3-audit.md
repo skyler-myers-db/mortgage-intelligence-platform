@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** Re-audit of frontend performance after the multi-tenant lender propagation tranche and the `/api/v1/*` versioning cutover. Specifically checks TanStack Query dedup across the new `configOptions` call sites, React 19 compiler effectiveness vs manual memoization, bundle/chunk sizes against the budget script, render-storm hazards, and the LeadTable virtualization gate.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15277ddcd15f6b68063347f1f18da` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Static read of every TanStack Query call site that uses the shared config-options hook, inspection of `queryClient.ts` default policy, audit of `vite.config.ts` for React compiler plugin wiring, review of remaining manual `useMemo` / `useCallback` sites for semantic identity requirements, measurement of the current `frontend/dist/` build (32 chunks), read of `tools/check_frontend_budgets.mjs` (148 LOC, 8 budgets), and live verification of LeadTable's TanStack Virtual implementation across browser engines and device profiles.
 
 ## Post-remediation status
@@ -27,10 +27,10 @@
 - Bundle budget: `npm --prefix frontend run budget` -> pass; initial JS `223.49 KiB` raw / `70.02 KiB` gzip, total JS `721.73 KiB` raw / `241.41 KiB` gzip, largest lazy JS `95.81 KiB` raw / `31.25 KiB` gzip, fonts `14` files / `215.42 KiB`.
 - Repo static gates: `git diff --check` -> pass; `./.venv/bin/python -m ruff check backend tests tools jobs pipelines` -> pass.
 - Backend regression gate: `./.venv/bin/python -m pytest -q tests/unit` -> pass.
-- Deployment: `./scripts/deploy.sh -t dev --no-confirm` -> pass; Databricks Apps deployment `01f1525f497f120dacb900b886193bc9` succeeded, FRED/silver/Lakebase/gold/lifecycle/Genie rebind all passed, built-in live smoke passed.
-- Live API probes against deployment `01f1525f497f120dacb900b886193bc9`: `/api/v1/health`, `/api/v1/config/options`, `/api/v1/leads?limit=1`, and `/api/v1/admin/health` all returned `200` with `X-API-Version: v1`; config options returned `target_lender_refs_status=live` with 22 lender refs.
+- Deployment: `./scripts/deploy.sh -t dev --no-confirm` -> pass; Databricks Apps deployment `<deployment-id>` succeeded, FRED/silver/Lakebase/gold/lifecycle/Genie rebind all passed, built-in live smoke passed.
+- Live API probes against deployment `<deployment-id>`: `/api/v1/health`, `/api/v1/config/options`, `/api/v1/leads?limit=1`, and `/api/v1/admin/health` all returned `200` with `X-API-Version: v1`; config options returned `target_lender_refs_status=live` with 22 lender refs.
 - Live browser route-performance canary: `E2E_LIVE=1 ... npm --prefix frontend run e2e -- route_performance.spec.ts --project=chromium` -> 14/14 pass.
-- Second deployment: `CI=1 ./scripts/deploy.sh -t dev --no-confirm` -> pass; Databricks Apps deployment `01f15277ddcd15f6b68063347f1f18da` succeeded, FRED/silver/Lakebase/gold/lifecycle/Genie rebind all passed, built-in live smoke passed.
+- Second deployment: `CI=1 ./scripts/deploy.sh -t dev --no-confirm` -> pass; Databricks Apps deployment `<deployment-id>` succeeded, FRED/silver/Lakebase/gold/lifecycle/Genie rebind all passed, built-in live smoke passed.
 - Local targeted LeadTable test: `npm --prefix frontend test -- LeadTable --run` -> 1 file / 11 tests pass.
 - Local frontend suite after virtualizer migration: `npm --prefix frontend test -- --run` -> 34 files / 200 tests pass.
 - Local lint after virtualizer migration: `npm --prefix frontend run lint` -> pass.
@@ -38,7 +38,7 @@
 - Bundle budget after virtualizer migration: `npm --prefix frontend run budget` -> pass; initial JS `223.49 KiB` raw / `70.02 KiB` gzip, total JS `736.37 KiB` raw / `245.80 KiB` gzip, largest lazy JS `95.81 KiB` raw / `31.25 KiB` gzip, fonts `14` files / `215.42 KiB`.
 - Supply-chain regression: `npm --prefix frontend audit --omit=dev --audit-level=low` -> 0 vulnerabilities; `./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py tests/unit/test_architecture_boundaries.py` -> 13/13 pass.
 - Backend/local gates: `./.venv/bin/python -m ruff check backend tests tools jobs pipelines` -> pass; `./.venv/bin/python -m pytest -q tests/unit` -> pass; `git diff --check` -> pass.
-- Live API probes against deployment `01f15277ddcd15f6b68063347f1f18da`: `/api/v1/health`, `/api/health`, `/api/v1/admin/health`, `/api/v1/config/options`, and `/api/v1/leads?limit=1` all returned `200` with `X-API-Version: v1`; config options returned `lender_name=Summit Mortgage` and `target_lender_refs_status=live`; leads returned 1 row.
+- Live API probes against deployment `<deployment-id>`: `/api/v1/health`, `/api/health`, `/api/v1/admin/health`, `/api/v1/config/options`, and `/api/v1/leads?limit=1` all returned `200` with `X-API-Version: v1`; config options returned `lender_name=Summit Mortgage` and `target_lender_refs_status=live`; leads returned 1 row.
 - Live browser route-performance canary after virtualizer migration: `E2E_LIVE=1 ... npm --prefix frontend run e2e -- route_performance.spec.ts --project=chromium` -> 14/14 pass, including the shared config-options fetch assertion.
 - Live Lead Queue virtualization canary: `E2E_LIVE=1 ... npm --prefix frontend run e2e -- accessibility_procurement.spec.ts --project=chromium --grep "Lead Queue"` -> 2/2 pass.
 - Live procurement accessibility canary: `E2E_LIVE=1 ... npm --prefix frontend run e2e -- accessibility_procurement.spec.ts --project=chromium` -> 7/7 pass.
@@ -202,7 +202,7 @@ The frontend `apiPaths.ts:1` helper normalizes both `/api/<domain>` and `/<domai
 
 ### 9. Console / runtime probes
 
-From the prior cross-browser audit (deployment `01f150ae4cdf1664a88d49827a879b2e`, sustained across redeployments):
+From the prior cross-browser audit (deployment `<deployment-id>`, sustained across redeployments):
 - 51 SVG state paths in DOM (verified live)
 - 0 horizontal overflow
 - 0 console errors matching `error|warning|exception|undefined|NaN|TypeError|Failed`
@@ -258,7 +258,7 @@ Module 0 is performance-ready for shipping from this audit's perspective.
 - `tools/check_frontend_budgets.mjs` — 148 LOC, 8 budgets
 - `frontend/dist/assets/*` — built artifacts, 25 chunks, 1.9 MB total
 - Cross-browser audit (prior) — live runtime probes confirming bounded DOM, 0 console errors
-- Live deployment: `01f15185868d1fa285ea9a3a4c94afd4`
+- Live deployment: `<deployment-id>`
 
 ---
 
@@ -341,7 +341,7 @@ The 14 KB LeadTable chunk increase is the expected cost of adopting `@tanstack/r
 - Total JS: 721 KB ≤ 780 KB ✅
 - Max lazy chunk: 96 KB ≤ 160 KB ✅
 
-### Live execution proof from engineering signoff (deployment `01f15277ddcd15f6b68063347f1f18da`)
+### Live execution proof from engineering signoff (deployment `<deployment-id>`)
 
 | Gate | Result |
 |---|---|
@@ -354,7 +354,7 @@ The 14 KB LeadTable chunk increase is the expected cost of adopting `@tanstack/r
 | `ruff check backend tests tools jobs pipelines` | pass |
 | `pytest -q tests/unit` | pass |
 | `./scripts/deploy.sh -t dev --no-confirm` | full deploy succeeded |
-| Databricks Apps deployment `01f15277ddcd15f6b68063347f1f18da` | RUNNING / ACTIVE |
+| Databricks Apps deployment `<deployment-id>` | RUNNING / ACTIVE |
 | Live API: `/api/v1/health`, `/api/health`, `/api/v1/admin/health`, `/api/v1/config/options`, `/api/v1/leads?limit=1` | all 200 with `X-API-Version: v1` |
 | Route performance canary (Chromium) | 14/14 pass, including new config-options dedup assertion |
 | Procurement accessibility (Chromium) | 7/7 pass |

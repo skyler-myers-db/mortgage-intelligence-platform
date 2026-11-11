@@ -237,6 +237,9 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
     # placeholder, which its migrate job reads as absent.
     if profile.identity_ids.verifier is not None and profile.agentic_tier == "on":
         variables["ai_gateway_verifier_client_id"] = profile.identity_ids.verifier
+    # The demo seed's operator, when the demo profile names one (M1-PR4).
+    if profile.seed_operator_email is not None:
+        variables["seed_operator_email"] = profile.seed_operator_email
     return variables
 
 

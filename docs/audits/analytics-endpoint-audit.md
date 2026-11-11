@@ -8,8 +8,8 @@
 > Segment Intelligence, and Genie.
 
 **Date:** 2026-05-18
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com/analytics`
-**Active deployment validated after remediation:** `01f1545ead431d8ab6394c3f468d0638`
+**App:** `https://<app-host>/analytics`
+**Active deployment validated after remediation:** `<deployment-id>`
 
 ## Headline result
 
@@ -30,7 +30,7 @@ remediation status: all addressed.**
 
 ## Remediation validation — 2026-05-20
 
-**Active deployment validated:** `01f1545ead431d8ab6394c3f468d0638`
+**Active deployment validated:** `<deployment-id>`
 
 **Status:** All blocking audit findings addressed and independently
 revalidated. The strict Computer Use MCP walkthrough could not run because the
@@ -54,7 +54,7 @@ app with authenticated Databricks headers.
 
 - `./scripts/deploy.sh -t dev --no-confirm` — PASS; smoke suite passed.
 - `databricks apps get mip-app --profile DEFAULT -o json` — active deployment
-  `01f1545ead431d8ab6394c3f468d0638`, `SUCCEEDED`.
+  `<deployment-id>`, `SUCCEEDED`.
 - `npm --prefix frontend test -- --run` — 35 files / 209 tests passed.
 - `npm --prefix frontend run lint` — PASS.
 - `npm --prefix frontend run build` — PASS.
@@ -342,7 +342,7 @@ Cotality.
 
 Re-audited every remediation against the working tree (code) and against a
 fresh live Chrome walkthrough of deployment
-`01f1545ead431d8ab6394c3f468d0638`. The Computer Use MCP was unavailable, so
+`<deployment-id>`. The Computer Use MCP was unavailable, so
 this verification used the Claude-in-Chrome browser tools directly (same
 deployed app, authenticated session).
 
@@ -360,7 +360,7 @@ deployed app, authenticated session).
 | LOW 4 — state sort | State opportunity SQL now `ORDER BY in_the_money_borrowers DESC, mean_opportunity_score DESC`. | `databricks_analytics.py:132` |
 | LOW 5 — route title | `PageShell title="Analytics"`; "Portfolio command center" demoted to the descriptive lede. | `analytics.tsx:869-871` |
 
-### Live Chrome verification (deployment `01f1545ead431d8ab6394c3f468d0638`)
+### Live Chrome verification (deployment `<deployment-id>`)
 
 | Finding | Live observation |
 |---|---|
@@ -388,7 +388,7 @@ deployed app, authenticated session).
 ### Engineering validation relayed (not independently reproducible in sandbox)
 
 The signoff reports a full `./scripts/deploy.sh -t dev --no-confirm` (deploy
-`01f1545ead431d8ab6394c3f468d0638`, SUCCEEDED), `pytest -q tests/unit` PASS,
+`<deployment-id>`, SUCCEEDED), `pytest -q tests/unit` PASS,
 `ruff` PASS, frontend 35 files / 209 tests PASS, lint/build PASS, budget PASS
 (total JS 775 KiB under the 780 KiB ceiling), and a live API reconciliation
 (funnel drilldowns matched `X-Total-Matching`, `actioned=3`, Top-ZIP ITM min
@@ -430,7 +430,7 @@ Sign-off: ready to commit. Safe to demo.
 
 Re-audited the new analytics filter system end to end — code reads plus an
 exhaustive live Chrome filter exercise (the user flagged "playing with the
-filters" as extra important) against deployment `01f1547d9bce1e5081a41e2d9074d24d`.
+filters" as extra important) against deployment `<deployment-id>`.
 
 ### Filter security + code verification
 
@@ -503,7 +503,7 @@ Sign-off: ready to commit. Safe to demo — including live filter play.
 
 Re-audited the multi-select filter migration + keyboard accessibility + the
 adjacent CI-failure fixes, with an exhaustive live Chrome exercise against
-deployment `01f154a31e5b1db2aa46fbd9e4d1158f`.
+deployment `<deployment-id>`.
 
 ### Multi-select code verification
 

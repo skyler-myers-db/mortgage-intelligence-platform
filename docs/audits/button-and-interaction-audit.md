@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** Real-click coverage across every interactive element on every route, driven via Claude-in-Chrome MCP at the DOM level. Not a code review; a live behavioral pass.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14e37f0531430b5c48f9014be417c`
+**App:** `https://<app-host>`, deployment `<deployment-id>`
 **Method:** Claude-in-Chrome extension at 1440×900. Real DOM clicks, real form input, real keyboard. Screenshots before/after every action. State verified via API + lifecycle table on the side.
 **Scope:** Every interactive element enumerated via the page's accessibility tree on each of the 8 routes (Home / Lead Queue / Borrower 360 / Offer Orchestrator / Portfolio Builder / Segment Intelligence / Ask Genie / Admin). The persistent topbar (Search / Theme / Genie / Console) tested once and assumed consistent across routes.
 
@@ -238,7 +238,7 @@ Combined with the prior persona audits, button-level click coverage now matches 
 
 ## Sources
 
-- Live deployment `01f14e37f0531430b5c48f9014be417c`
+- Live deployment `<deployment-id>`
 - Claude-in-Chrome MCP at 1440×900
 - Real DOM clicks + `read_page` accessibility tree enumeration
 - 25 screenshots captured during the pass (not embedded; on request)

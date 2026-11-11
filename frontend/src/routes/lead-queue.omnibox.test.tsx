@@ -124,7 +124,7 @@ describe('the filter omnibox', () => {
     respond = () => new Promise<Response>((resolve) => {
       release = () => resolve(json({ total_matching: 1234 }));
     });
-    await mountAt('?borrower_ids=B-0123456789ABC&approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e&view=sales-ops');
+    await mountAt('?borrower_ids=B-0123456789ABC&approval_request_batch=5eed00a1-0000-4000-8000-0000000000a1&view=sales-ops');
     await openWithF();
     const status = document.querySelector<HTMLElement>('.lead-queue-omnibox__count')!;
     expect(status.getAttribute('role')).toBe('status');

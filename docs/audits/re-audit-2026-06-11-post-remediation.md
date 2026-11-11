@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.**
 > Adversarial verification of the 2026-06-11 remediation signoff: three parallel code/diff
 > audits over `99e55d6..6c9ae6f`, plus an independent live session (Chrome + Mac desktop,
-> authenticated) against https://mip-app-2543889327043640.aws.databricksapps.com.
+> authenticated) against `https://<app-host>`.
 > Companion to `full-stack-audit-2026-06-11.md` and `docs/modernization-todo.md`. No code modified.
 
 **Re-audit date:** 2026-06-11, ~12:15 PM EDT · **HEAD verified:** `6c9ae6f` (merge, 24 commits ahead of `origin/main` — **`git push` still pending, owner: Skyler**) · gold refreshed 2026-06-11T15:30Z (post-remediation refresh confirmed via live Genie freshness marker)

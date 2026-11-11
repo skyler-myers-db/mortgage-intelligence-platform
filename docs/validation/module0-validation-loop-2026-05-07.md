@@ -10,8 +10,8 @@ surface is user-visible.
 
 Current live app:
 
-- URL: `https://mip-app-2543889327043640.aws.databricksapps.com`
-- Active deployment after loop fixes: `01f14a5a205d17a9b27ade3d2e6e4a18`
+- URL: `https://<app-host>`
+- Active deployment after loop fixes: `<deployment-id>`
 - Databricks app update time after loop fixes: `2026-05-07T21:21:29Z`
 - Compute status after loop fixes: `ACTIVE`
 
@@ -65,8 +65,8 @@ databricks apps get mip-app --profile DEFAULT -o json
 
 TOKEN=$(databricks auth token --profile DEFAULT -o json | jq -r .access_token)
 E2E_LIVE=1 \
-MIP_APP_URL="https://mip-app-2543889327043640.aws.databricksapps.com" \
-MIP_API_URL="https://mip-app-2543889327043640.aws.databricksapps.com" \
+MIP_APP_URL="https://<app-host>" \
+MIP_API_URL="https://<app-host>" \
 MIP_BEARER_TOKEN="$TOKEN" \
 npm --prefix frontend run e2e:ci -- \
   tests/e2e/real_data.spec.ts \
@@ -103,7 +103,7 @@ Validation evidence:
   focused and broader pytest suites including Genie actions, geo rollups,
   audit/PII, Lakebase, SQL queries, and segment-count parity.
 - Deploy: direct DAB deploy + Databricks App snapshot
-  `01f14a5a205d17a9b27ade3d2e6e4a18`; Lakebase migrate; gold refresh; lifecycle
+  `<deployment-id>`; Lakebase migrate; gold refresh; lifecycle
   sync; Genie rebind; deployed smoke PASS.
 - Live Playwright: deployed URL run passed `79` tests with `1` intentional
   fault-injection skip across real-data, demo visual, accessibility, and

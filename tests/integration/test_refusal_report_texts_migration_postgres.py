@@ -33,12 +33,13 @@ from backend.services import genie_refusal_report as refusal_report
 from backend.services import genie_refusal_report_reads as reads
 from backend.services.genie_refusal_reason import refusal_report_hash
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _TEXTS_MARKER = "-- Genie refusal report texts (consented, 90 days, purge-only) ---"
 _TEXTS_VERSION = "2026_10_07_genie_refusal_report_texts"
 _NOTES_VERSION = "2026_10_07_disposition_notes_retired"

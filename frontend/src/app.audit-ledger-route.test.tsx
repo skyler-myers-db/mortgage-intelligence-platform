@@ -28,7 +28,7 @@ import { AdminRouteGate, AuditLedgerGate } from './app';
 
 const SETTLE_ATTEMPTS = 300;
 const TEST_TIMEOUT_MS = 15_000;
-const EVENT_ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const EVENT_ID = '5eed00a1-0000-4000-8000-0000000000a1';
 
 const ADMIN: SessionResponse = { can_access_admin: true, can_approve: true, can_read_audit: true };
 const AUDITOR: SessionResponse = { can_access_admin: false, can_approve: false, can_read_audit: true };

@@ -3,7 +3,7 @@
 > **Internal validation artifact — not approved for public release.** End-to-end review of how the Module 0 product would behave deployed for multiple mortgage lenders: lender identifier propagation, UC catalog tenancy, Lakebase row scoping, secret + Genie space tenancy, audit ledger isolation, and frontend lender-context handling.
 
 **Auditor:** Claude (Cowork)
-**App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, active deployment `01f15185868d1fa285ea9a3a4c94afd4` (RUNNING, ACTIVE).
+**App:** `https://<app-host>`, active deployment `<deployment-id>` (RUNNING, ACTIVE).
 **Method:** Mapped every `lender_id`/`lender_name`/`tenant_id`/`MIP_LENDER_NAME` reference across backend, frontend, SQL, and Lakebase. Inspected the `mip.ref.lender_dictionary` override mechanism, the `tenant_disclosures` table, the Genie space YAML, the HMAC action token, and `tools/render_sql.py`. Read `docs/runbook-multi-catalog.md` and `docs/multi-catalog-plan.md` for the documented tenancy story. Counted frontend `Summit Mortgage` literal references and mapped them to their source.
 
 ---
@@ -86,7 +86,7 @@ No shared secrets across deployments. The HMAC key is per-workspace, so a Genie 
 
 ### 5. Genie space tenancy
 
-`databricks.yml:69` pins a single `genie_space_id` (`01f13d4968af1b249dc388fd5b18b195`) for the dev target. A customer deploying for their own workspace would:
+`databricks.yml:69` pins a single `genie_space_id` (`<genie-space-id>`) for the dev target. A customer deploying for their own workspace would:
 1. Run `tools/databricks/provision_genie_space.py` (deploy.sh step 0a) to mint a new Genie space in their workspace.
 2. Bundle deploy reads their new space ID via `BUNDLE_VAR_genie_space_id` from `.env.local`.
 3. The app's `genie_space` resource binding wires their backend to the new space.
@@ -185,7 +185,7 @@ The product is **architecturally ready for multi-lender deployment** under the d
 - `jobs/fred_rates_ingest.py` — `MIP_DEFAULT_CATALOG`-aware default table
 - `docs/runbook-multi-catalog.md` — multi-catalog deploy flow (excellent)
 - `docs/multi-catalog-plan.md` — multi-catalog design doc (excellent)
-- Live deployment: `01f15185868d1fa285ea9a3a4c94afd4`
+- Live deployment: `<deployment-id>`
 
 ---
 

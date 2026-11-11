@@ -59,7 +59,7 @@ scrubbed so `context={"owner_name_hash": ...}` is caught.
 ## Sample JSON log line
 
 ```json
-{"ts":"2026-04-21T23:20:53.752476+00:00","level":"INFO","logger":"mip.databricks_sql","event":"warehouse_query_end","correlation_id":"a1b2c3d4e5f6789012345678abcdef01","dependency":"warehouse","duration_ms":142.73,"outcome":"ok","statement_hash":"4f8b2e1c9a7d3e55","rows_returned":127}
+{"ts":"2026-04-21T23:20:53.752476+00:00","level":"INFO","logger":"mip.databricks_sql","event":"warehouse_query_end","correlation_id":"a1b2c3d4e5f6789012345678abcdef01","dependency":"warehouse","duration_ms":142.73,"outcome":"ok","statement_hash":"<sql-hash>","rows_returned":127}
 ```
 
 ## Validation

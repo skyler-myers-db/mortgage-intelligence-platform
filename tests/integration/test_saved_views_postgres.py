@@ -29,12 +29,13 @@ from backend.services.saved_view_store import (
     SavedViewConflict,
 )
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _MARKER = "-- Saved Lead Queue views ---"
 ALICE = "alice.lo@summit.example"
 BOB = "bob.lo@summit.example"

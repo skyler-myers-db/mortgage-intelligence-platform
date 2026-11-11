@@ -50,8 +50,8 @@ GENIE_EXPORT_CLIENT = ROOT / "frontend" / "src" / "lib" / "apiClients" / "genieE
 
 ACTOR = "analyst@summit-mortgage.example"
 OTHER_ACTOR = "approver@summit-mortgage.example"
-CONVERSATION = "01f13d4968af1b249dc388fd5b18b195"
-MESSAGE = "01f13d4a0c3b1f2e9a7d5c6b4e3f2a10"
+CONVERSATION = "01f1c0de000000000000000000000001"
+MESSAGE = "01f1c0de000000000000000000000002"
 EXPECTED_METADATA_KEYS = {
     "conversation_id",
     "message_id",

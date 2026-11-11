@@ -452,7 +452,7 @@ def test_infer_gh_repo_preserves_dotted_repository_names(
     [
         "https://evilgithub.com/acme-bank/mortgage.intelligence-platform.git",
         "https://notgithub.com/github.com/acme-bank/mortgage.intelligence-platform.git",
-        "git@github.com.evil:acme-bank/mortgage.intelligence-platform.git",
+        "git@github.com.example:acme-bank/mortgage.intelligence-platform.git",
         "https://github.com/acme-bank/mortgage.intelligence-platform/tree/main",
     ],
 )

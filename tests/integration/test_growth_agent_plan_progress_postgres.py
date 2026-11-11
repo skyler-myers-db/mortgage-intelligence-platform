@@ -37,6 +37,7 @@ from backend.services.growth_agent_plan_progress import (
     read_plan_progress,
 )
 from jobs import lakebase_migrate
+from jobs.lakebase_migration_seed import render_seed_sql
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
@@ -45,7 +46,7 @@ pytestmark = pytest.mark.integration
 GROWTH_WATCHLISTS_VERSION = "2026_10_14_growth_watchlists"
 _MARKER = "-- Growth Agent watchlists (W5d) ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
-_SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_SEED = render_seed_sql(Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8"))
 _ACTOR = "lo@summit.example"
 _OTHER = "other@summit.example"
 _RATE_CRITERIA = (

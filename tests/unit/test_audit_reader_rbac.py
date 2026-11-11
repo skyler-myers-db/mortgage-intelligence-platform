@@ -588,7 +588,7 @@ def _metadata(**overrides: Any) -> dict[str, Any]:
 
 
 def test_the_reviewed_shape_passes_the_value_policy() -> None:
-    assert _metadata(read_audit_event_id="0f8fad5b-d9cb-469f-a165-70867728950e")["has_cursor"] is False
+    assert _metadata(read_audit_event_id="5eed00a1-0000-4000-8000-0000000000a1")["has_cursor"] is False
     for surface in LEDGER_SURFACES:
         assert _metadata(ledger_surface=surface)["ledger_surface"] == surface
 

@@ -11,10 +11,10 @@ from tools.databricks.supervisor_creation_audit import (
 )
 
 NOW = datetime(2026, 7, 25, 12, tzinfo=UTC)
-ACTOR = "d8c11669-c1f1-4be9-8ce7-be42c61ed626"
+ACTOR = "5eed00b8-0000-4000-8000-0000000000b8"
 MARKER = "[mip-supervisor-create:01234567-89ab-cdef-8123-456789abcdef]"
 INSTRUCTIONS = f"Governed Supervisor instructions. {MARKER}"
-SUPERVISOR_ID = "397b1e34-a182-497a-bbf9-e512254a9c9b"
+SUPERVISOR_ID = "5eed00b9-0000-4000-8000-0000000000b9"
 
 
 class _Statements:

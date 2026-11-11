@@ -198,7 +198,7 @@ been closed. This section holds the evidence.
 
 ### 2.1 Gate 1 — operator rebuild: CLOSED
 
-Bundle deployed to dev (`dbc-3aa503a9-4fa8`), every refresh job run,
+Bundle deployed to dev (`<workspace-host>`), every refresh job run,
 every table rebuilt from the post-Wave-2 SQL:
 
 | Job                          | Outcome                     | Duration |
@@ -223,12 +223,12 @@ Post-rebuild verification (live UC, this branch):
 Ran `python tools/databricks/provision_genie_space.py --profile DEFAULT`
 against the live workspace:
 
-- space_id `01f13d4968af1b249dc388fd5b18b195` verified
+- space_id `<genie-space-id>` verified
 - **10 trusted assets** registered (including new `mip.gold.lockin_cohort`)
 - **10 sample questions** loaded
 - hardened instructions pushed (scope + refusal templates + 5-step
   self-check per `genie/instructions.md`)
-- deep link: `https://dbc-3aa503a9-4fa8.cloud.databricks.com/genie/rooms/01f13d4968af1b249dc388fd5b18b195`
+- deep link: `https://<workspace-host>/genie/rooms/<genie-space-id>`
 
 ### 2.3 Gate 3 — Genie regression verdicts: CLOSED
 
