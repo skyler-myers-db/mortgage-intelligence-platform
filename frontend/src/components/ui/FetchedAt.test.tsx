@@ -34,6 +34,20 @@ describe('FetchedAt', () => {
     expect(time?.getAttribute('dateTime')).toBe(new Date(T0 - 3 * 60_000).toISOString());
   });
 
+  it('says "Fetched now" for a read that just landed, however late in its minute the view mounted', () => {
+    // PR #338 review: a first mount 50 s into a minute read "Fetched in 1m",
+    // then "Fetched in 2m" for a Refresh 40 s later.
+    vi.setSystemTime(T0 + 50_000);
+    const label = () => document.querySelector('.fetched-at__label')?.textContent;
+    act(() => root.render(<FetchedAt at={Date.now()} subject="ranked borrowers" isFetching={false} onRefresh={vi.fn()} />));
+    expect(label()).toBe('Fetched now');
+    act(() => {
+      vi.advanceTimersByTime(40_000);
+    });
+    act(() => root.render(<FetchedAt at={Date.now()} subject="ranked borrowers" isFetching={false} onRefresh={vi.fn()} />));
+    expect(label()).toBe('Fetched now');
+  });
+
   it('Refresh calls the query once per click', () => {
     const refresh = vi.fn();
     act(() => root.render(<FetchedAt at={T0} subject="ranked borrowers" isFetching={false} onRefresh={refresh} />));
