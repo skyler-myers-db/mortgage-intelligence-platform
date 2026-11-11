@@ -62,10 +62,18 @@ review.
   S0(b′)) is the one ack whose content the run cannot re-read: a deployer that
   is not a metastore admin is denied the App's metastore grants. The run
   recomputes its body from what it does read (the metastore's id and owner, the
-  App's id) for each date of the last 30 days and each reviewed privilege set,
-  and admits it only in `plan`, `adopt`, `unadopt` and `release`. So it binds
-  the owner's read on that date, not the grants at run time: a grant made
-  after it is the attestation's residual, bounded by the 30 days.
+  App's id) for each date the 30-day rule admits (the pre-stop probe judges
+  the run's end, every check after the lease its own moment) and each
+  reviewed privilege set, and admits it only in `plan`, `adopt`, `unadopt`
+  and `release`. Every field but the privilege set is one the deployer reads
+  itself, and that set has two reviewed values, so anyone with the
+  deployer's reads can compute a digest the run accepts without the owner
+  reading anything. Under `single_maintainer_audited` it is therefore the
+  dispatcher's unauthenticated assertion, dated and bound to this metastore,
+  its owner and this App, that the App holds only reviewed metastore
+  privileges; it proves no owner read until the deferred owner hardware-key
+  attestation (M1-PR5) lands. A grant made after it is its residual, bounded
+  by the 30 days.
 - **The human-run tools.** `bootstrap_account` and `github_environment` refuse
   under CI or without a terminal, open a fresh interactive login every run,
   and apply only the exact plan digest the operator reviewed

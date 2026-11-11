@@ -28,12 +28,22 @@ assignment is summed, never filtered by principal.
   deployer recomputes that body from what it reads itself (the metastore's id
   and owner, the App) for every date the age rule admits and every privilege
   set the converger accepts; the ack must equal one exactly, or the run
-  refuses. A date is admitted while the run's end (now plus the 24-hour
-  ``RUN_MARGIN``) is at most 30 days after the start of that UTC day, the
-  estate inventory's rule (tools/databricks/estate/inventory.py). The deployer
-  cannot re-read the privileges, so the ack stands for the owner's read on
-  that date; a grant made after it is the attestation's residual, bounded by
-  the 30 days;
+  refuses. A date is admitted while the judged moment is at most 30 days
+  after the start of that UTC day. As in the estate inventory
+  (tools/databricks/estate/inventory.py), only the check before the lease
+  adds the margin: the pre-stop probe judges the run's end (now plus the
+  24-hour ``RUN_MARGIN``), so an ack it admits cannot expire before the run's
+  last converger, and the converger and the ``--check`` judge their own
+  moment (``margin`` 0). ``last_run_start`` is the last start the probe
+  admits. The deployer cannot re-read the privileges, and every field of the
+  body but the privilege set is one it reads itself while that set has two
+  reviewed values, so a deployer can compute an accepted digest without the
+  owner: under ``single_maintainer_audited`` the ack is the dispatcher's
+  unauthenticated assertion, dated and bound to this metastore, its owner and
+  this App, that the App holds only reviewed metastore privileges. It proves
+  no owner read until the deferred owner hardware-key attestation (M1-PR5)
+  lands. A grant made after it is the attestation's residual, bounded by the
+  30 days;
 * a 403 on the live read, a missing or non-matching ack, or an owner the
   summary does not return: each is a value-free ``MetastoreAuthorityUnproven``
   refusal, never an empty set.
@@ -71,7 +81,8 @@ ACK_ENV = "MIP_ACK_METASTORE_APP_GRANTS"
 # grant every principal receives (spike S0(b′) measured exactly this set).
 SAFE_METASTORE_PRIVILEGES = frozenset({"USE_MARKETPLACE_ASSETS"})
 MAX_AGE = timedelta(days=30)
-# The reviewed bound on one deploy run (estate.inventory.RUN_MARGIN).
+# The reviewed bound on one deploy run (estate.inventory.RUN_MARGIN): only the
+# pre-stop probe adds it, so no converger after the lease sees the ack expire.
 RUN_MARGIN = timedelta(hours=24)
 LIVE_ROUTE = "a live read as a metastore admin"
 ATTESTED_ROUTE = "the metastore owner's attestation"
@@ -126,10 +137,14 @@ def attestation_digest(**fields: Any) -> str:
     return hashlib.sha256(_DOMAIN + b"\0" + canonical_json(body).encode("ascii")).hexdigest()
 
 
-def admissible_dates(now: datetime) -> list[date]:
-    """Every UTC attestation date a run starting at ``now`` accepts, newest first."""
+def admissible_dates(now: datetime, *, margin: timedelta = timedelta(0)) -> list[date]:
+    """Every UTC attestation date admitted at ``now + margin``, newest first.
 
-    end = now.astimezone(UTC) + RUN_MARGIN
+    The pre-stop probe passes ``RUN_MARGIN`` (the run's end); every check after
+    the lease judges its own moment with the default 0.
+    """
+
+    end = now.astimezone(UTC) + margin
     today = now.astimezone(UTC).date()
     dates: list[date] = []
     for back in range(MAX_AGE.days + 1):
@@ -141,7 +156,10 @@ def admissible_dates(now: datetime) -> list[date]:
 
 
 def last_run_start(attested_on: date) -> datetime:
-    """The latest moment a run may start and still accept an attestation of ``attested_on``."""
+    """The latest moment a run's pre-stop probe admits an attestation of ``attested_on``.
+
+    Its converger, judging its own moment, admits the same ack for ``RUN_MARGIN`` more.
+    """
 
     return datetime.combine(attested_on, time.min, UTC) + MAX_AGE - RUN_MARGIN
 
@@ -162,6 +180,7 @@ def attested_privileges(
     metastore_owner: str,
     app_application_id: str,
     now: datetime,
+    margin: timedelta = timedelta(0),
 ) -> frozenset[str]:
     """The privilege set the owner attested, when ``ack`` is exactly one admitted attestation."""
 
@@ -169,7 +188,7 @@ def attested_privileges(
         raise MetastoreAuthorityUnproven(
             f"{ACK_ENV} must be the 64-lowercase-hex sha256 the owner's attestation printed"
         )
-    for day in admissible_dates(now):
+    for day in admissible_dates(now, margin=margin):
         for privileges in _accepted_sets():
             candidate = attestation_digest(
                 metastore_id=metastore_id,
@@ -196,11 +215,14 @@ def app_metastore_privileges(
     effective: EffectiveReader,
     environ: Mapping[str, str] | None = None,
     now: datetime | None = None,
+    margin: timedelta = timedelta(0),
 ) -> AppMetastorePrivileges:
     """The App's effective metastore privileges, read live by an admin or attested by the owner.
 
     ``metastore`` is ``uc_metastore_read.current_metastore``'s summary;
-    ``effective`` is the converger's ``_effective_privileges``.
+    ``effective`` is the converger's ``_effective_privileges``. ``margin``
+    judges an attestation's age at ``now + margin``: only the pre-stop probe
+    passes ``RUN_MARGIN``.
     """
 
     env = os.environ if environ is None else environ
@@ -220,6 +242,7 @@ def app_metastore_privileges(
             metastore_owner=owner,
             app_application_id=principal,
             now=now or datetime.now(UTC),
+            margin=margin,
         )
     if not deployer_is_metastore_admin(workspace, metastore):
         if attested is None:

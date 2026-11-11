@@ -2737,13 +2737,28 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
     id. The digest covers this purpose, the metastore's id, its owner, the
     App's application id, the privilege set and the date. The run recomputes
     that body from what it reads itself (the metastore's id and owner, the App)
-    for every date whose day starts at most 30 days before the run's end (now
-    plus its 24-hour margin, the estate inventory's rule) and every reviewed
-    set, and refuses unless the ack equals one exactly. It cannot re-read the
+    for every admitted date and every reviewed set, and refuses unless the ack
+    equals one exactly. A date is admitted while the judged moment is at most
+    30 days after that UTC day starts. As with the estate inventory, only the
+    check before the lease adds the 24-hour run margin: the pre-stop probe
+    judges the run's end, so the last run start the owner's command prints
+    (29 days after the day starts) is the last one its probe admits, and an
+    ack it admits cannot expire before the run's last converger; the
+    converger (step 0a's treatment quiesce, step 4b, the EXIT trap's restore)
+    and the read-only `--check` judge their own moment. It cannot re-read the
     privileges, so a grant made after the attestation is its residual, bounded
     by the 30 days: take it again for a run outside that window, after a grant
     change, or for a new App. An ack given to an admin deployer is verified as
     well, and the live set must equal the attested one.
+  - **What the ack proves.** Every field of its body but the privilege set is
+    one the deployer reads itself, and that set has two reviewed values (none,
+    or `USE_MARKETPLACE_ASSETS`), so anyone with the deployer's reads can
+    compute a digest the run accepts without the owner reading anything. Under
+    `single_maintainer_audited` it is the dispatcher's unauthenticated
+    assertion, dated and bound to this metastore, its owner and this App, that
+    the App holds only reviewed metastore privileges. It proves no owner read
+    until the deferred owner hardware-key attestation (M1-PR5) lands
+    (docs/clients/review-modes.md).
 
   Every path that runs the converger reads it: the release's grants step, the
   signed-blue proof's treatment quiesce, the release lifecycle, a first
@@ -2752,9 +2767,17 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   REFUSED: metastore_authority: the deploying identity is not a metastore
   admin ...`), before the lease; adopt-live refuses `treatment_unverified`
   with the same text. A first install has no App to attest before its first
-  release creates one, so a non-admin deployer's first release refuses at its
-  treatment converger, after the lease and with no blue to protect, until the
-  owner attests the new App and the next release carries the ack.
+  release creates one. With `--phase release` (every `deploy-dev.yml`
+  release), that release stops with exit 3 right after creating the App
+  (`awaiting owner bootstrap --post-first-install`, "First install: awaiting
+  owner bootstrap"), before any App-identity proof or converger, and keeps
+  the App. The owner then runs `--post-first-install` and attests the kept App
+  (`python -m tools.databricks.metastore_app_grants --app-name <app-name>`);
+  the resumed release carries `metastore_app_grants=<sha256>`, and without it
+  its pre-stop probe refuses `metastore_authority` before the lease. A run
+  with no `--phase` has no exit-3 stop: nothing before its lease can judge an
+  App that does not exist yet, so a non-admin deployer's unphased first
+  install refuses after the lease, with no blue to protect.
 
 The deploy controls, resolved like the others (shell export, then `.env.local`):
 

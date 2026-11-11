@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from databricks.sdk.errors import PermissionDenied
+from databricks.sdk.errors import InternalError, PermissionDenied
 
 from tests.fixtures.prestop_estate import (
     APP_CLIENT,
@@ -41,6 +41,7 @@ from tools.databricks.campaign_treatment_access_check import check_campaign_trea
 from tools.databricks.converge_campaign_treatment_access import (
     converge_campaign_treatment_access as converge,
 )
+from tools.databricks.estate import inventory as estate_inventory
 from tools.databricks.prestop_refusals import METASTORE_AUTHORITY, OWNER_POLICY
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
@@ -108,15 +109,22 @@ def test_the_digest_binds_every_field_and_its_purpose() -> None:
 
 
 def test_the_age_rule_is_the_estate_inventorys_judged_at_the_runs_end() -> None:
-    dates = grants.admissible_dates(NOW)
+    # The pre-stop probe's rule: the run's end, now plus the run's margin.
+    dates = grants.admissible_dates(NOW, margin=grants.RUN_MARGIN)
     assert dates[0] == NOW.date() and len(dates) == 29
     assert dates[-1] == NOW.date() - timedelta(days=28)
     # Exactly at the last start the rule admits, and one second after.
     day = date(2026, 10, 1)
     last = grants.last_run_start(day)
     assert last == datetime(2026, 10, 30, tzinfo=UTC)
-    assert day in grants.admissible_dates(last)
-    assert day not in grants.admissible_dates(last + timedelta(seconds=1))
+    assert day in grants.admissible_dates(last, margin=grants.RUN_MARGIN)
+    assert day not in grants.admissible_dates(last + timedelta(seconds=1), margin=grants.RUN_MARGIN)
+    # Every check after the lease judges its own moment (the estate inventory's
+    # post-stop load, margin 0): the same day stays admitted to the run's end.
+    assert grants.RUN_MARGIN == estate_inventory.RUN_MARGIN
+    assert len(grants.admissible_dates(NOW)) == 30
+    assert day in grants.admissible_dates(last + grants.RUN_MARGIN)
+    assert day not in grants.admissible_dates(last + grants.RUN_MARGIN + timedelta(seconds=1))
 
 
 @pytest.mark.parametrize("privileges", [frozenset(), frozenset({"USE_MARKETPLACE_ASSETS"})])
@@ -145,6 +153,34 @@ def test_an_exact_attestation_of_a_reviewed_set_is_accepted(privileges: frozense
     ids=["another-metastore", "another-owner", "another-app", "forbidden-set", "too-old", "future", "other-purpose"],
 )
 def test_any_other_attestation_refuses(ack: str) -> None:
+    # Judged as the pre-stop probe judges it, at the run's end.
+    with pytest.raises(grants.MetastoreAuthorityUnproven, match="attests no reviewed privilege set") as refused:
+        grants.attested_privileges(
+            ack=ack,
+            metastore_id=METASTORE,
+            metastore_owner=GROUP,
+            app_application_id=APP,
+            now=NOW,
+            margin=grants.RUN_MARGIN,
+        )
+    _value_free(str(refused.value))
+
+
+@pytest.mark.parametrize(
+    "ack",
+    [
+        _ack(metastore_id="metastore-2", day=NOW.date()),
+        _ack(owner="someone-else", day=NOW.date()),
+        _ack(app="another-app", day=NOW.date()),
+        _ack(privileges=frozenset({"USE_MARKETPLACE_ASSETS", "CREATE_CATALOG"}), day=NOW.date()),
+        _ack(day=NOW.date() - timedelta(days=30)),
+        _ack(day=NOW.date() + timedelta(days=1)),
+        dispatch_acks.profile_ack("acme", "a" * 64),
+    ],
+    ids=["another-metastore", "another-owner", "another-app", "forbidden-set", "too-old", "future", "other-purpose"],
+)
+def test_any_other_attestation_refuses_after_the_lease_too(ack: str) -> None:
+    # The converger's own moment (margin 0) admits more dates, never another body.
     with pytest.raises(grants.MetastoreAuthorityUnproven, match="attests no reviewed privilege set") as refused:
         grants.attested_privileges(
             ack=ack, metastore_id=METASTORE, metastore_owner=GROUP, app_application_id=APP, now=NOW
@@ -406,6 +442,100 @@ def test_the_prestop_probe_refuses_forbidden_privileges_and_a_denied_read() -> N
     )
     assert [refusal.code for refusal in refusals] == [METASTORE_AUTHORITY]
     assert "never an empty set" in refusals[0].message
+
+
+@pytest.mark.parametrize(
+    "unreadable",
+    ["sdk-error", "repeated-page-token", "empty-privilege"],
+)
+def test_a_metastore_grant_list_the_probe_cannot_read_refuses_before_the_stop(unreadable: str) -> None:
+    # The pre-stop probe's catch-all: an admin deployer's read that fails other
+    # than PERMISSION_DENIED refuses, by class only, while the App still serves;
+    # the converger would raise the same error after the lease.
+    estate = _group_owned_estate(deployer_in_group=True)
+    workspace = FakeWorkspace(estate)
+    reads: list[str | None] = []
+
+    def failing(_securable_type: str, _full_name: str, **kwargs: Any) -> object:
+        reads.append(kwargs.get("page_token"))
+        if unreadable == "sdk-error":
+            raise InternalError(f"boom: the effective grants of {APP_CLIENT} on {METASTORE} by {DEPLOYER}")
+        entry = SimpleNamespace(privilege="" if unreadable == "empty-privilege" else "USE_MARKETPLACE_ASSETS")
+        assignment = SimpleNamespace(principal="account users", privileges=[entry])
+        return SimpleNamespace(privilege_assignments=[assignment], next_page_token="page-2")
+
+    workspace.grants.get_effective = failing
+    refusals, notes = probe.owner_policy_refusals(
+        workspace,
+        app_client_id=APP_CLIENT,
+        catalog="mip",
+        approved_owner_principals=("mip-data-owners",),
+        app_groups=frozenset({"users"}),
+        metastore_owner="metastore-admins",
+        account_factory=lambda: FakeAccount(estate),
+    )
+
+    assert [refusal.code for refusal in refusals] == [METASTORE_AUTHORITY], notes
+    message = refusals[0].message
+    expected = "InternalError" if unreadable == "sdk-error" else "RuntimeError"
+    assert f"the App's metastore privileges could not be read before step 0a ({expected})" in message
+    assert "rather than read an unreadable grant list as empty" in message
+    for text in ("boom", "pagination", "empty privilege"):
+        assert text not in message, (text, message)
+    _value_free(message)
+    assert reads, "the live read was asked"
+    # The control: the same admin deployer with a readable list passes.
+    refusals, _notes, _workspace = _prestop(_group_owned_estate(deployer_in_group=True), metastore_owner="metastore-admins")
+    assert refusals == []
+
+
+def _freeze(monkeypatch: pytest.MonkeyPatch, moment: datetime) -> None:
+    """The proof's clock reads ``moment``: what each surface judges when it runs."""
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            return moment.astimezone(tz or UTC)
+
+    monkeypatch.setattr(grants, "datetime", _Clock)
+
+
+def test_an_ack_the_prestop_probe_admits_outlives_the_run_after_the_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the pre-stop probe adds the run's margin (the estate inventory's
+    # pre-lease rule). An ack it admits must still be admitted by the same
+    # run's treatment converger and --check after the lease (step 0a's quiesce,
+    # step 4b, the EXIT trap's restore), or the refusal moves past the App stop.
+    day = date(2026, 11, 1)
+    last = grants.last_run_start(day)
+    assert last == datetime(2026, 11, 30, tzinfo=UTC)
+
+    monkeypatch.setenv(grants.ACK_ENV, _ack(owner="metastore-admins", app=APP_CLIENT, day=day))
+    _freeze(monkeypatch, last - timedelta(minutes=1))
+    refusals, notes, _workspace = _prestop(_group_owned_estate(deployer_in_group=False), metastore_owner="metastore-admins")
+    assert refusals == []
+    assert notes[-1] == f"the App holds no metastore privilege outside the reviewed set ({grants.ATTESTED_ROUTE})"
+    # One second past the printed last start, the run refuses before its lease.
+    _freeze(monkeypatch, last + timedelta(seconds=1))
+    refusals, _notes, _workspace = _prestop(_group_owned_estate(deployer_in_group=False), metastore_owner="metastore-admins")
+    assert [refusal.code for refusal in refusals] == [METASTORE_AUTHORITY]
+    assert "attests no reviewed privilege set" in refusals[0].message
+    _value_free(refusals[0].message)
+
+    monkeypatch.setenv(grants.ACK_ENV, _ack(day=day))
+    for moment in (last + timedelta(minutes=30), last + timedelta(hours=23, minutes=59), last + grants.RUN_MARGIN):
+        _freeze(monkeypatch, moment)
+        workspace, execution, recorded = _converger_workspace(admin=False)
+        assert _converge(workspace) and execution.table_actions == ["SELECT"], moment
+        assert _metastore_reads(recorded) == []
+        workspace, execution, _recorded = _converger_workspace(admin=False)
+        execution.direct.update(catalog={"USE_CATALOG"}, schema={"USE_SCHEMA"}, table={"SELECT"})
+        assert check_campaign_treatment_access(catalog="mip", principal=APP, mode="quiesce", workspace=workspace) == []
+    # Past the run's margin the 30 days are over at use as well.
+    _freeze(monkeypatch, last + grants.RUN_MARGIN + timedelta(seconds=1))
+    workspace, execution, _recorded = _converger_workspace(admin=False)
+    with pytest.raises(grants.MetastoreAuthorityUnproven, match="attests no reviewed privilege set"):
+        _converge(workspace)
+    assert execution.statements == []
 
 
 def test_one_owner_less_summary_refuses_the_same_way_pre_stop_and_post_stop() -> None:

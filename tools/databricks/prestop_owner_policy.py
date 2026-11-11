@@ -51,6 +51,7 @@ from tools.databricks.converge_campaign_treatment_access import (
     _object_presence,
 )
 from tools.databricks.metastore_app_grants import (
+    RUN_MARGIN,
     SAFE_METASTORE_PRIVILEGES,
     MetastoreAuthorityUnproven,
     app_metastore_privileges,
@@ -234,11 +235,20 @@ def _remedy(label: str, item: object) -> str:
 def metastore_authority_refusals(
     workspace: Any, *, metastore: object, app_client_id: str
 ) -> tuple[list[PrestopRefusal], list[str]]:
-    """What the converger's metastore proof would refuse after step 0a, judged now."""
+    """What the converger's metastore proof would refuse after step 0a.
+
+    An attestation's age is judged at the run's end (``RUN_MARGIN``), the
+    estate inventory's pre-lease rule: one admitted here outlives every
+    converger after the lease, which judges its own moment.
+    """
 
     try:
         proof = AUTHORITY(
-            workspace, metastore=metastore, principal=app_client_id, effective=_effective_privileges
+            workspace,
+            metastore=metastore,
+            principal=app_client_id,
+            effective=_effective_privileges,
+            margin=RUN_MARGIN,
         )
     except MetastoreAuthorityUnproven as exc:
         return [PrestopRefusal(METASTORE_AUTHORITY, f"{exc}. {_METASTORE_AUTHORITY_REMEDY}")], []
