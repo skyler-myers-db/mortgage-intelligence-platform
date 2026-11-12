@@ -282,6 +282,7 @@ RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
         "tools.clients.archive_legacy_root", roots=_stop, workspace_factory=_stop
     ),
     "tools.clients.estate_inventory": _parse_only("tools.clients.estate_inventory"),
+    "tools.clients.genie_pin_review": _injected("tools.clients.genie_pin_review", workspace_factory=_stop),
     "tools.databricks.estate.cli": _estate,
     "tools.databricks.app_deployment_lease": _parse_only("tools.databricks.app_deployment_lease"),
     "tools.databricks.quiesce_window": _injected("tools.databricks.quiesce_window", workspace_factory=_stop),
@@ -513,7 +514,12 @@ def test_the_parse_check_refuses_a_flag_the_tool_lacks(private_dir: Path, monkey
         'PGPASSWORD="$(databricks database generate-database-credential --json \'{"instance_names":["<lakebase-instance>"],"no_such_field":"x"}\' -p <owner-profile> -o json | jq -r .token)" psql -h <read-write-dns>',
         "./scripts/deploy.sh -t client --phase release",
         "./scripts/deploy.sh -t client --phase plan --dry-run --no-such-flag",
-        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=adopt_live=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        # operation_acks the carrier refuses (B2/B4/B6 admitted adopt_live in adopt, so these replace that control).
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=unadopt -f owner_attestation=<profile-ack> -f operation_acks=adopt_live=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=quiesce_window=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=supersedes_deployment=yes -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=data -f owner_attestation=<profile-ack> -f operation_acks=genie_pin=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=zyrplax=<sha256> -f acknowledge_single_maintainer_break_glass=true",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f acknowledge_single_maintainer_break_glass=true",
         "gh secret set MIP_CLIENT --env <client>-validate",
