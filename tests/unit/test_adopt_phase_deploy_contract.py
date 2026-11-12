@@ -338,6 +338,35 @@ def test_the_adopt_phase_dry_run_plans_in_place_of_the_gate_and_stops_before_the
 
 
 @pytest.mark.parametrize("phase", ("adopt", "unadopt"))
+def test_the_adopt_phase_dry_run_reads_and_hands_on_no_warehouse(tmp_path: Path, phase: str) -> None:
+    """B1: the adopt phases run no SQL, so they take no warehouse, not even an ambient export.
+
+    The ``.env.local`` is CI's shape (no DATABRICKS_WAREHOUSE_ID: it is no
+    profile field), and the shell exports one the run must never pass on.
+    """
+
+    checkout, env, log = sandbox(tmp_path)
+    values = paychex_shaped_profile(MIP_SCHEDULED_REFRESH="off", MIP_SCHEDULED_REFRESH_RECIPIENTS=None)
+    (checkout / ".env.local").write_text(env_file_text(values), encoding="utf-8")
+    ambient = "ambient-warehouse-1"
+
+    acks = {"MIP_ADOPT_PLAN_ACK": ACK, "MIP_ACK_ADOPT_LIVE": ACK, "MIP_ACK_UNADOPT": ACK}
+    result = _deploy(
+        checkout,
+        {**env, **acks, "DATABRICKS_WAREHOUSE_ID": ambient},
+        "-t", "client", "--phase", phase, "--dry-run", "--no-confirm",
+    )  # fmt: skip
+
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    assert log.read_text(encoding="utf-8").splitlines() == ["--version"], "no Databricks call"
+    out = ANSI.sub("", result.stdout)
+    assert f"  sql warehouse: none (--phase {phase} runs no SQL)\n" in out
+    assert out.rstrip().endswith(f"[deploy] {phase} dry run complete: stopped before the lease; nothing was changed.")
+    assert [command for command in planned_commands(result.stdout) if "warehouse" in command.lower()] == []
+    assert ambient not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("phase", ("adopt", "unadopt"))
 def test_a_live_adopt_phase_outside_github_actions_is_refused_before_any_call(tmp_path: Path, phase: str) -> None:
     checkout, env, log = sandbox(tmp_path)
 

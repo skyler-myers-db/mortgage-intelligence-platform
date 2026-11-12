@@ -146,6 +146,7 @@ def release(
     agentic_env_cache: str | None = None,
     flags: tuple[str, ...] | None = None,
     env: dict[str, str] | None = None,
+    operator_warehouse: str | None = "warehouse-1",
 ) -> Release:
     """``scripts/deploy.sh -t client --no-confirm`` with DRY_RUN=0, in the sandbox, with only ``client_ids``.
 
@@ -154,6 +155,9 @@ def release(
     ``flags`` replaces the default ``--skip-silver`` (and ``--skip-smoke``
     unless ``smoke``), and ``env`` adds names after the profile's are stripped
     (``GITHUB_ACTIONS=true`` for a live ``--phase``, which is CI-only).
+    ``operator_warehouse`` is the ``.env.local``'s DATABRICKS_WAREHOUSE_ID, a
+    local operator's first-install bootstrap warehouse; ``None`` writes no such
+    line, as CI's ``.env.local`` never carries one (B1).
     """
 
     checkout, base_env, cli_log = sandbox(tmp_path)
@@ -168,7 +172,13 @@ def release(
     # and it accepts no shared-estate exposure (M2-PR4).
     estate_facts = {"MIP_UC_METASTORE_OWNER": SANDBOX_DEPLOYER, "MIP_ACCEPTED_EXPOSURE_JSON": "[]"}
     (checkout / ".env.local").write_text(
-        env_file_text({**profile, **estate_facts, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}),
+        env_file_text(
+            {
+                **profile,
+                **estate_facts,
+                **({} if operator_warehouse is None else {"DATABRICKS_WAREHOUSE_ID": operator_warehouse}),
+            }
+        ),
         encoding="utf-8",
     )
     fixtures = checkout / "tests" / "fixtures"

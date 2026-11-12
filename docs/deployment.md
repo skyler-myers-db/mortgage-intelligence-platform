@@ -1041,7 +1041,15 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    bundle apply creates its own (the deploy switches to that one right after
    the apply), and refuses when it names another warehouse than the state
    binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
-   resource uses the bundle's own warehouse.
+   resource uses the bundle's own warehouse. The adopt and unadopt phases
+   run no SQL, so the preflight reads no warehouse for them (B1): no bundle
+   state read, no warehouse resolved, `DATABRICKS_WAREHOUSE_ID` unset for
+   every later step (an ambient export included), and the log line
+   `sql warehouse: none (--phase adopt runs no SQL)`. An adopt phase that
+   ever ran on past its exit would stop on that empty warehouse: under the
+   lease at `the preflight resolved no SQL warehouse`, in a dry run at step
+   0a's `no SQL warehouse was resolved`
+   (tests/unit/test_adopt_phases_read_no_warehouse.py).
    `deploy-dev.yml` runs one client environment's phase per manual dispatch
    (M1-PR7), and `nightly.yml` validates one client per dispatch (M1-PR8,
    "Live validation per client"). The command of record is the governed
@@ -3566,8 +3574,11 @@ adopt mode, so an adopt or unadopt dispatch carries the `genie_pin` and
 (deploy-dev.yml)" below). Until a signed record names the governed Genie space, the
 adopt phases' bundle plan, binds and summary still refuse an unpinned space
 (`no pin names the governed Genie space yet`, bundle_env), whatever
-`genie_pin` says: the cutover runbook's B4(c), a follow-up. They run with
-the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
+`genie_pin` says: the cutover runbook's B4(c), a follow-up. They read
+no SQL warehouse (neither phase runs SQL, so an install whose deployer state
+binds none yet, which is every install before its adoption, passes the
+warehouse preflight: `sql warehouse: none (--phase adopt runs no SQL)`), and
+they run with the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
 or `--phase unadopt` accepts an App the deployer's state does not bind, and its
 unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound
 state an unproven undo can leave, legacy keys bound without the App, must
@@ -3711,15 +3722,30 @@ is exactly converged, read-only, in the runtime or the quiesce mode
 resolves in the checkout and is an ancestor of main, where main is
 `refs/remotes/origin/main`, never the run's own HEAD, and the run's source
 commit is itself on that main (`health_unreadable`, `main_unresolved`,
-`source_not_on_main`, `health_sha_not_on_main`; a CI checkout needs the full
-history and origin/main fetched), so a run from a branch whose HEAD carries an
+`source_not_on_main`, `health_sha_not_on_main`; `deploy-dev.yml`'s adopt phase
+checks out main's full history and no other branch or tag, a local run needs a
+full clone with origin/main fetched, and a shallow checkout refuses, saying
+so), so a run from a branch whose HEAD carries an
 unmerged commit refuses; the full-tree digest of the deployment's source folder (every file,
 `app.yaml` and `frontend/dist` included) equals that of its `/src/` snapshot
 (`tree_drift`); `app.yaml` is byte-equal to the repo's at the health sha
 (`app_yaml_differs`); and every other file outside `frontend/dist` is the App
 runtime closure git tracks at that sha (`closure_differs`). A folder staged by
 an older closure definition therefore refuses, and the remedy is a fresh
-emergency deploy of a current commit before the adoption. `frontend/dist` is
+emergency deploy of a current commit before the adoption. A deployment whose
+`MIP_GIT_SHA` names a commit main does not hold at the adopt dispatch (a
+commit of a side or unmerged branch, or of a branch later squash- or
+rebase-merged) refuses `health_sha_not_on_main` by design: in CI with `the
+health sha resolves to no single commit in this checkout's history of main`,
+in a full clone that holds the branch with `the health sha is not an ancestor
+of main`. So does every live deployment after a rewrite of main's history,
+which gives every commit a new sha. The remedy is an emergency redeploy of a
+main commit, then a fresh start and adopt, never a relaxation. A branch commit
+main later merges with a merge commit becomes an ancestor of main and is
+admitted, even one that was never main's tip, so adopt-live is no backstop
+against an emergency ship from a branch: the cutover runbook's history rule
+keeps one out before the adoption (docs/clients/first-client-cutover.md,
+"Decisions taken"). `frontend/dist` is
 compared with a dist adopt-live builds itself from the health sha when
 `MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
 that sha into a private temporary tree, then `npm ci --ignore-scripts` and
@@ -5305,7 +5331,15 @@ key.
   `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, and its first step turns that into
-  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. It re-hashes
+  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout
+  depth is the phase's too: `adopt` fetches main's full history (`fetch-depth`
+  2147483647, git's infinite depth: the run's commit pinned at
+  `refs/remotes/origin/main`, unshallow, and no other branch or tag), because
+  adopt-live resolves the live App's health sha in it ("Signing the live
+  deployment as an adopted blue"); every other phase reads only the run's
+  commit and checks out at depth 1. Never depth 0: it fetches every branch and
+  tag, prints each name in the public log, and a tag named like a short sha
+  shadows that commit. It re-hashes
   the artifact against the build job's
   manifest digest, and checks its staged App source against its own checkout
   of the commit, before it installs anything, installs with
@@ -5767,6 +5801,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    A first install's bootstrap warehouse (`DATABRICKS_WAREHOUSE_ID`) is no
    client profile field, so `deploy-dev.yml` carries none and a first install
    through CI refuses at the preflight until that field exists (a follow-up).
+   Adopting an existing install needs none: the adopt phases read no
+   warehouse, and the plan and release after the bind take the adopted one
+   from the deployer's bundle state.
    (`GENIE_SPACE_ID` is no deploy input since M1-PR3; since M1-PR8
    `nightly.yml` reads the App's Genie space from the App itself.)
 5. Set no repository-level profile name. Every profile name lives in the
