@@ -10,6 +10,7 @@ ack is given. Both ways of S8 are pinned here.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -182,7 +183,9 @@ def test_each_ack_is_purpose_named_and_never_satisfies_another() -> None:
 
 
 def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> None:
-    hexes = {name: f"{index:x}" * 64 for index, name in enumerate(sorted(acks.OPERATION_ACKS), 1)}
+    # One distinct 64-hex value per purpose, however many purposes the map holds.
+    hexes = {name: hashlib.sha256(name.encode("utf-8")).hexdigest() for name in acks.OPERATION_ACKS}
+    assert len(set(hexes.values())) == len(hexes) and all(len(value) == 64 for value in hexes.values())
     assert acks.operation_exports(f"adopt_plan={hexes['adopt_plan']}", "adopt") == {"MIP_ADOPT_PLAN_ACK": hexes["adopt_plan"]}
     assert acks.operation_exports(
         f"quiesce_window={hexes['quiesce_window']}, genie_pin={hexes['genie_pin']}", "release"
@@ -207,9 +210,56 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
         "MIP_ACK_ACCEPTED_EXPOSURE_PLAN",
         "MIP_ACK_DATA_LEDGER_SUPERSEDE",
         "MIP_ACK_DATA_LEDGER_RERUN",
+        # adopt-live's purpose acks and the supersede selector (B2).
+        "MIP_ACK_ADOPT_LIVE",
+        "MIP_ACK_SUPERSEDE",
+        "MIP_ACK_UNADOPT",
+        "MIP_ADOPT_LIVE_SUPERSEDE",
         # tools/databricks/metastore_app_grants.py (spike S0(b′)).
         "MIP_ACK_METASTORE_APP_GRANTS",
     }
+    # ...and each has its reader where the run looks for it (a literal snippet per env).
+    for env, (path, snippet) in READERS.items():
+        assert snippet in (REPO_ROOT / path).read_text(encoding="utf-8"), (env, path, snippet)
+    assert set(READERS) == {ack.env for ack in acks.OPERATION_ACKS.values()}
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_ADOPT_LIB = "scripts/lib/deploy_adopt_phase_lifecycle.sh"
+READERS = {
+    "MIP_ADOPT_PLAN_ACK": (_ADOPT_LIB, '[[ -z "${MIP_ADOPT_PLAN_ACK:-}" ]] || ack_args=(--ack-plan "$MIP_ADOPT_PLAN_ACK")'),
+    "MIP_ACK_ADOPT_LIVE": (_ADOPT_LIB, 'ADOPT_LIVE_ACK_ENV="MIP_ACK_ADOPT_LIVE"'),
+    "MIP_ACK_SUPERSEDE": (_ADOPT_LIB, 'ADOPT_LIVE_ACK_ENV="MIP_ACK_SUPERSEDE"'),
+    "MIP_ACK_UNADOPT": (_ADOPT_LIB, 'ADOPT_LIVE_ACK_ENV="MIP_ACK_UNADOPT"'),
+    "MIP_ADOPT_LIVE_SUPERSEDE": (_ADOPT_LIB, '--supersede "$MIP_ADOPT_LIVE_SUPERSEDE"'),
+    "MIP_ACK_QUIESCE_WINDOW": ("tools/databricks/quiesce_window_plan.py", 'ACK_ENV = "MIP_ACK_QUIESCE_WINDOW"'),
+    "MIP_ACK_DATABASE_INSTANCE_UPDATE": (
+        "tools/databricks/bundle_plan_instance_ack.py",
+        'ACK_ENV = "MIP_ACK_DATABASE_INSTANCE_UPDATE"',
+    ),
+    "MIP_GENIE_PIN_ACK": ("scripts/lib/deploy_step_preflight_gates.sh", 'GENIE_PIN_ACK_ARGS=(--ack-plan "$MIP_GENIE_PIN_ACK")'),
+    "MIP_ACK_ACCEPTED_EXPOSURE_PLAN": (
+        "tools/databricks/estate/accepted_exposure.py",
+        'ACK_ENV = "MIP_ACK_ACCEPTED_EXPOSURE_PLAN"',
+    ),
+    "MIP_ACK_DATA_LEDGER_SUPERSEDE": ("tools/databricks/job_phase_runner.py", 'ACK_SUPERSEDE_ENV = "MIP_ACK_DATA_LEDGER_SUPERSEDE"'),
+    "MIP_ACK_DATA_LEDGER_RERUN": ("tools/databricks/job_phase_runner.py", 'ACK_RERUN_ENV = "MIP_ACK_DATA_LEDGER_RERUN"'),
+    "MIP_ACK_METASTORE_APP_GRANTS": ("tools/databricks/metastore_app_grants.py", 'ACK_ENV = "MIP_ACK_METASTORE_APP_GRANTS"'),
+}
+
+
+def test_the_adopt_phases_reach_the_genie_pin_and_exposure_readers_they_carry_acks_for() -> None:
+    """B4: the pin check has no phase guard, and the probes take the adopt phases' own mode."""
+
+    gates = (REPO_ROOT / "scripts/lib/deploy_step_preflight_gates.sh").read_text(encoding="utf-8")
+    start = gates.index("# >>> genie space pin: check >>>")
+    pin_check = gates[start : gates.index("# <<< genie space pin: check <<<", start)]
+    assert "provision_genie_space --plan-pin" in pin_check and "DEPLOY_PHASE" not in pin_check
+    probes = (REPO_ROOT / "scripts/lib/deploy_step_automation_identities.sh").read_text(encoding="utf-8")
+    assert '_PRESTOP_PHASE_ARGS=(--phase "$DEPLOY_PHASE")' in probes
+    prestop = (REPO_ROOT / "tools/databricks/deploy_prestop_probes.py").read_text(encoding="utf-8")
+    assert 'GENIE_PIN_ACK_ENV = "MIP_GENIE_PIN_ACK"' in prestop
+    assert "genie_pin_ack=os.environ.get(GENIE_PIN_ACK_ENV" in prestop
 
 
 # Pinned literally: the module's own set never parametrizes a test of itself.
@@ -400,6 +450,43 @@ def test_the_cli_writes_exports_only_on_a_pass_and_never_prints_a_value(
     # data never reads the quiesce-window ack: refused, nothing exported.
     assert preflight.main(["--phase", "data", *argv[2:]], environ=environ) == 2
     assert not github_env.exists(), "a refused dispatch exports nothing"
+
+
+def test_an_adopt_dispatch_exports_its_acks_for_the_deploy_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Cutover 10B's acked dispatch (B2, B4): four exports, sorted, and no value printed."""
+
+    monkeypatch.setattr(protections, "from_environ", lambda env: _FROM_ENVIRON(env, opener=_opener(READABLE)))
+    vars_source, secrets_source = _contexts(tmp_path)
+    github_env, summary = tmp_path / "github.env", tmp_path / "summary.md"
+    argv = [
+        "--phase", "adopt", "--environment", CLIENT, "--vars-json", vars_source, "--secrets-json", secrets_source,
+        "--repo", str(_repo(tmp_path)), "--github-env", str(github_env), "--step-summary", str(summary),
+    ]
+    values = {name: hashlib.sha256(name.encode("utf-8")).hexdigest() for name in ("pin", "exposure", "bind", "live")}
+    text = (
+        f"genie_pin={values['pin']} accepted_exposure_plan={values['exposure']} "
+        f"adopt_plan={values['bind']} adopt_live={values['live']}"
+    )
+    environ = {**ENVIRON, **_profile_ack(), "MIP_DISPATCH_OPERATION_ACKS": text}
+
+    assert preflight.main(argv, environ=environ) == 0
+    assert github_env.read_text(encoding="utf-8").splitlines() == [
+        f"MIP_ACK_ACCEPTED_EXPOSURE_PLAN={values['exposure']}",
+        f"MIP_ACK_ADOPT_LIVE={values['live']}",
+        f"MIP_ADOPT_PLAN_ACK={values['bind']}",
+        f"MIP_GENIE_PIN_ACK={values['pin']}",
+    ]
+    out = capsys.readouterr()
+    printed = out.out + out.err + summary.read_text(encoding="utf-8")
+    assert not [value for value in values.values() if value in printed], "names only, never a digest"
+    assert "operation acks: MIP_ACK_ACCEPTED_EXPOSURE_PLAN, MIP_ACK_ADOPT_LIVE, MIP_ADOPT_PLAN_ACK, MIP_GENIE_PIN_ACK" in printed
+    github_env.unlink()
+    # The same text in unadopt: adopt_live is adopt's ack, so nothing is exported.
+    assert preflight.main(["--phase", "unadopt", *argv[2:]], environ=environ) == 2
+    assert not github_env.exists(), "a refused dispatch exports nothing"
+    assert "adopt_live is never read by --phase unadopt" in capsys.readouterr().out
 
 
 def test_inside_actions_the_only_lines_that_hold_a_value_are_runner_mask_commands(

@@ -232,6 +232,29 @@ def test_an_adopted_record_for_another_deployment_refuses_adoption(world: World)
     assert _refusal(world) == "record_present"
 
 
+def test_the_record_present_refusal_names_the_supersede_selector_as_a_digest(world: World) -> None:
+    """B2: the dispatch's supersedes_deployment value, a sha256, never the deployment id."""
+
+    world.apply()
+    world.redeploy("deployment-green")
+    with pytest.raises(AdoptLiveRefused) as refused:
+        adopt_live.compute_plan(world, "adopt", world.target(), world.readers())
+
+    message = str(refused.value)
+    selector = sha256_text("deployment-blue")
+    assert f"operation_acks supersedes_deployment={selector}" in message
+    assert "deployment-blue" not in message and "deployment-green" not in message
+    assert "--supersede" in message, "the local route is still named"
+
+
+def test_a_captured_record_names_no_supersede_selector(world: World) -> None:
+    contract.save_versioned_record(world, scope=rr.SCOPE, record=rr.v6_record())
+    with pytest.raises(AdoptLiveRefused) as refused:
+        adopt_live.compute_plan(world, "adopt", world.target(), world.readers())
+
+    assert "supersedes_deployment" not in str(refused.value), "only an adopted record is superseded"
+
+
 def test_a_re_run_on_the_same_deployment_is_idempotent(world: World) -> None:
     first = world.apply()
     puts = len(world.secrets.puts)
@@ -388,6 +411,29 @@ def test_unadopt_with_no_record_retires_nothing_so_the_unbind_recovery_still_run
     assert _plan(world, "unadopt", tier=tier) == {"mode": "unadopt", "record_state": "absent"}
     assert world.apply("unadopt", tier=tier) is None
     assert world.secrets.puts == [] and world.record() is None
+
+
+def test_unadopt_reads_no_health_sha_and_no_git_so_a_depth_1_checkout_is_enough(
+    world: World,
+) -> None:
+    """deploy-dev.yml checks out main's full history for --phase adopt only (B5).
+
+    unadopt reads no health sha and runs no git, so its depth-1 checkout is enough.
+    """
+
+    world.apply()
+
+    def unread() -> str:
+        raise AssertionError("unadopt read the App's health sha")
+
+    no_history = world.readers(
+        health_sha=unread, repo=world.repo / "no-checkout", main_ref="refs/remotes/origin/main"
+    )
+    plan, facts, _record = adopt_live.compute_plan(world, "unadopt", world.target(), no_history)
+
+    assert plan["record_state"] == "adopted" and facts is None
+    assert world.apply("unadopt", readers=no_history)["provenance"] == "retired"
+    assert world.apps.mutations == []
 
 
 def test_an_agentic_tier_unadopt_retires_a_core_adoption_but_never_adopts(world: World) -> None:

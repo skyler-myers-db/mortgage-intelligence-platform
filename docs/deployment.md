@@ -706,10 +706,14 @@ databricks apps start <app-name> -p <owner-profile>
   start makes a new deployment, which is still not the record's, so it
   restores service, never the record. The record's governed exit is an
   adopt-live supersede onto the live deployment (`--phase adopt` with
-  `MIP_ADOPT_LIVE_SUPERSEDE` and its `MIP_ACK_SUPERSEDE` ack), and on `main` no
-  `deploy-dev.yml` input carries either
+  `MIP_ADOPT_LIVE_SUPERSEDE` and its `MIP_ACK_SUPERSEDE` ack). Through
+  `deploy-dev.yml` both ride `operation_acks`: the selector
+  `supersedes_deployment=<sha256>` (the drift remedy prints it, a digest of the
+  record's deployment id) and `supersede=<sha256>` beside the bind's
+  `adopt_plan=<sha256>`, after a read-only dispatch with the selector alone
+  printed both digests
   ([docs/clients/first-client-cutover.md](clients/first-client-cutover.md),
-  blocker B2).
+  10B, "Supersede").
 
 ## App Python dependencies: the deps-digest line
 
@@ -1046,7 +1050,15 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    bundle apply creates its own (the deploy switches to that one right after
    the apply), and refuses when it names another warehouse than the state
    binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
-   resource uses the bundle's own warehouse.
+   resource uses the bundle's own warehouse. The adopt and unadopt phases
+   run no SQL, so the preflight reads no warehouse for them (B1): no bundle
+   state read, no warehouse resolved, `DATABRICKS_WAREHOUSE_ID` unset for
+   every later step (an ambient export included), and the log line
+   `sql warehouse: none (--phase adopt runs no SQL)`. An adopt phase that
+   ever ran on past its exit would stop on that empty warehouse: under the
+   lease at `the preflight resolved no SQL warehouse`, in a dry run at step
+   0a's `no SQL warehouse was resolved`
+   (tests/unit/test_adopt_phases_read_no_warehouse.py).
    `deploy-dev.yml` runs one client environment's phase per manual dispatch
    (M1-PR7), and `nightly.yml` validates one client per dispatch (M1-PR8,
    "Live validation per client"). The command of record is the governed
@@ -2328,7 +2340,13 @@ emergency recipe gates on.
    no creator; the creator is among them), the deploying identity and the
    plan's sha256. Review it, then run with `MIP_GENIE_PIN_ACK=<sha256>` exported
    in the shell (never `.env.local`). Step 0a recomputes the plan immediately
-   before it pins and refuses with nothing changed if the digest moved.
+   before it pins and refuses with nothing changed if the digest moved. In CI
+   the plan's id, holders and deployer are runner masks, so the owner reviews
+   it with `tools.clients.genie_pin_review` (read-only, counts and one digest
+   only): it recomputes the plan's sha256 from the profile's
+   `MIP_IDENTITY_IDS_JSON.deployer`, which must equal the CI log's, and counts
+   the grantees the pre-stop owner-equivalent probe would refuse on that space
+   (the cutover runbook's 10B-0).
 4. **More than one.** Refused as ambiguous.
 
 The preflight runs the same resolution read-only
@@ -3083,7 +3101,11 @@ only for a **window reason** the read-only plan predicted
 
 The plan runs after each bundle plan gate: before the lease (`pre-lease`, so
 `--phase plan` prints it) and again under the lease right before the non-App
-apply (`pre-apply`, the time-of-check recheck). Its private report is written
+apply (`pre-apply`, the time-of-check recheck). A plan dispatch may carry the
+window's ack (`operation_acks` `quiesce_window=<sha256>`, read only by that
+read-only pre-lease plan): the first plan refuses `window_unacked` and prints
+the window's sha256, and the plan re-run with it completes, so it reaches the
+active deployment's digest and the PlanReport. Its private report is written
 mode 0600 and its public line carries codes, booleans, counts and digests
 only. A window opens only when `MIP_ACK_QUIESCE_WINDOW` equals the plan's
 sha256 at both positions; that sha256 covers the reasons, blue's deployment,
@@ -3289,7 +3311,13 @@ sum are in the window's canonical body, so `MIP_ACK_QUIESCE_WINDOW` covers
 them; a plan with no reason has no budget, and its body and digest are M0-PR8's.
 The admission itself depends on the clock and is never in the digest: the plan
 prints it (`admission <state>: <n> s left, <m> s required`) before the lease
-and again under it, refusing `window_budget_refused`, and `quiesce_window open`
+and again under it, refusing `window_budget_refused`. `--phase plan` forecasts
+it instead (`--admission-forecast release`, pre-lease only): judged against a
+release dispatched now, `quiesce_window_budget.RELEASE_JOB_SECONDS` (the
+release job's 330 minutes), since the plan job's own 30 minutes admit no window
+(each needs about an hour) and a plan opens none (`open` takes a pre-apply
+plan only); the line reads `admission (forecast for a release dispatched now)
+<state>`, and the release decides it again against its own deadline. `quiesce_window open`
 decides it again before its dead-man submit and once more after the arm,
 right before the journal write and the stop. A missing,
 unparseable, past or more than six hours away deadline refuses (fail closed). A
@@ -3620,7 +3648,17 @@ run time; they are never committed. The profile then requires
 `MIP_DASHBOARD_PARENT_PATH` inside the legacy root (see the dashboards below).
 
 **The run.** Both phases run the same read-only steps as `--phase plan`, with
-the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
+the step-0 Genie pin check (no phase guard) and the pre-stop probes in their
+adopt mode, so an adopt or unadopt dispatch carries the `genie_pin` and
+`accepted_exposure_plan` acks those read (`operation_acks`; see "CI deploy
+(deploy-dev.yml)" below). Until a signed record names the governed Genie space, the
+adopt phases' bundle plan, binds and summary still refuse an unpinned space
+(`no pin names the governed Genie space yet`, bundle_env), whatever
+`genie_pin` says: the cutover runbook's B4(c), a follow-up. They read
+no SQL warehouse (neither phase runs SQL, so an install whose deployer state
+binds none yet, which is every install before its adoption, passes the
+warehouse preflight: `sql warehouse: none (--phase adopt runs no SQL)`), and
+they run with the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
 or `--phase unadopt` accepts an App the deployer's state does not bind, and its
 unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound
 state an unproven undo can leave, legacy keys bound without the App, must
@@ -3764,15 +3802,30 @@ is exactly converged, read-only, in the runtime or the quiesce mode
 resolves in the checkout and is an ancestor of main, where main is
 `refs/remotes/origin/main`, never the run's own HEAD, and the run's source
 commit is itself on that main (`health_unreadable`, `main_unresolved`,
-`source_not_on_main`, `health_sha_not_on_main`; a CI checkout needs the full
-history and origin/main fetched), so a run from a branch whose HEAD carries an
+`source_not_on_main`, `health_sha_not_on_main`; `deploy-dev.yml`'s adopt phase
+checks out main's full history and no other branch or tag, a local run needs a
+full clone with origin/main fetched, and a shallow checkout refuses, saying
+so), so a run from a branch whose HEAD carries an
 unmerged commit refuses; the full-tree digest of the deployment's source folder (every file,
 `app.yaml` and `frontend/dist` included) equals that of its `/src/` snapshot
 (`tree_drift`); `app.yaml` is byte-equal to the repo's at the health sha
 (`app_yaml_differs`); and every other file outside `frontend/dist` is the App
 runtime closure git tracks at that sha (`closure_differs`). A folder staged by
 an older closure definition therefore refuses, and the remedy is a fresh
-emergency deploy of a current commit before the adoption. `frontend/dist` is
+emergency deploy of a current commit before the adoption. A deployment whose
+`MIP_GIT_SHA` names a commit main does not hold at the adopt dispatch (a
+commit of a side or unmerged branch, or of a branch later squash- or
+rebase-merged) refuses `health_sha_not_on_main` by design: in CI with `the
+health sha resolves to no single commit in this checkout's history of main`,
+in a full clone that holds the branch with `the health sha is not an ancestor
+of main`. So does every live deployment after a rewrite of main's history,
+which gives every commit a new sha. The remedy is an emergency redeploy of a
+main commit, then a fresh start and adopt, never a relaxation. A branch commit
+main later merges with a merge commit becomes an ancestor of main and is
+admitted, even one that was never main's tip, so adopt-live is no backstop
+against an emergency ship from a branch: the cutover runbook's history rule
+keeps one out before the adoption (docs/clients/first-client-cutover.md,
+"Decisions taken"). `frontend/dist` is
 compared with a dist adopt-live builds itself from the health sha when
 `MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
 that sha into a private temporary tree, then `npm ci --ignore-scripts` and
@@ -3814,7 +3867,15 @@ adopt.
 `single_maintainer_audited`), so each mode prints the sha256 of its plan's
 purpose-named canonical body (`tools/databricks/operation_ack.py`):
 `MIP_ACK_ADOPT_LIVE`, `MIP_ACK_SUPERSEDE` or `MIP_ACK_UNADOPT`, a one-run shell
-export and never a `.env.local` line. The bind's `MIP_ADOPT_PLAN_ACK` without
+export and never a `.env.local` line. Through `deploy-dev.yml` each is an
+`operation_acks` pair: `adopt_live=<sha256>` (phase adopt),
+`supersede=<sha256>` with the selector `supersedes_deployment=<sha256 of the
+adopted record's deployment id>` (phase adopt; the selector alone runs the
+read-only supersede plan, which prints the supersede ack), and
+`unadopt=<sha256>` (phase unadopt), beside the bind's `adopt_plan=<sha256>`.
+`record_present` over this install's own adopted record of another
+deployment, and the pre-stop probe's `rollback_record_drift` remedy, print the
+selector's value (a digest, never the id). The bind's `MIP_ADOPT_PLAN_ACK` without
 it refuses before the lease. The body names its purpose, so an ack for one
 purpose never satisfies another, and whenever the slot holds a record the plan
 names that exact signed version's sha256 (`record_sha256`), so an ack covers
@@ -5343,7 +5404,15 @@ key.
   `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, and its first step turns that into
-  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. It re-hashes
+  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout
+  depth is the phase's too: `adopt` fetches main's full history (`fetch-depth`
+  2147483647, git's infinite depth: the run's commit pinned at
+  `refs/remotes/origin/main`, unshallow, and no other branch or tag), because
+  adopt-live resolves the live App's health sha in it ("Signing the live
+  deployment as an adopted blue"); every other phase reads only the run's
+  commit and checks out at depth 1. Never depth 0: it fetches every branch and
+  tag, prints each name in the public log, and a tag named like a short sha
+  shadows that commit. It re-hashes
   the artifact against the build job's
   manifest digest, and checks its staged App source against its own checkout
   of the commit, before it installs anything, installs with
@@ -5403,11 +5472,26 @@ satisfies another:
 - `owner_attestation` must be the exact `profile` ack (purpose, client and
   profile digest) for every mutating phase; a plan prints it;
 - `operation_acks` carries `purpose=<sha256>` pairs from a closed map
-  (`adopt_plan`, `quiesce_window`, `database_instance_update`, `genie_pin`,
-  `accepted_exposure_plan`, `data_ledger_supersede`, `data_ledger_rerun`,
-  `metastore_app_grants`),
-  each admitted only in the phases whose run reads it and exported for this
-  job under the name its own tool recomputes it from;
+  (`tools/clients/dispatch_acks.OPERATION_ACKS`), each admitted only in the
+  phases whose run reads it and exported for this job under the name its own
+  tool recomputes it from: `adopt_plan` (adopt, unadopt), `adopt_live` and
+  `supersede` (adopt), `unadopt` (unadopt), `quiesce_window` (plan, release;
+  a plan reads it at its pre-lease window plan), `database_instance_update`
+  (plan, release), `genie_pin` and `accepted_exposure_plan` (plan, release,
+  adopt, unadopt; never data, which never pins and skips the probes),
+  `data_ledger_supersede` and `data_ledger_rerun` (data),
+  `metastore_app_grants` (plan, adopt, unadopt, release; never data, whose
+  run never reads it: "Metastore authority"), and the one
+  selector, `supersedes_deployment` (adopt): the sha256 of the adopted
+  record's deployment id that picks adopt-live's supersede mode, exported as
+  `MIP_ADOPT_LIVE_SUPERSEDE`. A selector is a digest, never a switch (`yes`,
+  `true` or `1` fail the entry shape). Every value is 64 lowercase hex, each
+  purpose at most once, and a refusal names purposes and phases, never a
+  value. The carrier pairs no entries: half an adoption (the bind's
+  `adopt_plan` without adopt-live's own ack, which the read-only adopt run
+  printed beside it) refuses one layer later, in `run_adopt_live_plan`,
+  still before the lease, and a selector that names no adopted record
+  refuses in adopt-live (`supersede_mismatch`);
 - the environment's protection rules are read with the job's token and must
   be the review mode's (the maintainer as the one required reviewer,
   `can_admins_bypass=false`, a branch policy of exactly `{main}`). Spike S8 is
@@ -5789,6 +5873,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    A first install's bootstrap warehouse (`DATABRICKS_WAREHOUSE_ID`) is no
    client profile field, so `deploy-dev.yml` carries none and a first install
    through CI refuses at the preflight until that field exists (a follow-up).
+   Adopting an existing install needs none: the adopt phases read no
+   warehouse, and the plan and release after the bind take the adopted one
+   from the deployer's bundle state.
    (`GENIE_SPACE_ID` is no deploy input since M1-PR3; since M1-PR8
    `nightly.yml` reads the App's Genie space from the App itself.)
 5. Set no repository-level profile name. Every profile name lives in the

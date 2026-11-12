@@ -20,7 +20,8 @@
    ``refs/remotes/origin/main``), never the run's own HEAD, and the run's
    source commit is itself on that main: a run from a branch whose HEAD
    carries an unmerged commit refuses rather than adopt a deployment built
-   from it.
+   from it. deploy-dev.yml's adopt phase checks out main's full history and
+   no other branch (B5); a shallow checkout refuses, and says so.
 7. ``tree_drift``: the full-tree digest of the deployment's source folder,
    every file with ``app.yaml`` and ``frontend/dist``, equals that of the
    deployment's own ``/src/`` snapshot (what the App runs).
@@ -76,6 +77,11 @@ from tools.databricks.metastore_app_grants import MetastoreAuthorityUnproven
 
 TREATMENT_ORDER = ("runtime", "quiesce")
 REPO = Path(__file__).resolve().parents[2]
+_SHALLOW = (
+    "this checkout is shallow, so the health sha cannot be resolved or proven an ancestor of "
+    "main: run adopt-live from a full clone (deploy-dev.yml's adopt phase checks out main's "
+    "full history)"
+)
 
 
 class AdoptLiveRefused(RuntimeError):
@@ -221,6 +227,13 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _not_on_main(repo: Path, message: str) -> AdoptLiveRefused:
+    """``health_sha_not_on_main``, whose text names shallow history when that is the cause (B5)."""
+
+    shallow = _git(repo, "rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+    return AdoptLiveRefused("health_sha_not_on_main", _SHALLOW if shallow else message)
+
+
 def _resolved_main(readers: Readers) -> str:
     """The commit ``main_ref`` names; the run's source commit must already be on it."""
 
@@ -263,14 +276,12 @@ def resolved_health_sha(readers: Readers) -> str:
     resolved = _git(readers.repo, "rev-parse", "--verify", "--quiet", f"{reported}^{{commit}}")
     sha = resolved.stdout.strip()
     if resolved.returncode != 0 or len(sha) != 40 or not sha.startswith(reported):
-        raise AdoptLiveRefused(
-            "health_sha_not_on_main",
-            "the health sha resolves to no single commit in this checkout (fetch full history)",
+        raise _not_on_main(
+            readers.repo,
+            "the health sha resolves to no single commit in this checkout's history of main",
         )
     if _git(readers.repo, "merge-base", "--is-ancestor", sha, main).returncode != 0:
-        raise AdoptLiveRefused(
-            "health_sha_not_on_main", "the health sha is not an ancestor of main"
-        )
+        raise _not_on_main(readers.repo, "the health sha is not an ancestor of main")
     return sha
 
 
