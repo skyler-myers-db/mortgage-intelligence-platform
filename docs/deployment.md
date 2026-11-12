@@ -2731,8 +2731,10 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   2026-11-11 as a non-admin service principal, it is HTTP 403
   `PERMISSION_DENIED`, and the same read without `principal` answers HTTP 200
   with only the caller's own view (1 assignment against the owner's 13). So no
-  read is ever unfiltered (every metastore grant read names its principal,
-  pinned by the same test), every returned assignment is summed (a principal
+  read is ever unfiltered (every metastore grant read names its principal, in
+  `tools/` and in every script, workflow and job, whether an SDK call, a CLI
+  command or a REST path; pinned by the same test, with positive controls),
+  every returned assignment is summed (a principal
   filter returns the grants that reach it through a group, under the group's
   name), and one proof (`tools/databricks/metastore_app_grants.py`) serves the
   converger, its read-only `--check` (adopt-live's `treatment_unverified`

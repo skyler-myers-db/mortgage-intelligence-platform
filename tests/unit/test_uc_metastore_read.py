@@ -10,10 +10,18 @@ install checks share. The ratchets below pin what docs/deployment.md
   modules that are owner-run or expect the call to be denied;
 * no script, workflow or job does it either (inline Python and YAML
   included), by method, CLI command or REST path;
-* every Unity Catalog grants read under ``tools/`` names its principal,
+* every Unity Catalog grants read under ``tools/`` and in the Python of
+  ``scripts/``, ``.github/workflows/`` and ``jobs/`` names its principal,
   except the owner-equivalent probe's direct-grant listing, which reads only
   the governed catalog and its schemas, never the metastore (spike S0(b′):
-  an unfiltered metastore read answers a non-admin with only its own view);
+  an unfiltered metastore read answers a non-admin with only its own view).
+  That exemption is one call site (module, method, enclosing function),
+  whose callers pass ``"catalog"`` or ``"schema"`` and nothing else;
+* no script, workflow or job reads the metastore's grants without naming a
+  principal either, by CLI command (``grants get`` / ``get-effective``), REST
+  path (``/unity-catalog/permissions/metastore/`` and its ``effective-``
+  twin) or SDK call. ``--principal`` or ``principal=`` must be in the read's
+  own command, never in a later pipe stage;
 * ``_effective_privileges`` sums every returned assignment: a principal
   filter returns the grants that reach it through its groups, whose
   assignment names the group (spike S0(b′)), so filtering by principal would
@@ -45,8 +53,11 @@ GET_ALLOWED = {
     "tools/databricks/verify_verifier_identity_boundary.py",
 }
 # The owner-equivalent probe lists every direct grantee of the governed catalog
-# and of each of its schemas (never the metastore): unfiltered by design.
-UNFILTERED_GRANTS_ALLOWED = {("tools/databricks/prestop_owner_equivalent.py", "get")}
+# and of each of its schemas (never the metastore): unfiltered by design. The
+# exemption is that one call site (module, method, enclosing function), never
+# the module: a second unfiltered read beside it is one too many.
+OWNER_EQUIVALENT = "tools/databricks/prestop_owner_equivalent.py"
+UNFILTERED_GRANTS_ALLOWED = [(OWNER_EQUIVALENT, "get", "_uc_grants")]
 DEPLOYER_READERS = (
     "tools/databricks/prestop_owner_policy.py",
     "tools/databricks/prestop_owner_equivalent.py",
@@ -56,6 +67,25 @@ DEPLOYER_READERS = (
 )
 TEXT_DIRS = ("scripts", ".github/workflows", "jobs")
 TEXT_PATTERN = re.compile(r"metastores\s*\.\s*get\s*\(|metastores\s+get\b|/unity-catalog/metastores/")
+# Spike S0(b′): a metastore grants read, as a script, workflow or job spells it.
+_CLI_FLAGS = r"(?:\s+--?[\w-]+(?:=\S+|\s+(?!--?[\w-])\S+)??)*?"
+METASTORE_GRANTS_PATTERN = re.compile(
+    "|".join(
+        (
+            # CLI: `grants get` / `grants get-effective`, flags or not before the securable.
+            r"\bgrants\s+get(?:-effective)?" + _CLI_FLAGS + r"""\s+["']?metastore["']?(?![\w./-])""",
+            # REST: the direct and the effective permissions paths.
+            r"/unity-catalog/(?:effective-)?permissions/metastore/",
+            # SDK, inline or in a job: the securable as a string or an enum member.
+            r"\bgrants\s*\.\s*get(?:_effective)?\s*\(.*?\bmetastore\b",
+        )
+    ),
+    re.IGNORECASE,
+)
+# `--principal <p>` or `principal=<p>`; an empty value, `None` and a comparison name no one.
+NAMES_PRINCIPAL = re.compile(r"""--principal(?:=|\s+)["']?[^\s"'-]|\bprincipal=(?!=|None\b)["']?[^\s"'&)]""")
+# A pipe stage or a list item is another command: its `principal=` filters after the read.
+_COMMAND_END = re.compile(r"\|\||&&|[|;]")
 
 
 def _workspace(*, current: object = "metastore-1", summary: object = None, me: object = None) -> object:
@@ -320,57 +350,276 @@ def _text_hits_under(root: Path) -> list[str]:
     ]
 
 
-def _grants_calls(tree: ast.AST) -> list[tuple[str, int, bool]]:
-    """Every ``<x>.grants.get`` / ``get_effective`` call: (method, line, names its principal)."""
+def _enclosing_functions(tree: ast.AST) -> dict[int, str]:
+    """``id(node)`` -> the innermost named function that holds it (absent at module level)."""
+
+    owner: dict[int, str] = {}
+    # ast.walk is breadth-first, so an inner function overwrites its outer one.
+    for function in ast.walk(tree):
+        if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+            for node in ast.walk(function):
+                owner[id(node)] = function.name
+    return owner
+
+
+def _names_a_principal(call: ast.Call) -> bool:
+    principal = next((kw.value for kw in call.keywords if kw.arg == "principal"), None)
+    return principal is not None and not (isinstance(principal, ast.Constant) and principal.value is None)
+
+
+def _is_grants_read(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "get_effective"}
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "grants"
+    )
+
+
+def _grants_calls(tree: ast.AST) -> list[tuple[str, int, bool, str]]:
+    """Every ``<x>.grants.get`` / ``get_effective`` call: (method, line, names its principal, function)."""
+
+    owner = _enclosing_functions(tree)
+    return sorted(
+        (node.func.attr, node.lineno, _names_a_principal(node), owner.get(id(node), "<module>"))
+        for node in ast.walk(tree)
+        if _is_grants_read(node)
+    )
+
+
+def _is_metastore_securable(node: ast.AST | None) -> bool:
+    """The string in any case, an enum member (``SecurableType.METASTORE``) or its subscript."""
+
+    if isinstance(node, ast.Subscript):
+        node = node.slice
+    if isinstance(node, ast.Constant):
+        return str(node.value).lower() == "metastore"
+    return isinstance(node, ast.Attribute) and node.attr == "METASTORE"
+
+
+def _metastore_reads(tree: ast.AST) -> list[tuple[int, bool]]:
+    """Every call whose securable is the metastore: (line, names its principal)."""
 
     found = []
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in {"get", "get_effective"}
-            and isinstance(node.func.value, ast.Attribute)
-            and node.func.value.attr == "grants"
-        ):
-            principal = next((kw.value for kw in node.keywords if kw.arg == "principal"), None)
-            names = principal is not None and not (isinstance(principal, ast.Constant) and principal.value is None)
-            found.append((node.func.attr, node.lineno, names))
-    return found
+        if not isinstance(node, ast.Call):
+            continue
+        securable = next((kw.value for kw in node.keywords if kw.arg == "securable_type"), None)
+        if securable is None and node.args:
+            securable = node.args[0]
+        if _is_metastore_securable(securable):
+            found.append((node.lineno, _names_a_principal(node)))
+    return sorted(found)
+
+
+def _python_modules() -> list[Path]:
+    """What the S0(b′) ratchets parse: ``tools/`` and the Python under the text directories."""
+
+    return sorted({*_tool_modules(), *(path for path in _text_files() if path.suffix == ".py")})
+
+
+def _parsed(path: Path) -> ast.AST:
+    return ast.parse(path.read_text(encoding="utf-8"), str(path))
+
+
+def test_the_grants_matchers_see_every_shape_they_claim() -> None:
+    # Positive control on synthetic source: an enum member, a keyword securable,
+    # `principal=None` and a multi-line call are each seen for what they are.
+    source = (
+        "def listing(workspace):\n"
+        "    return workspace.grants.get(SecurableType.METASTORE, metastore_id)\n"
+        "def filtered(workspace):\n"
+        "    return workspace.grants.get_effective('metastore', metastore_id, principal=app)\n"
+        "workspace.grants.get('METASTORE', metastore_id, principal=None)\n"
+        "workspace.grants.get_effective(\n    securable_type=SecurableType['METASTORE'],\n    full_name=metastore_id,\n)\n"
+        "workspace.grants.get('catalog', name)\n"
+        "class Probe:\n"
+        "    def read(self):\n"
+        "        def inner():\n"
+        "            return self.workspace.grants.get(kind, name)\n"
+        "        return inner()\n"
+    )
+    tree = ast.parse(source)
+    assert _grants_calls(tree) == [
+        ("get", 2, False, "listing"),
+        ("get", 5, False, "<module>"),
+        ("get", 10, False, "<module>"),
+        ("get", 14, False, "inner"),
+        ("get_effective", 4, True, "filtered"),
+        ("get_effective", 6, False, "<module>"),
+    ]
+    assert _metastore_reads(tree) == [(2, False), (4, True), (5, False), (6, False)]
 
 
 def test_every_grants_read_names_its_principal_but_the_owner_equivalent_listing() -> None:
-    unfiltered: set[tuple[str, str]] = set()
+    # A list, not a set: a second unfiltered read in the exempt module, or in the
+    # exempt function, is not the exempt call site.
+    unfiltered: list[tuple[str, str, str]] = []
     total = 0
-    for path in _tool_modules():
-        for method, _line, names in _grants_calls(ast.parse(path.read_text(encoding="utf-8"), str(path))):
+    for path in _python_modules():
+        for method, _line, names, function in _grants_calls(_parsed(path)):
             total += 1
             if not names:
-                unfiltered.add((str(path.relative_to(ROOT)), method))
+                unfiltered.append((str(path.relative_to(ROOT)), method, function))
 
     assert unfiltered == UNFILTERED_GRANTS_ALLOWED
     assert total >= 6, "positive control: the scan finds the converger's and the probes' reads"
     # The one unfiltered listing reads only the governed catalog and its schemas.
-    source = (ROOT / "tools/databricks/prestop_owner_equivalent.py").read_text(encoding="utf-8")
+    source = (ROOT / OWNER_EQUIVALENT).read_text(encoding="utf-8")
     callers = re.findall(r"_uc_grants\(workspace, ([^,]+),", source)
     assert callers and set(callers) == {'"catalog"', '"schema"'}, callers
 
 
+def _is_the_listing(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Name) and node.id == "_uc_grants") or (
+        isinstance(node, ast.Attribute) and node.attr == "_uc_grants"
+    )
+
+
+def _listing_uses(trees: list[ast.AST]) -> tuple[list[object], int]:
+    """Each ``_uc_grants`` call's securable (a string literal's value, else None), and every mention that is no call."""
+
+    securables: list[object] = []
+    mentions = 0
+    for tree in trees:
+        called = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _is_the_listing(node.func):
+                called.add(id(node.func))
+                securable = next((kw.value for kw in node.keywords if kw.arg == "securable_type"), None)
+                if securable is None and len(node.args) >= 2:
+                    securable = node.args[1]
+                literal = isinstance(securable, ast.Constant) and isinstance(securable.value, str)
+                securables.append(securable.value if literal else None)
+        for node in ast.walk(tree):
+            mentions += _is_the_listing(node) and id(node) not in called
+            if isinstance(node, ast.ImportFrom | ast.Import):
+                mentions += sum(alias.name.rsplit(".", 1)[-1] == "_uc_grants" for alias in node.names)
+    return sorted(securables, key=str), mentions
+
+
+def test_the_exempt_listing_is_one_call_site_that_never_reads_the_metastore() -> None:
+    """The unfiltered read's securable is the listing's own parameter, and only two literals reach it."""
+
+    functions = [
+        node
+        for node in ast.walk(_parsed(ROOT / OWNER_EQUIVALENT))
+        if isinstance(node, ast.FunctionDef) and node.name == "_uc_grants"
+    ]
+    assert len(functions) == 1
+    listing = functions[0]
+    reads = [node for node in ast.walk(listing) if _is_grants_read(node)]
+    assert len(reads) == 1 and reads[0].func.attr == "get"
+    securable = reads[0].args[0]
+    assert isinstance(securable, ast.Name) and securable.id == "securable_type"
+    assert [argument.arg for argument in listing.args.args] == ["workspace", "securable_type", "full_name"]
+    # ...which the function never rebinds.
+    assert not [
+        node
+        for node in ast.walk(listing)
+        if isinstance(node, ast.Name) and node.id == "securable_type" and not isinstance(node.ctx, ast.Load)
+    ]
+    # Every caller, in any module and any spelling of the call, passes one of the
+    # two literals; the listing is never aliased, imported or passed along.
+    assert _listing_uses([_parsed(path) for path in _python_modules()]) == (["catalog", "schema"], 0)
+    # Positive control: a keyword call the regex above cannot see, a securable
+    # that is no literal, an alias and an import are each read for what they are.
+    planted = (
+        "from tools.databricks.prestop_owner_equivalent import _uc_grants\n"
+        "_uc_grants(workspace=w, securable_type='metastore', full_name=m)\n"
+        "probe._uc_grants(w, SecurableType.METASTORE, m)\n"
+        "listing = _uc_grants\n"
+    )
+    assert _listing_uses([ast.parse(planted)]) == ([None, "metastore"], 2)
+
+
 def test_every_metastore_grant_read_names_its_principal() -> None:
     sites = 0
-    for path in _tool_modules():
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), str(path))):
-            if not isinstance(node, ast.Call):
-                continue
-            securable = next((kw.value for kw in node.keywords if kw.arg == "securable_type"), None)
-            if securable is None and node.args:
-                securable = node.args[0]
-            if not (isinstance(securable, ast.Constant) and str(securable.value).lower() == "metastore"):
-                continue
+    for path in _python_modules():
+        for line, names in _metastore_reads(_parsed(path)):
             sites += 1
-            principal = next((kw.value for kw in node.keywords if kw.arg == "principal"), None)
-            assert principal is not None and not (
-                isinstance(principal, ast.Constant) and principal.value is None
-            ), f"{path.relative_to(ROOT)}:{node.lineno}"
+            assert names, f"{path.relative_to(ROOT)}:{line}"
     # Positive control: the attestation's live read, its owner command and the
     # agentic verifiers' baseline reads are all found.
     assert sites >= 4
+
+
+def _commands(text: str) -> list[tuple[int, str]]:
+    """(first line, simple command): backslash continuations joined, pipe stages and lists split."""
+
+    found: list[tuple[int, str]] = []
+    pending, start = "", 0
+    for number, line in enumerate([*text.splitlines(), ""], 1):
+        if not pending:
+            start = number
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
+            continue
+        found.extend((start, command) for command in _COMMAND_END.split(pending + line))
+        pending = ""
+    return found
+
+
+def _unnamed_metastore_grant_reads(text: str) -> list[int]:
+    return sorted(
+        {
+            number
+            for number, command in _commands(text)
+            if METASTORE_GRANTS_PATTERN.search(command) and not NAMES_PRINCIPAL.search(command)
+        }
+    )
+
+
+def test_no_script_workflow_or_job_reads_the_metastore_grants_without_a_principal(tmp_path: Path) -> None:
+    """Spike S0(b′): an unfiltered metastore read answers a non-admin with only its own view."""
+
+    files = _text_files()
+    names = {str(path.relative_to(ROOT)) for path in files}
+    assert {"scripts/deploy.sh", ".github/workflows/deploy-dev.yml"} <= names
+    assert any(name.startswith("scripts/lib/") for name in names)
+    assert any(name.startswith("jobs/") and name.endswith(".py") for name in names)
+
+    hits = {
+        str(path.relative_to(ROOT)): lines
+        for path in files
+        if (lines := _unnamed_metastore_grant_reads(path.read_text(encoding="utf-8", errors="replace")))
+    }
+    assert hits == {}
+
+    # Positive control: each spelling is found in shell, YAML and Python, and
+    # only a principal in the read's own command clears it.
+    unnamed = {
+        "cli.sh": 'ms="$(databricks grants get-effective metastore "$MID" -o json)"\n',
+        "cli_direct.sh": 'databricks grants get metastore "$MID"\n',
+        "cli_flags_first.sh": 'databricks grants get-effective -o json --debug "METASTORE" "$MID"\n',
+        "cli_continued.sh": 'databricks grants get-effective \\\n  metastore "$MID" \\\n  -o json\n',
+        "cli_then_filtered.sh": "databricks grants get-effective metastore \"$MID\" | jq 'select(.principal==\"x\")'\n",
+        "cli_later_stage.sh": 'databricks grants get metastore "$MID" | python -c "f(principal=app)"\n',
+        "cli_empty.sh": 'databricks grants get-effective metastore "$MID" --principal ""\n',
+        "rest.sh": 'databricks api get "/api/2.1/unity-catalog/effective-permissions/metastore/$MID"\n',
+        "rest_direct.yml": 'run: curl "$HOST/api/2.1/unity-catalog/permissions/metastore/$MID?max_results=0"\n',
+        "inline.yml": "run: python -c 'print(w.grants.get_effective(\"metastore\", mid))'\n",
+        "enum.py": "listing = workspace.grants.get(SecurableType.METASTORE, metastore_id)\n",
+        "none.py": 'workspace.grants.get_effective("metastore", mid, principal=None)\n',
+    }
+    named = {
+        "named_cli.sh": 'databricks grants get-effective metastore "$MID" --principal "$APP" | jq .\n',
+        "named_cli_first.sh": 'databricks grants get-effective --principal="$APP" metastore "$MID"\n',
+        "named_continued.sh": 'databricks grants get-effective metastore "$MID" \\\n  --principal "$APP"\n',
+        "named_rest.sh": 'databricks api get "/api/2.1/unity-catalog/effective-permissions/metastore/$MID?principal=$APP"\n',
+        "named_inline.yml": "run: python -c 'w.grants.get_effective(\"metastore\", mid, principal=app)'\n",
+        "catalog.sh": 'databricks grants get catalog "$CATALOG"\ndatabricks grants get-effective schema "$S"\n',
+        "summary.sh": 'databricks grants get-effective catalog "$METASTORE_CATALOG" # metastore_summary\n',
+        "rest_catalog.sh": 'curl "$HOST/api/2.1/unity-catalog/effective-permissions/catalog/$CATALOG"\n',
+    }
+    planted = tmp_path / "planted"
+    planted.mkdir()
+    for name, text in {**unnamed, **named}.items():
+        (planted / name).write_text(text, encoding="utf-8")
+    found = {
+        path.name: _unnamed_metastore_grant_reads(path.read_text(encoding="utf-8"))
+        for path in sorted(planted.iterdir())
+    }
+    assert {name for name, lines in found.items() if lines} == set(unnamed)
+    assert all(lines == [1] for name, lines in found.items() if name in unnamed), found
