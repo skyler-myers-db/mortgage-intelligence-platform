@@ -10,9 +10,13 @@ Sharing catalog from the profile's provider and share with all seven tables;
 the metastore has a storage root; an install catalog, when a test makes one
 exist, has the profile's storage root; the account principal holds no
 account admin; and every feature either tier needs answers its capability
-probe (tools/clients/capabilities.py; one GET of a list each). Each keyword
-overrides one of those facts; ``missing_features`` names capability probes
-that answer not-found.
+probe (tools/clients/capabilities.py; one GET of a list each). The metastore
+summary names the live metastore (``summary_metastore_id`` overrides it) and
+returns the profile's ``MIP_UC_METASTORE_OWNER`` as its owner
+(``metastore_owner`` overrides it; ``None`` omits the attribute, a withheld
+owner); reading its ``storage_root`` is recorded in ``field_reads``. Each
+keyword overrides one of those facts; ``missing_features`` names capability
+probes that answer not-found.
 """
 
 from __future__ import annotations
@@ -63,6 +67,8 @@ class LiveWorkspace:
         share: object = _UNSET,
         missing_tables: tuple[str, ...] = (),
         metastore_root: str = "s3://metastore-root-alpha/root",
+        metastore_owner: object = _UNSET,
+        summary_metastore_id: object = _UNSET,
         fail: Mapping[str, BaseException] | None = None,
         missing_features: tuple[str, ...] = (),
         **identity: str,
@@ -76,6 +82,8 @@ class LiveWorkspace:
             **identity,
         }
         self.calls: list[str] = []
+        # Attribute reads of a returned object that a test pins (not API calls).
+        self.field_reads: list[str] = []
         self.config = SimpleNamespace(host=live["host"])
         self._live = live
         self._profile = dict(profile)
@@ -90,6 +98,12 @@ class LiveWorkspace:
         self._share = self._default_share() if share is _UNSET else share
         self._missing = set(missing_tables)
         self._metastore_root = metastore_root
+        self._metastore_owner = (
+            profile.get("MIP_UC_METASTORE_OWNER") if metastore_owner is _UNSET else metastore_owner
+        )
+        self._summary_metastore_id = (
+            live["metastore_id"] if summary_metastore_id is _UNSET else summary_metastore_id
+        )
         self._fail = dict(fail or {})
         self._missing_features = set(missing_features)
         self.metastores = _Strict(current=self._current, summary=self._summary)
@@ -187,7 +201,7 @@ class LiveWorkspace:
 
     def _summary(self) -> object:
         self._raise("GET metastore_summary")
-        return SimpleNamespace(storage_root=self._metastore_root)
+        return _Summary(self, owner=self._metastore_owner)
 
     # --- capabilities (M2-PR3) -----------------------------------------------
 
@@ -199,6 +213,21 @@ class LiveWorkspace:
             return []
 
         return probe
+
+
+class _Summary:
+    """The metastore summary: its id and owner, and a recorded ``storage_root`` read."""
+
+    def __init__(self, workspace: LiveWorkspace, *, owner: object) -> None:
+        self._workspace = workspace
+        self.metastore_id = workspace._summary_metastore_id
+        if owner is not None:
+            self.owner = owner
+
+    @property
+    def storage_root(self) -> str:
+        self._workspace.field_reads.append("metastore_summary.storage_root")
+        return self._workspace._metastore_root
 
 
 class LiveAccount:

@@ -82,6 +82,9 @@ plan_quiesce_window() {
   local gate_report="${2:?bundle plan gate report is required}"
   local probe_dir role_rc=0 verifier_rc=0 jobs_reader_rc=0 plan_rc=0 rebase seed_operator_email
   local -a plan_args=(--position "$position") migration_verifier_args=()
+  # --phase plan holds no lease and opens no window: it forecasts the admission
+  # a release dispatched now gets, since its own 30-minute job admits none.
+  [[ "${DEPLOY_PHASE:-}" != "plan" ]] || plan_args+=(--admission-forecast release)
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if tier_is_agentic; then

@@ -18,6 +18,7 @@ import pytest
 
 from tests.fixtures.deploy_block_harness import drive, function
 from tests.fixtures.deploy_script import deploy_entrypoint_text
+from tools.clients import dispatch_acks as acks
 
 ACK = "a" * 64
 OTHER = "b" * 64
@@ -189,6 +190,68 @@ def test_a_dry_run_prints_the_plan_and_mints_nothing(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert calls == [] and not mint.exists()
     assert "-m tools.databricks.adopt_live plan --mode adopt" in result.stdout
+
+
+# --- the dispatch carrier's exports become this shell's env (B2) ---------------------
+
+BIND, LIVE, SELECTOR = "1" * 64, "2" * 64, "3" * 64
+
+
+def _carried(text: str, phase: str) -> dict[str, str]:
+    """What deploy-dev.yml's preflight writes to GITHUB_ENV for ``operation_acks``."""
+
+    return acks.operation_exports(text, phase)
+
+
+@pytest.mark.parametrize(
+    ("phase", "text", "mode", "ack", "selector"),
+    (
+        ("adopt", f"adopt_plan={BIND} adopt_live={LIVE}", "adopt", LIVE, None),
+        ("adopt", f"supersedes_deployment={SELECTOR} adopt_plan={BIND} supersede={LIVE}", "supersede", LIVE, SELECTOR),
+        ("unadopt", f"adopt_plan={BIND} unadopt={LIVE}", "unadopt", LIVE, None),
+    ),
+    ids=("adopt", "supersede", "unadopt"),
+)
+def test_the_dispatch_exports_drive_adopt_live_exactly(
+    tmp_path: Path, phase: str, text: str, mode: str, ack: str, selector: str | None
+) -> None:
+    result, calls, _ = _drive(
+        tmp_path, f"run_adopt_live_plan {phase}\n", module="adopt_live", env=_carried(text, phase)
+    )
+
+    assert result.returncode == 0, result.stderr
+    (argv,) = calls
+    assert argv[:3] == ["plan", "--mode", mode] and argv[-2:] == ["--ack", ack]
+    if selector is None:
+        assert "--supersede" not in argv
+    else:
+        assert argv[argv.index("--supersede") + 1] == selector
+
+
+@pytest.mark.parametrize(
+    ("phase", "text", "wanted"),
+    (
+        ("adopt", f"adopt_plan={BIND}", "MIP_ACK_ADOPT_LIVE"),
+        ("unadopt", f"adopt_plan={BIND}", "MIP_ACK_UNADOPT"),
+        # A supersede ack without its selector is carried but never read: the mode is adopt.
+        ("adopt", f"adopt_plan={BIND} supersede={LIVE}", "MIP_ACK_ADOPT_LIVE"),
+        # A selector with adopt-live's ack: the mode is supersede, whose own ack is missing.
+        ("adopt", f"supersedes_deployment={SELECTOR} adopt_plan={BIND} adopt_live={LIVE}", "MIP_ACK_SUPERSEDE"),
+    ),
+    ids=("adopt-half", "unadopt-half", "supersede-without-selector", "selector-with-adopt-live"),
+)
+def test_half_an_adoption_the_carrier_admits_still_refuses_before_the_lease(
+    tmp_path: Path, phase: str, text: str, wanted: str
+) -> None:
+    """The carrier checks each entry alone; the pair is this function's rule, one layer later."""
+
+    result, calls, _ = _drive(
+        tmp_path, f"run_adopt_live_plan {phase}\n", module="adopt_live", env=_carried(text, phase)
+    )
+
+    assert result.returncode == 2 and "reached-the-end" not in result.stdout
+    assert f"export {wanted}=<the" in result.stderr and "Refusing before the lease" in result.stderr
+    assert len(calls) == 1 and "--ack" not in calls[0], "only the read-only plan ran"
 
 
 # --- adopt-live's apply, under the lease ----------------------------------------------

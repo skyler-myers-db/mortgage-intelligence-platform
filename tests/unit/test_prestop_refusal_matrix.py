@@ -307,6 +307,23 @@ def _owner_outside_policy(estate: dict[str, Any]) -> None:
     estate["principals"]["someone-else@example.invalid"] = {"kind": "user", "id": "someone-id"}
 
 
+def _metastore_owner_unreadable(estate: dict[str, Any]) -> None:
+    # The summary returns no owner (spike S0(b)'s worst case): a refusal, never a pass.
+    estate["metastore"]["owner"] = None
+
+
+METASTORE_ADMINS = "metastore-admins"
+
+
+def _metastore_owned_by_a_group_the_deployer_is_not_in(estate: dict[str, Any]) -> None:
+    # Client #1's shape (spike S0(b′)): the deployer is no metastore admin, so the
+    # App's metastore privileges are unprovable without the owner's attestation.
+    # The fake answers such a read with the fail-open shape (an empty listing).
+    estate["metastore"]["owner"] = METASTORE_ADMINS
+    estate["principals"][METASTORE_ADMINS] = {"kind": "group", "id": "group-metastore-admins", "members": []}
+    estate["effective_fail_open"] = True
+
+
 OTHER_SPACE = "space-other-team"
 ACCEPTED_APP_READ = {
     "kind": "workspace_permission",
@@ -372,6 +389,12 @@ CASES: tuple[tuple[str, Any, dict[str, str]], ...] = (
     ),
     (codes.ROLLBACK_RECORD_DRIFT, _set(("app", "pending"), True), {}),
     (codes.OWNER_POLICY, _owner_outside_policy, {}),
+    (codes.OWNER_POLICY, _metastore_owner_unreadable, {}),
+    (
+        codes.METASTORE_AUTHORITY,
+        _metastore_owned_by_a_group_the_deployer_is_not_in,
+        {"MIP_UC_METASTORE_OWNER": METASTORE_ADMINS},
+    ),
     (codes.OWNER_EQUIVALENT, _owner_equivalent_human, {}),
     (codes.OWNER_EQUIVALENT, _foreign_genie_manager, {}),
     (codes.SERVING_ENDPOINT, _legacy_gateway_query, {}),
@@ -409,11 +432,39 @@ def test_a_clean_estate_reaches_the_lease(tmp_path: Path) -> None:
     for note in (
         "signed last-good record verified",
         "approved-owner policy holds",
+        "the App holds no metastore privilege outside the reviewed set (a live read as a metastore admin)",
         "every owner-equivalent grantee is an approved principal",
         "App serving access is limited to record-pinned endpoints (1 reached)",
         f"one Genie turn on the governed space {GOVERNED_SPACE} completed",
     ):
         assert note in result.stdout, note
+
+
+def test_the_metastore_owners_attestation_reaches_the_lease(tmp_path: Path) -> None:
+    # The METASTORE_AUTHORITY case's estate, with the owner's exact attestation.
+    from tools.databricks import metastore_app_grants
+
+    estate = clean_estate()
+    _metastore_owned_by_a_group_the_deployer_is_not_in(estate)
+    ack = metastore_app_grants.attestation_digest(
+        metastore_id="metastore-1",
+        metastore_owner=METASTORE_ADMINS,
+        app_application_id=APP_CLIENT,
+        privileges={"USE_MARKETPLACE_ASSETS"},
+        attested_on=datetime.now(UTC).date(),
+    )
+
+    result, after, reached, _cli_calls = _deploy(
+        tmp_path, estate, MIP_UC_METASTORE_OWNER=METASTORE_ADMINS, MIP_ACK_METASTORE_APP_GRANTS=ack
+    )
+
+    detail = result.stdout[-3000:] + result.stderr[-6000:]
+    assert reached == ["lease"], detail
+    assert "the App holds no metastore privilege outside the reviewed set (the metastore owner's attestation)" in (
+        result.stdout
+    ), detail
+    assert not any(call.startswith("GET effective-grants/metastore") for call in after["calls"])
+    assert after["app"]["state"] == "RUNNING"
 
 
 def test_an_active_deployment_other_than_the_record_reaches_the_step_0a_restore(

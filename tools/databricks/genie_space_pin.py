@@ -292,10 +292,21 @@ def _space_exists(workspace: Any, space_id: str) -> bool:
     return True
 
 
+def space_acl(workspace: Any, space_id: str) -> Mapping[str, Any]:
+    """The space's permissions: one GET."""
+
+    return workspace.api_client.do("GET", f"/api/2.0/permissions/genie/{space_id}") or {}
+
+
 def direct_managers(workspace: Any, space_id: str) -> tuple[str, ...]:
     """Principals holding a direct (not inherited) CAN_MANAGE on the space; the creator is one."""
 
-    acl = workspace.api_client.do("GET", f"/api/2.0/permissions/genie/{space_id}") or {}
+    return managers_in_acl(space_acl(workspace, space_id))
+
+
+def managers_in_acl(acl: Mapping[str, Any]) -> tuple[str, ...]:
+    """The direct CAN_MANAGE holders in a space's permissions, as a pin plan lists them."""
+
     managers = set()
     for entry in acl.get("access_control_list") or []:
         principal = _text(

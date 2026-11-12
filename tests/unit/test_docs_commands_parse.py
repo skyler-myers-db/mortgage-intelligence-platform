@@ -80,6 +80,7 @@ PLACEHOLDERS: dict[str, str] = {
     "client": "acme",
     "owner-profile": "owner-profile",
     "app-name": "acme-app",
+    "app-rollback-scope": "acme-app-rollback",
     "sha256": _DIGEST,
     "profile-ack": _DIGEST,
     "sha": _SHA,
@@ -268,6 +269,13 @@ def _estate(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     cli.main(argv)
 
 
+def _rollback_scope_check(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The owner's rollback-scope check (cutover step 7): ``assert`` reads; ``ensure`` creates and marks a scope."""
+
+    assert argv[:1] == ["assert"], f"a runbook shows the rollback scope's read-only assert mode only: {argv}"
+    _parse_only("tools.databricks.app_rollback_secret_scope")(argv, monkeypatch)
+
+
 # Each tool a runbook names, and how its run is stopped before any side effect.
 RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
     "tools.clients": _parse_only("tools.clients.__main__"),
@@ -282,9 +290,14 @@ RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
         "tools.clients.archive_legacy_root", roots=_stop, workspace_factory=_stop
     ),
     "tools.clients.estate_inventory": _parse_only("tools.clients.estate_inventory"),
+    "tools.clients.genie_pin_review": _injected("tools.clients.genie_pin_review", workspace_factory=_stop),
     "tools.databricks.estate.cli": _estate,
     "tools.databricks.app_deployment_lease": _parse_only("tools.databricks.app_deployment_lease"),
+    "tools.databricks.app_rollback_secret_scope": _rollback_scope_check,
     "tools.databricks.quiesce_window": _injected("tools.databricks.quiesce_window", workspace_factory=_stop),
+    "tools.databricks.metastore_app_grants": _injected(
+        "tools.databricks.metastore_app_grants", workspace_factory=_stop
+    ),
     "tools.live_validation_gate": _parse_only("tools.live_validation_gate"),
 }
 
@@ -508,12 +521,20 @@ def test_the_parse_check_refuses_a_flag_the_tool_lacks(private_dir: Path, monkey
         "python -m tools.clients.bootstrap_account --apply --for rotate-adopted --ack-plan <sha256>",
         "python -m tools.clients.github_environment --plan --ack-plan <sha256>",
         "python -m tools.clients.archive_legacy_root --only <child-a> --apply",
+        # The rollback-scope check is the read-only mode, with both names.
+        "python -m tools.databricks.app_rollback_secret_scope ensure --app-name <app-name> --scope <app-rollback-scope>",
+        "python -m tools.databricks.app_rollback_secret_scope assert --app-name <app-name>",
         "PGHOST=<read-write-dns> PGPASSWORD=token psql -U <legacy-owner-email>",
         "LAKEBASE_HOST=<read-write-dns> psql -U <legacy-owner-email>",
         'PGPASSWORD="$(databricks database generate-database-credential --json \'{"instance_names":["<lakebase-instance>"],"no_such_field":"x"}\' -p <owner-profile> -o json | jq -r .token)" psql -h <read-write-dns>',
         "./scripts/deploy.sh -t client --phase release",
         "./scripts/deploy.sh -t client --phase plan --dry-run --no-such-flag",
-        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=adopt_live=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        # operation_acks the carrier refuses (B2/B4/B6 admitted adopt_live in adopt, so these replace that control).
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=unadopt -f owner_attestation=<profile-ack> -f operation_acks=adopt_live=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=quiesce_window=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=supersedes_deployment=yes -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=data -f owner_attestation=<profile-ack> -f operation_acks=genie_pin=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=zyrplax=<sha256> -f acknowledge_single_maintainer_break_glass=true",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f acknowledge_single_maintainer_break_glass=true",
         "gh secret set MIP_CLIENT --env <client>-validate",

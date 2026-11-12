@@ -200,10 +200,19 @@ def _record_state(
         and record["deployment_id"] == facts.deployment_id
     ):
         return "adopted_same"
+    # The supersede's selector is a digest, never the id (deploy-dev.yml's
+    # operation_acks key supersedes_deployment, B2).
+    selector = (
+        f"; through deploy-dev.yml: operation_acks supersedes_deployment="
+        f"{sha256_text(str(record['deployment_id']))} (this adopted record's deployment sha256) "
+        "with the supersede ack its read-only plan prints"
+        if provenance == "adopted" and record is not None
+        else ""
+    )
     raise AdoptLiveRefused(
         "record_present",
         "a signed rollback record already names another deployment or provenance; adopt-live "
-        "signs only an install with no record (use --supersede for a newer active deployment)",
+        f"signs only an install with no record (use --supersede for a newer active deployment){selector}",
     )
 
 

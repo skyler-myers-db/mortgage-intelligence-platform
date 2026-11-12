@@ -388,6 +388,8 @@ def test_the_bundle_cli_never_inherits_the_signing_keys(monkeypatch: pytest.Monk
         "-t", "client", "--auto-approve",
         "--adopt-plan", str(tmp_path / "plan.json"), "--adopt-plan-sha256", "a" * 64,
         "--adopt-lease-id", "lease-1", "--adopt-source-git-sha", "0" * 40,
+        # B4(c): with nothing pinned yet, bundle_env binds the exactly acked Genie title match.
+        bundle_env_adopt.ADOPT_GENIE_FLAG,
     ]
 
 

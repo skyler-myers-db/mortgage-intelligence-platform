@@ -22,6 +22,7 @@ last test sweeps every state for that parity.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -302,6 +303,41 @@ def test_another_newer_deployment_without_a_payload_is_refused_before_the_lease(
         _ensure(world)
     assert getattr(refused.value, "code", None) == "no_restore_payload"
     assert world.apps.mutations == []
+
+
+def test_the_drift_remedy_names_the_dispatch_selector_as_a_digest(world: CoreWorld) -> None:
+    """B2: through deploy-dev.yml the supersede is operation_acks supersedes_deployment=<sha256>."""
+
+    world.activate_green()
+    world.compute = "STOPPED"
+
+    message = _verdict(world).refusals[0].message
+    selector = hashlib.sha256(world.record()["deployment_id"].encode("utf-8")).hexdigest()
+    assert f"operation_acks supersedes_deployment={selector}" in message
+    assert world.record()["deployment_id"] not in message, "a digest, never the id"
+
+
+def test_the_drift_remedy_names_no_supersede_selector_for_a_record_adopt_live_did_not_sign(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only an adopted record is superseded: adopt-live refuses any other as supersede_mismatch.
+
+    A captured core record always carries its restore payload (the v7 record
+    refuses one without it), so no signed record reaches this branch with
+    another provenance today. The guard is pinned here through the probe's
+    record seam, so a later record shape that does reach it is never told to
+    pass a selector adopt-live would refuse.
+    """
+
+    world.activate_green()
+    world.compute = "STOPPED"
+    load = prestop.CORE_LOAD
+    monkeypatch.setattr(prestop, "CORE_LOAD", lambda *a, **kw: {**load(*a, **kw), "provenance": "captured"})
+
+    refusal = _verdict(world).refusals[0]
+    assert refusal.code == "rollback_record_drift" and "no_restore_payload" in refusal.message
+    assert "MIP_ADOPT_LIVE_SUPERSEDE" in refusal.message, "the remedy is still named"
+    assert "supersedes_deployment" not in refusal.message
 
 
 def test_another_newer_deployment_with_a_payload_is_still_tier_bs_note(world: CoreWorld) -> None:

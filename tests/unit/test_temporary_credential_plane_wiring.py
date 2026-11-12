@@ -36,10 +36,13 @@ def test_campaign_treatment_converger_passes_its_deployer_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner_group = "Customer-Platform-Governance"
+    # The deployer is in the owning group (a metastore admin), so it may read the
+    # App's metastore grants (spike S0(b′), test_metastore_app_grants.py).
     workspace, _execution, _ = converge_tests._workspace(
         owner=owner_group,
         metastore_owner=owner_group,
         owner_group=owner_group,
+        current_groups=(owner_group,),
     )
     account = converge_tests._account_factory(owner_group=owner_group, target_is_member=False)
     calls: list[dict[str, Any]] = []

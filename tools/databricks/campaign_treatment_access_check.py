@@ -13,6 +13,9 @@ host, catalog, principal or other per-client identifier.
 The approved-owner policy is not evaluated here. Its group-exclusion proof
 mints a short-lived OAuth credential for the App identity, which a read-only
 mode must not do; the converger and the UC owner-policy probe keep that proof.
+The App's metastore privileges are proven as the converger proves them
+(``metastore_app_grants``): live for a metastore-admin deployer, else by the
+owner's exact attestation; an unproven set raises ``MetastoreAuthorityUnproven``.
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ from tools.databricks.converge_campaign_treatment_access import (
     plan_securable,
     reviewed_privileges,
 )
+from tools.databricks.metastore_app_grants import app_metastore_privileges
+from tools.databricks.uc_metastore_read import current_metastore
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 _PREFIX = "[mip-treatment-access]"
@@ -64,17 +69,16 @@ def check_campaign_treatment_access(
     _identity_context(client, principal_name)
 
     drift: list[str] = []
-    assignment = client.metastores.current()
-    metastore_id = str(getattr(assignment, "metastore_id", "") or "").strip()
-    if not metastore_id:
-        raise RuntimeError("Current workspace has no authoritative metastore identifier")
+    # The converger's own proof (spike S0(b′)): a metastore-admin deployer reads
+    # the App's metastore privileges live; any other needs the owner's exact
+    # attestation, and an unproven set raises, never reads as "none".
     forbidden = (
-        _effective_privileges(
+        app_metastore_privileges(
             client,
-            securable_type="metastore",
-            full_name=metastore_id,
+            metastore=current_metastore(client),
             principal=principal_name,
-        )
+            effective=_effective_privileges,
+        ).privileges
         - _SAFE_METASTORE_PRIVILEGES
     )
     if forbidden:

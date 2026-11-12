@@ -98,8 +98,11 @@ def test_a_metastore_owner_group_containing_the_app_sp_refuses() -> None:
 
 
 def test_a_metastore_owner_group_without_the_app_sp_passes_once_proven() -> None:
+    # The deployer is in the owning group: a metastore admin, so it may read the
+    # App's metastore grants (spike S0(b′)); test_metastore_app_grants.py covers
+    # a deployer that is not.
     workspace, _execution, _ = harness._workspace(
-        owner=GROUP, metastore_owner=GROUP, owner_group=GROUP
+        owner=GROUP, metastore_owner=GROUP, owner_group=GROUP, current_groups=(GROUP,)
     )
     probed: list[str] = []
 
@@ -151,9 +154,38 @@ def test_users_account_users_and_admins_never_own_the_metastore(vocabulary: str)
 
 
 def test_an_owner_the_api_does_not_return_refuses() -> None:
-    # metastores.get is metastore-admin only (SDK 0.103.0); S0(b) asks whether a
-    # non-admin read returns the owner. Either way an absent owner refuses.
+    # metastores.get is metastore-admin only (SDK 0.103.0), so the owner comes from
+    # the summary (spike S0(b)); an owner the summary does not return refuses.
     workspace, execution, _ = harness._workspace()
-    workspace.metastores.get = lambda metastore_id: type("M", (), {"metastore_id": metastore_id})()
+    workspace.metastores.summary = lambda: type("M", (), {"metastore_id": "metastore-1"})()
 
-    _refused(workspace, execution, "noncanonical owner", metastore_owner="deployer")
+    with pytest.raises(RuntimeError, match="noncanonical owner") as refused:
+        _run(workspace, metastore_owner="deployer")
+    assert execution.statements == [], "refused before any grant statement"
+    assert "spike S0(b)" in str(refused.value)
+    assert "returned no owner to the deploying identity" in str(refused.value)
+
+
+@pytest.mark.parametrize("owner", [" deployer", "deployer ", "   ", 7])
+def test_a_noncanonical_owner_is_a_data_fault_not_a_withheld_read(owner: object) -> None:
+    workspace, execution, _ = harness._workspace()
+    workspace.metastores.summary = lambda: type("M", (), {"metastore_id": "metastore-1", "owner": owner})()
+
+    with pytest.raises(RuntimeError, match="noncanonical owner") as refused:
+        _run(workspace, metastore_owner="deployer")
+    assert execution.statements == [], "refused before any grant statement"
+    assert "a fault in the metastore's data, not a withheld read" in str(refused.value)
+    assert "spike S0(b)" not in str(refused.value)
+
+
+@pytest.mark.parametrize("summary_id", ["metastore-2", " metastore-1", None])
+def test_a_summary_of_another_metastore_refuses_before_any_grant(summary_id: object) -> None:
+    workspace, execution, _ = harness._workspace()
+    workspace.metastores.summary = lambda: type("M", (), {"metastore_id": summary_id, "owner": "deployer"})()
+
+    _refused(
+        workspace,
+        execution,
+        "the metastore summary names another metastore than the workspace's current assignment",
+        metastore_owner="deployer",
+    )
