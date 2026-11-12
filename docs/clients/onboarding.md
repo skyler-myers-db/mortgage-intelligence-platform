@@ -202,7 +202,10 @@ release the field is not read (`bootstrap warehouse: not read`); deleting it
 `.env.local` line) is optional and changes the profile ack once. Never set it
 for an adopted install: the profile refuses it beside
 `MIP_LEGACY_BUNDLE_ROOT`. Without it, a live plan refuses at the warehouse
-preflight (exit 2, nothing changed). The local dry run never reads it.
+preflight (exit 2, nothing changed). A `phase=data` dispatch before the first
+release refuses there with or without the field: the data phase runs on the
+bundle's own warehouse only, which the first release creates, so the release
+comes first. The local dry run never reads it.
 
 The command of record is the governed dispatch, one client and one phase per
 run:
@@ -252,8 +255,10 @@ the exact ack the refusal prints for that client, environment and commit.
   gives, after both ownership handovers. Never set
   `rebase_unverified_app=true` on an install you mean to adopt: that one-time
   rebase stops the existing App.
-- **Nothing exists yet**: the first `phase=release` is the first install. It is
-  blocked through CI today (Status, above). When it runs, it creates the App
+- **Nothing exists yet**: the first `phase=release` is the first install. The
+  warehouse preflight no longer stops it through CI (section 4: the profile's
+  `MIP_BOOTSTRAP_WAREHOUSE_ID`); the first-install phase order is still open
+  (Status, above). It creates the App
   stopped and source-free, then stops with **exit 3** and `awaiting owner
   bootstrap --post-first-install`, because the account principal does not yet
   manage the new App's own service principal. The App is kept. The account

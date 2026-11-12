@@ -13,11 +13,15 @@ borrow until the step-4 apply creates the bundle's own:
   profile names no legacy root, and the warehouse is that id, live and PRO.
   It prints the id (masked first) or refuses with exit 2, never naming it.
 * The preflight's ``bundle warehouse`` block admits it only when the state
-  binds no warehouse, in plan, release or no phase, and only when the check
-  prints exactly the id the shell read (16 lowercase hex characters). The
-  state's warehouse always wins; the adopt phases never read it; the data
-  phase refuses it; a dry run never checks or prints it; an operator value
-  naming another refuses.
+  binds no warehouse, in plan, release or no phase (an allowlist: any other
+  phase refuses it unchecked), and only when the check prints exactly the id
+  the shell read (16 lowercase hex characters, a shape the shell checks
+  itself). The state's warehouse always wins; the adopt phases never read
+  it; the data phase refuses it, and the refusal for no warehouse at all
+  says so in every phase's own words (one text: every other phase runs the
+  block as a run with no phase does,
+  tests/unit/test_adopt_phases_read_no_warehouse.py); a dry run never
+  checks or prints it; an operator value naming another refuses.
 
 The pins of the operator-only path and of the adopt phases stay where they are
 (tests/unit/test_bundle_state_warehouse.py,
@@ -258,6 +262,7 @@ START, END = "# >>> bundle warehouse >>>", "# <<< bundle warehouse <<<"
 FUNCTIONS = ("check_bootstrap_warehouse", "note_bootstrap_warehouse")
 VERIFIER_REFUSED = "the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID was refused (see above); nothing was changed."
 NOT_EXACT = "the bootstrap warehouse check did not print exactly the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID"
+NOT_THIS_PHASE = "MIP_BOOTSTRAP_WAREHOUSE_ID is read only by a plan, a release or a run with no phase"
 
 
 @dataclass(frozen=True)
@@ -406,6 +411,59 @@ def test_the_block_takes_only_exactly_the_id_it_read_from_the_check(
     assert BOOT not in run.transcript
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    ["NOT-A-WAREHOUSE", "warehouse-1", BOOT.upper(), BOOT[:15], f"{BOOT}0", "--out=/x", "<bootstrap-warehouse-id>"],
+    ids=["words", "a-name", "uppercase", "15-characters", "17-characters", "an-option", "the-placeholder"],
+)
+@pytest.mark.parametrize("phase", [None, "plan", "release"])
+def test_a_malformed_id_refuses_even_when_the_check_echoes_it(
+    tmp_path: Path, phase: str | None, malformed: str
+) -> None:
+    """The shape half of the exact-id check: equality alone would export what the shell read.
+
+    The profile schema refuses these upstream and the real check prints only
+    a schema-checked id, so this is defence in depth; the value would
+    otherwise become DATABRICKS_WAREHOUSE_ID and every ``--warehouse-id``.
+    """
+
+    run = _preflight(tmp_path, phase=phase, bootstrap=malformed, verifier=f"{malformed}\n")
+
+    _refused(run, NOT_EXACT)
+    assert run.calls == [["warehouse-id"], ["bootstrap-warehouse-id"]]
+    assert malformed not in run.transcript
+
+
+@pytest.mark.parametrize("phase", ["supersede", "adopt-live", "rollback", "DATA", "Release", "plan "])
+def test_a_phase_the_allowlist_does_not_name_refuses_the_bootstrap_unchecked(tmp_path: Path, phase: str) -> None:
+    """Plan, release or no phase: a phase added to deploy.sh later is refused until it is listed."""
+
+    run = _preflight(tmp_path, phase=phase)
+
+    _refused(run, NOT_THIS_PHASE)
+    assert run.calls == [["warehouse-id"]], "never checked"
+    assert BOOT not in run.transcript
+
+    bound = _preflight(tmp_path / "state-bound", phase=phase, state_output=STATE_WAREHOUSE, verifier=None)
+    _passed(bound)
+    assert bound.outcome == (STATE_WAREHOUSE, "bundle-state", STATE_WAREHOUSE), "the state's warehouse still wins"
+
+
+@pytest.mark.parametrize("phase", ["adopt", "unadopt"])
+def test_the_check_itself_refuses_the_adopt_phases_the_block_never_hands_it(tmp_path: Path, phase: str) -> None:
+    result = drive(
+        tmp_path,
+        function("check_bootstrap_warehouse") + f"check_bootstrap_warehouse {BOOT} ''\n",
+        dry_run=0,
+        env={"DEPLOY_PHASE": phase},
+        epilogue="",
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert NOT_THIS_PHASE in result.stderr and "bundle_state" not in result.stdout + result.stderr
+    assert "reached-after-block" not in result.stdout and BOOT not in result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("phase", [None, "plan", "release", "data"])
 def test_the_bundle_states_warehouse_wins_and_the_bootstrap_is_not_read(tmp_path: Path, phase: str | None) -> None:
     run = _preflight(tmp_path, phase=phase, state_output=STATE_WAREHOUSE, verifier=None)
@@ -469,6 +527,26 @@ def test_with_neither_the_refusal_keeps_its_words_and_names_the_profile_field(
     _refused(run, "binds no SQL warehouse yet (a first install)")
     assert "set the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID to a pro or serverless warehouse" in run.result.stderr
     assert run.calls == [["warehouse-id"]]
+    # One text for every phase, so it also says which phases the field serves:
+    # the data phase refuses it, and its remedy is the release.
+    assert (
+        "Only a plan or a release reads that field: the data phase runs on the bundle's own warehouse, "
+        "which the first release creates (run --phase release first)."
+    ) in run.result.stderr
+
+
+def test_in_the_data_phase_the_field_the_refusal_names_would_be_refused_and_an_operators_value_is_not(
+    tmp_path: Path,
+) -> None:
+    """Why the refusal names the phases: an operator who only set the field would meet a second refusal."""
+
+    followed = _preflight(tmp_path / "field-set", phase="data")
+    _refused(followed, "the data phase runs on this deployer's bundle warehouse only")
+
+    # A local operator's own warehouse is no bootstrap of the profile's: that path is unchanged.
+    local = _preflight(tmp_path / "operator-only", phase="data", bootstrap="", operator=OTHER, verifier=None)
+    _passed(local)
+    assert local.outcome == (OTHER, "first-install-bootstrap", OTHER) and local.calls == [["warehouse-id"]]
 
 
 def test_the_bootstrap_functions_are_called_only_from_the_block_and_only_with_the_field_set() -> None:
@@ -485,3 +563,29 @@ def test_the_bootstrap_functions_are_called_only_from_the_block_and_only_with_th
         '    _GRANTS_WAREHOUSE_ID="$_PROFILE_BOOTSTRAP_WAREHOUSE" WAREHOUSE_SOURCE="first-install-bootstrap"\n'
     ) in body
     assert '  [[ -z "$_PROFILE_BOOTSTRAP_WAREHOUSE" ]] || note_bootstrap_warehouse\n' in body
+
+
+# --- the docs say what the code does ---------------------------------------------------
+
+
+def _flat(relative: str) -> str:
+    return " ".join((Path(__file__).resolve().parents[2] / relative).read_text(encoding="utf-8").split())
+
+
+def test_the_docs_no_longer_call_a_first_install_blocked_at_the_warehouse() -> None:
+    onboarding = _flat("docs/clients/onboarding.md")
+    assert "**No longer blocked by the warehouse** (B1 is fixed" in onboarding
+    assert "blocked through CI today" not in onboarding, "section 5 once cited a Status row that says otherwise"
+    assert "The warehouse preflight no longer stops it through CI (section 4" in onboarding
+    assert "A `phase=data` dispatch before the first release refuses there with or without the field" in onboarding
+    runbook = _flat("docs/clients/first-client-cutover.md")
+    assert "| B1 (fixed: #344 and #348) |" in runbook
+    assert "what remains of it blocks a new client's first install only" not in runbook
+
+
+def test_the_deployment_guide_names_the_allowlist_the_masks_and_the_data_phases_remedy() -> None:
+    guide = _flat("docs/deployment.md")
+    assert "(an allowlist: any other phase refuses the field unchecked)" in guide
+    assert "registering its id as a runner mask in the parse that reads it from the bundle summary" in guide
+    assert "in the data phase the remedy is the first release" in guide
+    assert "The new id is registered as a runner mask before the provisioner prints it" in guide

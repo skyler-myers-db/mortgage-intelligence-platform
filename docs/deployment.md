@@ -1048,12 +1048,15 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    warehouse the bundle created, M1-PR3). The state's warehouse always wins:
    an operator `DATABRICKS_WAREHOUSE_ID` that names another refuses. Until a
    first install's step-4 apply creates the bundle's own (the deploy switches
-   to it right after the apply, and step 10 rebinds the Genie space to it),
+   to it right after the apply, registering its id as a runner mask in the
+   parse that reads it from the bundle summary, before any command is handed
+   it, and step 10 rebinds the Genie space to it),
    its steps borrow a **bootstrap warehouse** (B1): the client profile's
    optional identifying field `MIP_BOOTSTRAP_WAREHOUSE_ID` (16 lowercase hex
    characters; a GitHub Environment secret in CI, which `deploy-dev.yml`
    carries). The preflight admits it only when the state binds no warehouse,
-   in `--phase plan`, `--phase release` or a run with no phase, and only
+   in `--phase plan`, `--phase release` or a run with no phase (an
+   allowlist: any other phase refuses the field unchecked), and only
    after `python -m tools.databricks.bundle_state bootstrap-warehouse-id`
    proves it read-only (one state download, one `apps.get`, one
    `warehouses.get`): the state binds neither the warehouse nor
@@ -1061,7 +1064,8 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    `MIP_LEGACY_BUNDLE_ROOT` (the profile refuses the two together), and the
    warehouse is that id, not deleted and `PRO` (pro or serverless: the first
    install creates the governed Genie space on it). The shell then requires
-   the check's stdout to be exactly the id it read, and an operator
+   the check's stdout to be exactly the id it read (and that id to be 16
+   lowercase hex characters, whatever the check echoed), and an operator
    `DATABRICKS_WAREHOUSE_ID` naming another refuses; the log says
    `sql warehouse: first-install-bootstrap`. `--phase data` refuses it (the
    data phase runs on the bundle's own warehouse only); a dry run never
@@ -1070,7 +1074,10 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    read`), never refused, so a field left set after the first release is
    harmless. With neither the field nor a state binding a live run refuses
    `this deployer's bundle state binds no SQL warehouse yet (a first
-   install)`. A local operator's `DATABRICKS_WAREHOUSE_ID` still bootstraps
+   install)`. The refusal names the field and says that only a plan or a
+   release reads it: in the data phase the remedy is the first release,
+   whose bundle apply creates the bundle's own warehouse, never the field.
+   A local operator's `DATABRICKS_WAREHOUSE_ID` still bootstraps
    a local first install as before (no CI path carries it). The check proves
    only that the deployer can read the warehouse, not `CAN_USE` on it: a
    warehouse the deployer cannot use fails at step 0a, after the lease,
@@ -2357,7 +2364,9 @@ emergency recipe gates on.
    pinned space that is gone refuses and never falls back to a title.
 2. **No pin, no space with the title.** A first install: step 0a creates the
    space and pins its id at once, so a run interrupted before its capture
-   still finds its own space next time.
+   still finds its own space next time. The new id is registered as a runner
+   mask before the provisioner prints it (a pinned or acked id is masked
+   where the pin resolves it).
 3. **No pin, one space with the title.** Refused (exit 10): a space the deploy
    never created or pinned. The owner attestation is deferred, so the one way
    to adopt it is an exact digest ack. The read-only plan prints the candidate

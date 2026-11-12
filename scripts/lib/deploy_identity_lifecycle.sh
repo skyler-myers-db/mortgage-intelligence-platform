@@ -67,16 +67,25 @@ deployment_control_value() {
 # read it), which that block admits only when this deployer's bundle state
 # binds no warehouse; $2 is an operator DATABRICKS_WAREHOUSE_ID. Returns only
 # when every check holds, else exits 2 before any mutation, the id unprinted:
-# the data phase runs on the bundle's own warehouse only; an operator value
-# must be the same warehouse; and `bundle_state bootstrap-warehouse-id` must
-# prove it read-only (a first install, no App, a live pro or serverless
-# warehouse) and print exactly the id read here, 16 lowercase hex characters.
+# the phase is a plan, a release or none (an allowlist: the data phase runs
+# on the bundle's own warehouse only, and a phase this list does not name is
+# refused, never admitted by default); an operator value must be the same
+# warehouse; and `bundle_state bootstrap-warehouse-id` must prove it
+# read-only (a first install, no App, a live pro or serverless warehouse) and
+# print exactly the id read here, 16 lowercase hex characters.
 check_bootstrap_warehouse() {
   local configured="$1" operator="$2" checked=""
-  if [[ "${DEPLOY_PHASE:-}" == "data" ]]; then
-    echo "${RED}[deploy] the data phase runs on this deployer's bundle warehouse only, which the first release creates; this deployer's bundle state binds none yet, so MIP_BOOTSTRAP_WAREHOUSE_ID is refused. Nothing was changed.${RST}" >&2
-    exit 2
-  fi
+  case "${DEPLOY_PHASE:-}" in
+    "" | plan | release) ;;
+    data)
+      echo "${RED}[deploy] the data phase runs on this deployer's bundle warehouse only, which the first release creates; this deployer's bundle state binds none yet, so MIP_BOOTSTRAP_WAREHOUSE_ID is refused. Nothing was changed.${RST}" >&2
+      exit 2
+      ;;
+    *)
+      echo "${RED}[deploy] the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID is read only by a plan, a release or a run with no phase; this phase is refused. Nothing was changed.${RST}" >&2
+      exit 2
+      ;;
+  esac
   if [[ -n "$operator" && "$operator" != "$configured" ]]; then
     echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID; unset it. Nothing was changed.${RST}" >&2
     exit 2

@@ -179,7 +179,7 @@ else
   elif [[ -n "$_OPERATOR_WAREHOUSE_ID" ]]; then
     _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID" WAREHOUSE_SOURCE="first-install-bootstrap"
   else
-    echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID to a pro or serverless warehouse the deployer can use for the steps before the bundle creates its own.${RST}" >&2
+    echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID to a pro or serverless warehouse the deployer can use for the steps before the bundle creates its own. Only a plan or a release reads that field: the data phase runs on the bundle's own warehouse, which the first release creates (run --phase release first).${RST}" >&2
     exit 2
   fi
   [[ -z "$_PROFILE_BOOTSTRAP_WAREHOUSE" ]] || note_bootstrap_warehouse
