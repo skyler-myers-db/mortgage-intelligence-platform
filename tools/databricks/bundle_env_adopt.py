@@ -11,12 +11,27 @@ process's own environment (shell only, never .env.local), the plan naming
 this profile's install, and the profile App's signed deployment lease held.
 Taking that lease needs the deploy's signing authority, which the bundle CLI
 never inherits.
+
+The adopt phases' Genie binding (B4(c)). Before an adoption nothing pins the
+governed Genie space: no pin record exists, and the signed v7 record that
+will name it is what adopt-live writes at the end. So the adopt phases' own
+bundle calls (install_state_adopt's plan, binds and unbinds, and adopt-live's
+bundle summary) pass the wrapper-only ``ADOPT_GENIE_FLAG``. With it, and only
+when no pin names a space, bundle_env binds the one title match whose
+read-only pin plan's sha256 is the operator's exact ``MIP_GENIE_PIN_ACK``
+(shell only, never .env.local): ``acked_title_space_id``, through
+``genie_space_pin.resolve``, the provisioner's own resolution (attack G12).
+The digest covers the candidate id, its direct CAN_MANAGE holders and the
+deploying identity, so each call re-resolves the title match: a holder that
+changes mid-run refuses every later call, an undo's unbinds included.
+Nothing here writes a pin; adopt-live's signed v7 record pins the space.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -25,6 +40,65 @@ from typing import Any
 ACK_ENV = "MIP_ADOPT_PLAN_ACK"
 # The wrapper-only flags: the plan file, its digest and the held lease's evidence.
 FLAGS = ("--adopt-plan", "--adopt-plan-sha256", "--adopt-lease-id", "--adopt-source-git-sha")
+# The adopt phases' wrapper-only Genie flag and the pin plan ack it honours (B4(c)).
+ADOPT_GENIE_FLAG = "--adopt-acked-genie-pin"
+GENIE_PIN_ACK_ENV = "MIP_GENIE_PIN_ACK"
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def split_genie_flag(subcmd: str, args: list[str], *, unprovisioned: bool) -> tuple[list[str], bool, str | None]:
+    """``(args without the flag, given, error)``: once, by plan, summary or deployment bind|unbind only.
+
+    Never beside ``--allow-unprovisioned-genie`` and never in a ``=value``
+    spelling; the flag never reaches the CLI.
+    """
+
+    given = [arg for arg in args if arg == ADOPT_GENIE_FLAG or arg.startswith(f"{ADOPT_GENIE_FLAG}=")]
+    if not given:
+        return args, False, None
+    admitted = subcmd in {"plan", "summary"} or (subcmd == "deployment" and args[:1] in (["bind"], ["unbind"]))
+    if given != [ADOPT_GENIE_FLAG] or not admitted or unprovisioned:
+        return args, False, (
+            f"{ADOPT_GENIE_FLAG} is accepted once, by plan, summary or deployment bind|unbind only, "
+            "and never with --allow-unprovisioned-genie"
+        )
+    return [arg for arg in args if arg != ADOPT_GENIE_FLAG], True, None
+
+
+def acked_title_space_id(workspace: Any, profile: Any, *, environ: Mapping[str, str] | None = None) -> str:
+    """The one title match the operator's exact ``MIP_GENIE_PIN_ACK`` names; anything else refuses.
+
+    bundle_env calls this only when no pin names a space. It reads the ack
+    from this process's own environment (``environ`` in tests), never from
+    .env.local, and accepts only the provisioner's ``adopt``: no title match,
+    two of them, a wrong or missing ack, or a pin that appeared meanwhile
+    raise ``GeniePinRefusal``, whose messages name rules, never ids.
+    """
+
+    from tools.databricks import genie_space_pin
+
+    ack = str((os.environ if environ is None else environ).get(GENIE_PIN_ACK_ENV) or "")
+    if ack and _SHA256.fullmatch(ack) is None:
+        raise genie_space_pin.GeniePinRefusal(
+            f"{GENIE_PIN_ACK_ENV} must be the 64-hex sha256 of the read-only Genie pin plan"
+        )
+    resolution = genie_space_pin.resolve(
+        workspace,
+        app_name=profile.app_name,
+        title=profile.genie_space_name,
+        scope=profile.app_rollback_secret_scope,
+        lakebase_instance=profile.lakebase_instance,
+        ack_plan=ack,
+    )
+    if resolution.action == "create":
+        raise genie_space_pin.GeniePinRefusal(
+            "no Genie space carries the governed title; an adoption binds the live App's space"
+        )
+    if resolution.action != "adopt" or not resolution.space_id:
+        raise genie_space_pin.GeniePinRefusal(
+            "a pin names the governed Genie space now, so no title match is adopted; run the phase again"
+        )
+    return resolution.space_id
 
 
 def split_authority(args: list[str]) -> tuple[list[str], Any | None, str | None]:

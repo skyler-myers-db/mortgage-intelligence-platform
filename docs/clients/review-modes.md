@@ -57,7 +57,10 @@ review.
   `metastore_app_grants`, and the selector `supersedes_deployment`, a digest of the superseded
   record's deployment id and never a switch), each admitted only in the
   phases that read it. The run recomputes each body
-  right before it relies on it and refuses on any difference. An ack for one
+  right before it relies on it and refuses on any difference: `genie_pin`,
+  for one, is recomputed by the step-0 pin check, the pre-stop probes and,
+  in the adopt phases, by every bundle call that binds the title match it
+  names until adopt-live's signed record pins the space. An ack for one
   purpose never satisfies another. An ack binds the reviewed bytes; it does
   not prove that anyone other than the dispatcher reviewed them.
 - **The metastore owner's attestation** (`metastore_app_grants`, spike
