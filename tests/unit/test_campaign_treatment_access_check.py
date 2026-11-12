@@ -15,7 +15,8 @@ from tools.databricks.campaign_treatment_access_check import check_campaign_trea
 from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
 CATALOG, SCHEMA, TABLE = golden.CATALOG, golden.SCHEMA, golden.TABLE
-_READ_ONLY_METHODS = {"get", "list", "get_effective", "current", "me"}
+# ``summary``: the metastore's summary, the deployer's metastore read (spike S0(b)).
+_READ_ONLY_METHODS = {"get", "list", "get_effective", "current", "summary", "me"}
 # Values that identify this fake estate. None may appear in a check report.
 _IDENTIFIERS = ("mip", "app-client", "sp-id", "metastore-1", "warehouse", "other-team", "deployer")
 

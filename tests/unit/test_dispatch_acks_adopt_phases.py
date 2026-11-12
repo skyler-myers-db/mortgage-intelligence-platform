@@ -52,6 +52,8 @@ READ_BY = {
     "accepted_exposure_plan": ("MIP_ACK_ACCEPTED_EXPOSURE_PLAN", {"plan", "release", "adopt", "unadopt"}),
     "data_ledger_supersede": ("MIP_ACK_DATA_LEDGER_SUPERSEDE", {"data"}),
     "data_ledger_rerun": ("MIP_ACK_DATA_LEDGER_RERUN", {"data"}),
+    # The metastore owner's attestation (spike S0(b′)): never data, whose run never reads it.
+    "metastore_app_grants": ("MIP_ACK_METASTORE_APP_GRANTS", {"plan", "adopt", "unadopt", "release"}),
 }
 NEW_KEYS = ("adopt_live", "supersede", "supersedes_deployment", "unadopt", "quiesce_window", "genie_pin", "accepted_exposure_plan")
 
@@ -164,7 +166,10 @@ PLAN_DISPATCH = (
     "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan "
     "-f operation_acks=\"{acks}\" -f acknowledge_single_maintainer_break_glass=true"
 )
-# (template, phase, the acks text) as first-client-cutover.md shows them.
+# The metastore owner's attestation (spike S0(b′)). The cutover's CI deployer is not a metastore
+# admin, so the runbook shows every plan, adopt and unadopt dispatch carrying it, last.
+ATTESTED = " metastore_app_grants=<sha256>"
+# (template, phase, the acks text before the attestation) as first-client-cutover.md shows them.
 RUNBOOK = (
     (DISPATCH, "adopt", "accepted_exposure_plan=<sha256>"),  # 10B-0
     (DISPATCH, "adopt", "genie_pin=<sha256> accepted_exposure_plan=<sha256>"),  # 10B-1
@@ -192,12 +197,17 @@ def _filled(acks_text: str) -> tuple[str, dict[str, str]]:
 
 @pytest.mark.parametrize(("template", "phase", "acks_text"), RUNBOOK, ids=lambda value: str(value)[:40])
 def test_the_runbook_dispatch_lines_parse_to_their_exports(template: str, phase: str, acks_text: str) -> None:
-    filled, expected = _filled(acks_text)
-    assert acks.operation_exports(filled, phase) == expected
-    assert list(acks.operation_exports(filled, phase).values()) == [_hex(name) for name in re.findall(r"([a-z_]+)=<", acks_text)]
+    # A metastore-admin deployer's dispatch (no attestation), then the line the runbook shows.
+    for text in (acks_text, acks_text + ATTESTED):
+        filled, expected = _filled(text)
+        assert acks.operation_exports(filled, phase) == expected
+        assert list(acks.operation_exports(filled, phase).values()) == [_hex(name) for name in re.findall(r"([a-z_]+)=<", text)]
+    assert expected["MIP_ACK_METASTORE_APP_GRANTS"] == _hex("metastore_app_grants")
     runbook = (ROOT / "docs" / "clients" / "first-client-cutover.md").read_text(encoding="utf-8")
-    command = template.format(phase=phase, acks=acks_text)
+    command = template.format(phase=phase, acks=acks_text + ATTESTED)
     assert command in runbook, f"the runbook no longer shows: {command}"
+    unattested = template.format(phase=phase, acks=acks_text)
+    assert unattested not in runbook, f"this dispatch refuses metastore_authority without the attestation: {unattested}"
 
 
 # --- (f) a digest of another plan flows through, and its own tool refuses it ------------------

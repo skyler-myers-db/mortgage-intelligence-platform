@@ -17,9 +17,9 @@ is not onboarded from nothing: it is **adopted**. Client #1 is that case, and
 | Stage | State on `main` |
 |---|---|
 | Profile, bootstrap, GitHub Environments | Built, and tested against fakes only (their guides record no live run yet). |
-| `phase=plan` dispatch | Built, CI only, but **blocked for any client whose deployer has never applied a bundle** (a new client, or one not yet adopted): the warehouse preflight runs in every live phase, not only on a first release. Until the deployer's bundle state binds a SQL warehouse, every live plan, adopt and release refuses `this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID ...` (exit 2, nothing changed). That name is no client profile field and `deploy-dev.yml` carries none: a profile field for it is a code follow-up (B1 in [first-client-cutover.md](first-client-cutover.md), "Blockers"). An existing install that is not adopted yet refuses earlier, at the live checks (section 5). |
-| **First install through `deploy-dev.yml`** | **Blocked** by the same warehouse refusal. The first-install phase order is also open: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). The release's treatment-access converger reads the metastore's owner with a metastore-admin-only call, so a deployer that is not a metastore admin depends on spike S0(b), still owed. |
-| Adopting an existing install through `deploy-dev.yml` | **Blocked** by the same warehouse refusal (B1), by the deploy job's shallow checkout (B5), and by the unverified-frontend ack its first release needs (B3); spike S0(b) is owed ([first-client-cutover.md](first-client-cutover.md), "Blockers"). `operation_acks` now carries adopt-live's acks and the supersede selector (B2, fixed) and the Genie pin and accepted-exposure acks in the adopt phases (B4(a) and B4(b), fixed); while no signed record pins the Genie space, the adopt phases' bundle plan, binds, unbinds and summary bind the one title match whose pin plan that exact `genie_pin` names (B4(c), fixed). |
+| `phase=plan` dispatch | Built, CI only, but **blocked for any client whose deployer has never applied a bundle** (a new client, or one not yet adopted): the warehouse preflight runs in every live phase except the two adopt phases, not only on a first release. Until the deployer's bundle state binds a SQL warehouse, every live plan and release refuses `this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID ...` (exit 2, nothing changed). That name is no client profile field and `deploy-dev.yml` carries none: a profile field for it is a code follow-up (B1 in [first-client-cutover.md](first-client-cutover.md), "Blockers"). `phase=adopt` and `phase=unadopt` no longer refuse here: they run no SQL and read no warehouse (B1's adopt part, #344). An existing install that is not adopted yet refuses earlier, at the live checks (section 5). |
+| **First install through `deploy-dev.yml`** | **Blocked** by the same warehouse refusal. The first-install phase order is also open: the release's gold-dependent tail (Genie trusted assets, the smoke) reads gold that only a later data phase writes (docs/deployment.md, "Data phase on a first install"). The metastore's owner is read from its summary, which a non-admin receives (spike S0(b); the live checks' check 4b measures it for each client). A deployer that is not a metastore admin cannot read the App's metastore privileges (spike S0(b′)). The first release stops with exit 3 for the owner bootstrap and keeps the App (section 5); the metastore owner then attests the kept App as well (`metastore_app_grants`, docs/deployment.md "Metastore authority"), and the resumed release carries that ack, without which it refuses `metastore_authority` before the lease. |
+| Adopting an existing install through `deploy-dev.yml` | **Blocked** by the unverified-frontend ack its first release needs (B3); the adopt dispatches themselves have no known code refusal left on their path. S0(b) is fixed in code and measured by plan #1; a deployer that is not a metastore admin needs the metastore owner's `metastore_app_grants` attestation on every adopt, plan, unadopt and release run (S0(b′)) ([first-client-cutover.md](first-client-cutover.md), "Blockers"). `operation_acks` now carries adopt-live's acks and the supersede selector (B2, fixed) and the Genie pin and accepted-exposure acks in the adopt phases (B4(a) and B4(b), fixed); while no signed record pins the Genie space, the adopt phases' bundle plan, binds, unbinds and summary bind the one title match whose pin plan that exact `genie_pin` names (B4(c), fixed). The warehouse refusal (B1) no longer applies: the adopt phases read no warehouse, and the plan and release after the bind take the adopted one from the deployer's bundle state. The deploy job's shallow checkout (B5) is fixed: the adopt phase checks out main's full history, so adopt-live resolves a live health sha that `main` holds, and still refuses one it does not (`health_sha_not_on_main`; the remedy is an emergency ship of a `main` commit). |
 | Data phase, per-client nightly | Built. The nightly validates only a client whose catalog is `mip`. |
 | Owner hardware-key attestation (plan M1-PR5) | **Deferred.** Not built. See "Deferred" below. |
 
@@ -247,7 +247,11 @@ python -m tools.clients.bootstrap_account --post-first-install --ack-plan <sha25
 ```
 
   and a second `phase=release` dispatch resumes at the same point
-  (docs/deployment.md, "First install: awaiting owner bootstrap").
+  (docs/deployment.md, "First install: awaiting owner bootstrap"). When the
+  deployer is not a metastore admin, the metastore owner also attests the kept
+  App now (`python -m tools.databricks.metastore_app_grants --app-name
+  <app-name>`) and the resumed release carries `metastore_app_grants=<sha256>`
+  (section 6).
 
 ## 6. First release
 
@@ -263,6 +267,15 @@ Add, only when the plan printed them:
   space with the governed title (refused, exit 10, until acknowledged);
 - `database_instance_update=<sha256>`, `accepted_exposure_plan=<sha256>`: an
   acknowledged Lakebase instance change, a non-empty accepted exposure;
+- `metastore_app_grants=<sha256>`: when the deployer is not a metastore admin,
+  the metastore owner's attestation of the App's metastore privileges
+  (`python -m tools.databricks.metastore_app_grants --app-name <app-name>`,
+  run read-only as the metastore's owner; docs/deployment.md, "Metastore
+  authority"). Every plan, adopt, unadopt and release run of an existing App
+  reads it. A first install's first release creates the App and stops with
+  exit 3 before reading it (section 5); the owner attests the kept App
+  alongside `--post-first-install`, and the resumed release carries the ack
+  (without it, it refuses `metastore_authority` before the lease);
 - `-f expected_active_deployment_sha256=<sha256>`: the active deployment the
   plan printed (release only), so the run refuses before its lease if the App
   moved.

@@ -19,10 +19,10 @@ For the one space that carries the title it prints:
 * the pin plan's sha256, computed as the pin check computes it
   (``genie_space_pin.pin_plan``) from the profile's App name and title, that
   space, its direct CAN_MANAGE holders and the profile's deployer
-  (``MIP_IDENTITY_IDS_JSON.deployer``, the principal the deploy's live check
-  proves the CI run is). It equals the CI log's ``pin plan sha256`` only when
-  CI saw this space, these holders and that deployer, so the counts below
-  describe the plan a ``genie_pin`` ack would name;
+  (``MIP_IDENTITY_IDS_JSON.deployer`` in lower case, the principal the deploy's
+  live check proves the CI run is). It equals the CI log's ``pin plan sha256``
+  only when CI saw this space, these holders and that deployer, so the counts
+  below describe the plan a ``genie_pin`` ack would name;
 * how many principals hold a direct CAN_MANAGE (the CI plan's creator line
   lists one ``***`` per holder) and whether the caller is one of them;
 * how many of the reviewed managers (``MIP_GENIE_MANAGER_PRINCIPALS``) are
@@ -88,7 +88,13 @@ class ReviewInputError(ValueError):
 
 
 def profile_deployer(raw: str) -> str:
-    """``MIP_IDENTITY_IDS_JSON.deployer`` as the profile pins it; "" when the shell has none."""
+    """``MIP_IDENTITY_IDS_JSON.deployer`` in lower case; "" when the shell has none.
+
+    Lower-cased as the deploy's ``deployer_principal`` is (tools/clients/profile.py):
+    the platform spells an application id in lower case, so that is the
+    ``user_name`` CI's pin plan covers, and a pin in another case names the
+    same deployer and must give the same digest.
+    """
 
     if not raw.strip():
         return ""
@@ -96,7 +102,7 @@ def profile_deployer(raw: str) -> str:
         pins = IdentityPins.model_validate_json(raw)
     except ValueError:  # a validation message can quote the value
         raise ReviewInputError(f"{IDENTITY_IDS_ENV} in this shell is not a valid identity map") from None
-    return pins.deployer or ""
+    return (pins.deployer or "").lower()
 
 
 def _workspace() -> Any:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from databricks.sdk.errors import PermissionDenied
 
 from tests.fixtures.prestop_estate import (
     APP_CLIENT,
@@ -204,6 +205,51 @@ def test_a_catalog_owner_group_member_or_metastore_admin_reads_every_schema(
 
     assert len(refusals) == 1
     assert "principal 'analytics-team' holds MANAGE on schema mip.gold" in refusals[0]
+
+
+def test_the_catalog_owner_branch_needs_no_metastore_read() -> None:
+    # Spike S0(b): the deployer in the catalog's owning group proves the listing
+    # complete on its own, so a denied metastore summary cannot refuse it.
+    estate = _hidden_schema_grant(clean_estate(), catalog_owner="mip-data-owners")
+    estate["metastore"]["owner"] = "someone-else@example.invalid"
+    estate["principals"]["mip-data-owners"]["members"] = ["deployer-id"]
+    workspace = FakeWorkspace(estate)
+
+    def denied() -> Any:
+        raise PermissionDenied("the summary is denied")
+
+    workspace.metastores.summary = denied
+    refusals, _notes = probe.owner_equivalent_refusals(
+        workspace,
+        catalog="mip",
+        genie_space_id=GOVERNED_SPACE,
+        acls=genie_acls(workspace),
+        approved=probe.approved_principals(approved_owners="mip-data-owners", deployer=DEPLOYER, genie_managers=""),
+    )
+
+    assert len(refusals) == 1
+    assert "principal 'analytics-team' holds MANAGE on schema mip.gold" in refusals[0].message
+
+
+@pytest.mark.parametrize(
+    ("owner", "message"),
+    [
+        (None, "the metastore summary returned no owner to the deployer (spike S0(b))"),
+        (f" {DEPLOYER}", "a fault in the metastore's data, not a withheld read"),
+    ],
+    ids=["withheld", "noncanonical"],
+)
+def test_the_metastore_admin_branch_reads_the_summary_and_refuses_an_unreadable_owner(
+    owner: Any, message: str
+) -> None:
+    estate = _hidden_schema_grant(clean_estate(), catalog_owner="mip-data-owners")
+    estate["metastore"]["owner"] = owner
+
+    refusals, _notes, workspace = _refusals(estate, approved_owners="mip-data-owners")
+
+    assert len(refusals) == 1
+    assert "cannot read the owner-equivalent grantees" in refusals[0] and message in refusals[0]
+    assert "GET metastore_summary" in workspace.estate["calls"]
 
 
 def test_a_permissions_read_error_on_the_governed_space_refuses() -> None:

@@ -413,6 +413,29 @@ def test_unadopt_with_no_record_retires_nothing_so_the_unbind_recovery_still_run
     assert world.secrets.puts == [] and world.record() is None
 
 
+def test_unadopt_reads_no_health_sha_and_no_git_so_a_depth_1_checkout_is_enough(
+    world: World,
+) -> None:
+    """deploy-dev.yml checks out main's full history for --phase adopt only (B5).
+
+    unadopt reads no health sha and runs no git, so its depth-1 checkout is enough.
+    """
+
+    world.apply()
+
+    def unread() -> str:
+        raise AssertionError("unadopt read the App's health sha")
+
+    no_history = world.readers(
+        health_sha=unread, repo=world.repo / "no-checkout", main_ref="refs/remotes/origin/main"
+    )
+    plan, facts, _record = adopt_live.compute_plan(world, "unadopt", world.target(), no_history)
+
+    assert plan["record_state"] == "adopted" and facts is None
+    assert world.apply("unadopt", readers=no_history)["provenance"] == "retired"
+    assert world.apps.mutations == []
+
+
 def test_an_agentic_tier_unadopt_retires_a_core_adoption_but_never_adopts(world: World) -> None:
     world.apply()
 

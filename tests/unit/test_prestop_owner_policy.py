@@ -52,7 +52,11 @@ def test_approved_owners_on_every_governed_object_pass() -> None:
     refusals, notes, workspace = _run(clean_estate())
 
     assert refusals == []
-    assert notes == ["approved-owner policy holds on 4 governed objects"]
+    assert notes == [
+        "approved-owner policy holds on 4 governed objects",
+        # The converger's next proof, judged before the stop (spike S0(b′)).
+        "the App holds no metastore privilege outside the reviewed set (a live read as a metastore admin)",
+    ]
     assert all(call.startswith("GET ") for call in workspace.estate["calls"]), "read-only"
 
 
@@ -90,6 +94,10 @@ def test_the_deployer_owns_the_metastore_only_when_the_profile_names_it() -> Non
 def test_a_configured_metastore_owner_group_without_the_app_passes() -> None:
     estate = clean_estate()
     estate["metastore"]["owner"] = "mip-data-owners"
+    # The deployer is in the owning group, so it is a metastore admin and may read
+    # the App's metastore grants (spike S0(b′)); test_metastore_app_grants.py
+    # covers a deployer that is not.
+    estate["principals"]["mip-data-owners"]["members"] = ["deployer-id"]
 
     refusals, _notes, _workspace = _run(estate, metastore_owner="mip-data-owners")
 

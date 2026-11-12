@@ -286,6 +286,9 @@ RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
     "tools.databricks.estate.cli": _estate,
     "tools.databricks.app_deployment_lease": _parse_only("tools.databricks.app_deployment_lease"),
     "tools.databricks.quiesce_window": _injected("tools.databricks.quiesce_window", workspace_factory=_stop),
+    "tools.databricks.metastore_app_grants": _injected(
+        "tools.databricks.metastore_app_grants", workspace_factory=_stop
+    ),
     "tools.live_validation_gate": _parse_only("tools.live_validation_gate"),
 }
 

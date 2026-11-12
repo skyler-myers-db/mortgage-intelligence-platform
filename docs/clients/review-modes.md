@@ -54,7 +54,7 @@ review.
   operation acks a tool printed (`adopt_plan`, `adopt_live`, `supersede`,
   `unadopt`, `quiesce_window`, `database_instance_update`, `genie_pin`,
   `accepted_exposure_plan`, `data_ledger_supersede`, `data_ledger_rerun`,
-  and the selector `supersedes_deployment`, a digest of the superseded
+  `metastore_app_grants`, and the selector `supersedes_deployment`, a digest of the superseded
   record's deployment id and never a switch), each admitted only in the
   phases that read it. The run recomputes each body
   right before it relies on it and refuses on any difference: `genie_pin`,
@@ -63,6 +63,22 @@ review.
   names until adopt-live's signed record pins the space. An ack for one
   purpose never satisfies another. An ack binds the reviewed bytes; it does
   not prove that anyone other than the dispatcher reviewed them.
+- **The metastore owner's attestation** (`metastore_app_grants`, spike
+  S0(b′)) is the one ack whose content the run cannot re-read: a deployer that
+  is not a metastore admin is denied the App's metastore grants. The run
+  recomputes its body from what it does read (the metastore's id and owner, the
+  App's id) for each date the 30-day rule admits (the pre-stop probe judges
+  the run's end, every check after the lease its own moment) and each
+  reviewed privilege set, and admits it only in `plan`, `adopt`, `unadopt`
+  and `release`. Every field but the privilege set is one the deployer reads
+  itself, and that set has two reviewed values, so anyone with the
+  deployer's reads can compute a digest the run accepts without the owner
+  reading anything. Under `single_maintainer_audited` it is therefore the
+  dispatcher's unauthenticated assertion, dated and bound to this metastore,
+  its owner and this App, that the App holds only reviewed metastore
+  privileges; it proves no owner read until the deferred owner hardware-key
+  attestation (M1-PR5) lands. A grant made after it is its residual, bounded
+  by the 30 days.
 - **The human-run tools.** `bootstrap_account` and `github_environment` refuse
   under CI or without a terminal, open a fresh interactive login every run,
   and apply only the exact plan digest the operator reviewed

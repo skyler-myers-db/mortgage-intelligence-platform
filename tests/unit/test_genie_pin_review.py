@@ -225,6 +225,38 @@ def test_the_digest_covers_the_profiles_deployer_not_the_caller(
     assert _printed_digest(text) != ci
 
 
+def test_an_upper_case_deployer_pin_still_prints_the_ci_digest(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A profile may pin the deployer's application id in upper case; the platform spells it lower.
+
+    CI's pin plan covers ``current_user.me().user_name`` (lower case), and every deploy check
+    compares the deployer case-insensitively (``deployer_principal`` is the pin lower-cased,
+    tools/clients/profile.py). So a pin the deploy accepts must give the owner the digest CI
+    printed: read with its case unchanged, the review's digest could never equal CI's, and
+    10B-0 would dead-end on a correct profile.
+    """
+
+    workspace = _acl_workspace(_user(CREATOR), _user(REVIEWED))
+    ci = _ci_digest(workspace, monkeypatch)
+    capsys.readouterr()
+    upper = CI_DEPLOYER.upper()
+    assert upper != CI_DEPLOYER, "the premise: the pin differs from the platform's spelling by case only"
+
+    rc, text = _main(workspace, capsys, managers=REVIEWED, identity_ids=_identity_ids(upper))
+    rc_lower, text_lower = _main(workspace, capsys, managers=REVIEWED)
+    _rc_other, text_other = _main(
+        workspace, capsys, managers=REVIEWED, identity_ids=_identity_ids("00000000-0000-4000-8000-0000000000D2")
+    )
+
+    assert rc == rc_lower == 0
+    assert _printed_digest(text) == ci == _printed_digest(text_lower), "one digest, whatever the pin's case"
+    assert _printed_digest(text_other) != ci, "another deployer is still another plan, in any case"
+    assert _unapproved(text) == _unapproved(text_lower), "the probe's preview compares case-folded already"
+    for value in (CI_DEPLOYER, upper, SPACE, CREATOR, REVIEWED):
+        assert value not in text, value
+
+
 def _probe_refusals(workspace: PinWorkspace, *, owners: str, managers: str) -> int:
     """10B-1's owner-equivalent verdict on this space (the governed catalog absent)."""
 
