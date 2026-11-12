@@ -17,11 +17,21 @@ built offline (no host metadata read, a no-network credentials strategy), so
 the SDK's own precedence (arguments, then the environment, then the profile
 file) decides who each client is. The Genie reads are the in-memory
 PinWorkspace. The second half drives install_state_adopt's real
-``BundleEnvCli`` through an in-process bundle_env.
+``BundleEnvCli``, and adopt-live's ``reviewed_bindings``, through an
+in-process bundle_env that sees what a real child would: the ``env=`` its
+caller built and nothing else, with its stderr on the caller's pipe. So an
+ack a caller strips from the child's environment refuses here as it would in
+10B-1, and the tests read what a CI job log shows when bundle_env refuses the
+Genie binding (the bundle call's name and exit code) and where the cause goes
+(the private report only).
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,7 +46,13 @@ from tests.fixtures.client_profiles import IDENTITY_IDS, paychex_shaped_profile
 from tests.fixtures.genie_pin_workspace import PinWorkspace, Space, patch_rollback_scope
 from tools.clients import ci_profile
 from tools.clients.environment import KNOWN_NAMES, RawProfile, resolve
-from tools.databricks import bundle_env, bundle_env_adopt, provision_genie_space, workspace_auth
+from tools.databricks import (
+    adopt_live_facts,
+    bundle_env,
+    bundle_env_adopt,
+    provision_genie_space,
+    workspace_auth,
+)
 from tools.databricks import install_state_adopt as adopt
 
 FLAG = bundle_env_adopt.ADOPT_GENIE_FLAG
@@ -45,6 +61,8 @@ PROFILE = resolve(RawProfile(values=paychex_shaped_profile()))
 CANDIDATE = "acked-candidate-space-0001"
 DEPLOYER = IDENTITY_IDS["deployer"]
 APP_FACING = IDENTITY_IDS["normal"]
+SIGNING_KEYS = ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY")
+STRANGER = "stranger@other.example"
 
 
 class _Offline(CredentialsStrategy):
@@ -191,7 +209,7 @@ def test_a_holder_change_after_step_0_refuses_the_bind_plan(
     """The digest binds the holders too: a CAN_MANAGE grant after 10B-0 refuses 10B-1 (review again)."""
 
     monkeypatch.setenv(ACK_ENV, step_0_pin_plan_sha256(capsys))
-    SdkConfigClient.estate.spaces[0].managers += ("stranger@other.example",)
+    SdkConfigClient.estate.spaces[0].managers += (STRANGER,)
 
     rc, captured = bundle_env_plan(monkeypatch, ["plan", "-t", "client", "-o", "json", FLAG])
 
@@ -212,14 +230,67 @@ def _plan_text(estate: es.Estate) -> str:
     return texts[0]
 
 
-def _in_process_bundle_env(monkeypatch: pytest.MonkeyPatch, estate: es.Estate, bound: list[str]) -> None:
-    def run(argv: list[str], **_kwargs: Any) -> Any:
+def _in_process_bundle_env(
+    monkeypatch: pytest.MonkeyPatch,
+    estate: es.Estate,
+    bound: list[str],
+    *,
+    before_call: Any = None,
+) -> list[dict[str, str]]:
+    """Stand in for the bundle_env child process; returns each child's environment, in call order.
+
+    A real child sees the ``env=`` mapping its caller built and nothing else,
+    and its stderr is the caller's pipe, never the job log. So every call
+    runs bundle_env.main() with ``os.environ`` replaced by that mapping and
+    its stderr captured and handed back. A plan or summary answers with the
+    fake engine's plan over ``estate``. A bind or unbind bundle_env lets
+    through then edits the deployer's state there, checked against the adopt
+    plan as bundle_env's own verifier does (tests/fixtures/adopt_estate.py;
+    the verifier itself is stood in for, its tests are bundle_env_adopt's).
+    The synthetic estate names its App after its bundle key; bundle_env admits
+    only the profile's App, so the App's bind reaches it under that name.
+    ``before_call(argv)`` runs first, for a world that changes mid-run.
+    """
+
+    children: list[dict[str, str]] = []
+    engine = es.FakeBundleCli(estate)
+    estate_app = estate.legacy_ids.get("apps.mip_app")
+
+    def run(argv: list[str], *, env: dict[str, str], **_kwargs: Any) -> Any:
         assert argv[1:3] == ["-m", "tools.databricks.bundle_env"]
-        rc, captured = bundle_env_plan(monkeypatch, argv[3:])
+        args = argv[3:]
+        if before_call is not None:
+            before_call(args)
+        children.append(dict(env))
+        stderr = io.StringIO()
+        with pytest.MonkeyPatch.context() as child, contextlib.redirect_stderr(stderr):
+            for name in set(os.environ) - set(env):
+                child.delenv(name)
+            for name, value in env.items():
+                child.setenv(name, value)
+            child.setattr(bundle_env.bundle_env_adopt, "edit_verifier", lambda *_a, **_k: lambda *_e: None)
+            rc, captured = bundle_env_plan(child, [PROFILE.app_name if arg == estate_app else arg for arg in args])
         bound.append(captured.get("env", {}).get("BUNDLE_VAR_genie_space_id", "refused"))
-        return SimpleNamespace(returncode=rc, stdout=_plan_text(estate) if rc == 0 else "", stderr="")
+        if rc == 0 and args[0] == "deployment":
+            kept, authority, error = bundle_env_adopt.split_authority([a for a in args if a != FLAG])
+            assert error is None and authority is not None, error
+            if kept[1] == "bind":
+                engine.bind(kept[2], kept[3], authority)
+            else:
+                engine.unbind(kept[2], authority)
+        return SimpleNamespace(
+            returncode=rc, stdout=_plan_text(estate) if rc == 0 else "", stderr=stderr.getvalue()
+        )
 
     monkeypatch.setattr(adopt.subprocess, "run", run)
+    return children
+
+
+def _public(captured: Any) -> list[str]:
+    """What a job log shows: stdout and stderr, without the runner-mask registrations."""
+
+    lines = (captured.out + captured.err).splitlines()
+    return [line for line in lines if line and not line.startswith("::add-mask::")]
 
 
 @pytest.mark.parametrize("phase", ("adopt", "unadopt"))
@@ -245,6 +316,51 @@ def test_the_adopt_phases_plan_binds_the_acked_candidate_through_the_real_cli(
     assert bound == [CANDIDATE], "the pre-bind plan bound the acked candidate"
 
 
+def test_the_ack_reaches_bundle_env_in_the_child_environment_each_caller_builds(
+    ci_auth: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both callers hand MIP_GENIE_PIN_ACK to the bundle_env child and keep the signing keys from it.
+
+    The plan is install_state_adopt's (``BundleEnvCli._run``, which the binds
+    and unbinds share); the summary is adopt-live's ``reviewed_bindings``.
+    """
+
+    printed = step_0_pin_plan_sha256(capsys)
+    monkeypatch.setenv(ACK_ENV, printed)
+    for name in SIGNING_KEYS:
+        monkeypatch.setenv(name, "PLACEHOLDER-not-a-key")
+    bound: list[str] = []
+    children = _in_process_bundle_env(monkeypatch, es.Estate(), bound)
+    monkeypatch.setattr(
+        "tools.databricks.app_rollback_resource_contract.reviewed_app_resource_contract", lambda summary: []
+    )
+
+    adopt.BundleEnvCli(python="python").plan()
+    adopt_live_facts.reviewed_bindings()
+
+    assert bound == [CANDIDATE, CANDIDATE], "the plan and the summary both bound the acked candidate"
+    assert [child[ACK_ENV] for child in children] == [printed, printed]
+    assert not any(name in child for child in children for name in SIGNING_KEYS)
+
+
+def test_a_caller_that_strips_the_ack_from_the_child_refuses_as_10b_1_would(
+    ci_auth: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The control for the harness: the ack in the caller's own environment is not enough."""
+
+    monkeypatch.setenv(ACK_ENV, step_0_pin_plan_sha256(capsys))
+    monkeypatch.setattr(adopt, "_PRIVATE_ENV", (*adopt._PRIVATE_ENV, ACK_ENV))
+    bound: list[str] = []
+    children = _in_process_bundle_env(monkeypatch, es.Estate(), bound)
+    cli = adopt.BundleEnvCli(python="python")
+
+    with pytest.raises(adopt.BundleCliError, match=r"bundle plan failed \(exit 2\)"):
+        cli.plan()
+
+    assert bound == ["refused"] and ACK_ENV not in children[0]
+    assert "no ack names it" in cli.errors[0]
+
+
 def test_the_real_cli_refuses_the_adopt_plan_without_the_exact_ack(
     ci_auth: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -258,4 +374,126 @@ def test_the_real_cli_refuses_the_adopt_plan_without_the_exact_ack(
         adopt.compute_plan("adopt", es.inputs(), cli, estate)
 
     assert bound == ["refused"]
-    assert "the ack names another plan" in capsys.readouterr().err
+    # The child's stderr is the caller's pipe: the cause goes to the private report's cli_errors only.
+    assert len(cli.errors) == 1 and "the ack names another plan" in cli.errors[0]
+    assert "the ack names another plan" not in "\n".join(_public(capsys.readouterr()))
+
+
+# --- what the job log shows, and what stays in the private report --------------------------------
+
+
+def _adopt_main(estate: es.Estate, argv: list[str]) -> int:
+    return adopt.main(
+        argv,
+        inputs=es.inputs,
+        workspace_factory=lambda: estate,
+        cli_factory=lambda: adopt.BundleEnvCli(python="python"),
+        lease_factory=lambda _workspace, _args: adopt.SignedLease(lambda: None, "lease-1", "0" * 40),
+    )
+
+
+def _genie_cause(report: Path) -> list[str]:
+    assert oct(report.stat().st_mode & 0o777) == "0o600", "the report is private"
+    return list(json.loads(report.read_text(encoding="utf-8"))["cli_errors"])
+
+
+def test_a_bind_plan_bundle_env_refuses_shows_only_the_bundle_calls_exit_in_the_job_log(
+    ci_auth: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """10B-1 after a holder change: ``bundle plan failed (exit 2)``; the Genie cause is in the private report."""
+
+    estate = es.Estate()
+    monkeypatch.setenv(ACK_ENV, step_0_pin_plan_sha256(capsys))
+    SdkConfigClient.estate.spaces[0].managers += (STRANGER,)
+    _in_process_bundle_env(monkeypatch, estate, [])
+    report = tmp_path / "plan-report.json"
+
+    rc = _adopt_main(estate, ["plan", "--phase", "adopt", "--report-out", str(report)])
+
+    assert rc == 2
+    assert _public(capsys.readouterr()) == ["[mip-adopt] REFUSED: bundle plan failed (exit 2)"]
+    (cause,) = _genie_cause(report)
+    assert "governed Genie binding verification failed" in cause and "the ack names another plan" in cause
+    assert estate.bound() == {}
+
+
+@pytest.mark.parametrize(
+    ("binds_before_the_change", "exit_code", "bound_after", "last_line"),
+    (
+        (4, 3, 4, "the inverse is unproven: the state may still bind keys this run bound"),
+        (0, 2, 0, "nothing is left changed: every bind this run made was undone"),
+    ),
+    ids=("among-the-binds", "at-the-first-bind"),
+)
+def test_a_holder_change_under_the_lease_ends_bind_failed_and_half_bound_unless_nothing_was_bound(
+    ci_auth: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    binds_before_the_change: int,
+    exit_code: int,
+    bound_after: int,
+    last_line: str,
+) -> None:
+    """10B-2: the bind and the undo's unbinds each re-resolve the match, so the undo refuses too (exit 3)."""
+
+    estate = es.Estate()
+    monkeypatch.setenv(ACK_ENV, step_0_pin_plan_sha256(capsys))
+    ack = adopt.compute_plan("adopt", es.inputs(), es.FakeBundleCli(estate), estate).sha256
+
+    def a_holder_appears(args: list[str]) -> None:
+        space = SdkConfigClient.estate.spaces[0]
+        at_the_bind = args[:2] == ["deployment", "bind"] and len(estate.bound()) == binds_before_the_change
+        if at_the_bind and STRANGER not in space.managers:
+            space.managers += (STRANGER,)
+
+    _in_process_bundle_env(monkeypatch, estate, [], before_call=a_holder_appears)
+    report = tmp_path / "apply-report.json"
+
+    rc = _adopt_main(
+        estate,
+        ["apply", "--phase", "adopt", "--ack-plan", ack, "--app-name", "a", "--lease-id", "lease-1",
+         "--source-git-sha", "0" * 40, "--report-out", str(report)],
+    )
+
+    public = _public(capsys.readouterr())
+    assert rc == exit_code and len(estate.bound()) == bound_after
+    assert public[0] == "[mip-adopt] REFUSED bind_failed: BundleCliError during the binds"
+    assert public[-1].startswith(f"[mip-adopt] {last_line}") and len(public) == 2
+    assert "ack names another plan" not in "\n".join(public), "the job log never names the Genie cause"
+    causes = _genie_cause(report)
+    assert len(causes) == 1 + bound_after, "the refused bind, then every unbind of the undo"
+    assert all("the ack names another plan" in cause for cause in causes)
+
+
+def test_a_holder_change_at_adopt_lives_summary_keeps_the_binds_and_stales_the_adopt_plan_ack(
+    ci_auth: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """After the binds a fresh genie_pin is not enough for 10B-2: the adopt plan is another plan (10B-0, 10B-1, 10B-2)."""
+
+    estate = es.Estate()
+    monkeypatch.setenv(ACK_ENV, step_0_pin_plan_sha256(capsys))
+    ack = adopt.compute_plan("adopt", es.inputs(), es.FakeBundleCli(estate), estate).sha256
+    _in_process_bundle_env(monkeypatch, estate, [])
+    applied = _adopt_main(
+        estate,
+        ["apply", "--phase", "adopt", "--ack-plan", ack, "--app-name", "a", "--lease-id", "lease-1",
+         "--source-git-sha", "0" * 40],
+    )
+    assert applied == 0 and len(estate.bound()) == 16, capsys.readouterr().err
+    capsys.readouterr()
+
+    SdkConfigClient.estate.spaces[0].managers += (STRANGER,)
+    with pytest.raises(adopt_live_facts.AdoptLiveRefused, match=r"\Athe bundle summary failed \(exit 2\)\Z") as refused:
+        adopt_live_facts.reviewed_bindings()
+
+    assert refused.value.code == "bindings_differ"
+    assert _public(capsys.readouterr()) == [], "adopt-live keeps no line of bundle_env's: no report holds the cause"
+    assert len(estate.bound()) == 16, "the binds stay as acknowledged"
+    # 10B-0 again gives a fresh genie_pin; the earlier 10B-1's adopt_plan digest is still another plan's.
+    monkeypatch.setenv(ACK_ENV, step_0_pin_plan_sha256(capsys))
+    assert _adopt_main(estate, ["plan", "--phase", "adopt", "--ack-plan", ack]) == 2
+    mismatch = f"[mip-adopt] REFUSED ack_mismatch: {bundle_env_adopt.ACK_ENV} is not this plan's sha256"
+    assert mismatch in _public(capsys.readouterr())
+    again = adopt.compute_plan("adopt", es.inputs(), adopt.BundleEnvCli(python="python"), estate)
+    assert again.sha256 != ack and again.edits == () and len(again.already) == 16
