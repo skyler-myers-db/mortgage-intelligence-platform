@@ -240,7 +240,8 @@ def _builder_inputs() -> set[str]:
     names |= {*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES, app_deploy_payload.SALESFORCE_BINDINGS_ENV}
     names |= {source_names.CATALOG_ENV, source_names.SCHEMA_ENV, source_names.TABLE_PREFIX_ENV}
     names |= set(re.findall(r'_env_value\("([A-Z0-9_]+)"', source)) | {"MIP_PRESENTER_MODE"}
-    return names
+    # Read through a constant, so the pattern above misses it: its presence adds two names.
+    return names | {app_deploy_payload.PREVIOUS_SECRET_KID_ENV}
 
 
 def _assignments(text: str, names: set[str]) -> set[str]:
