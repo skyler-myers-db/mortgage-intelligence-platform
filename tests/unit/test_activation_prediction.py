@@ -466,9 +466,10 @@ def test_env_names_reads_nothing_more_on_a_workspace_or_principal_not_the_profil
     from tests.fixtures.live_workspace import LiveWorkspace
 
     _live, _world_unused = _profile_world(tmp_path, monkeypatch)
-    for override in ({"principal": "someone-else"}, {"workspace_id": "999"}, {"host": "https://other.example"}):
-        stranger = LiveWorkspace(core_tier_profile(), identity_ids=IDENTITY_IDS, **override)
-        assert ap.main(["env-names"], workspace_factory=lambda s=stranger: _workspace(s, _Untouchable())) == 2
+    overrides: tuple[dict[str, Any], ...] = ({"principal": "someone-else"}, {"workspace_id": "999"}, {"host": "https://other.example"})
+    for override in overrides:
+        stranger = _workspace(LiveWorkspace(core_tier_profile(), identity_ids=IDENTITY_IDS, **override), _Untouchable())
+        assert ap.main(["env-names"], workspace_factory=lambda: stranger) == 2  # noqa: B023 - called at once
         assert "not measured: the workspace or the deployer is not the profile's" in capsys.readouterr().err
 
 
