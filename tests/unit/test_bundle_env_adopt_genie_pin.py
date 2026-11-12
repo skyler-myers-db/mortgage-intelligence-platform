@@ -339,11 +339,17 @@ def test_the_callers_argv_carry_the_flag(monkeypatch: pytest.MonkeyPatch, tmp_pa
     from tools.databricks import install_state_adopt as adopt
 
     calls: list[list[str]] = []
+    children: list[dict[str, str]] = []
+    signing_keys = ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY")
 
-    def record(argv: list[str], **_kwargs: Any) -> Any:
+    def record(argv: list[str], **kwargs: Any) -> Any:
         calls.append(list(argv))
+        children.append(dict(kwargs["env"]))
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
+    monkeypatch.setenv(ACK_ENV, digest())
+    for name in signing_keys:
+        monkeypatch.setenv(name, "PLACEHOLDER-not-a-key")
     monkeypatch.setattr(adopt.subprocess, "run", record)
     monkeypatch.setattr(adopt, "parse_plan", lambda text: text)
     cli = adopt.BundleEnvCli(python="python")
@@ -369,10 +375,21 @@ def test_the_callers_argv_carry_the_flag(monkeypatch: pytest.MonkeyPatch, tmp_pa
          *authority_flags, FLAG],
         ["-m", "tools.databricks.bundle_env", "summary", "-t", "client", "-o", "json", FLAG],
     ]
+    # The flag binds nothing without the ack: each child's own environment carries it, and no signing key.
+    assert [child.get(ACK_ENV) for child in children] == [digest()] * 4
+    assert not any(name in child for child in children for name in signing_keys)
 
 
 def test_the_docs_say_how_a_mid_run_holder_change_ends_and_recovers() -> None:
-    """The judge's required note: the undo's unbinds re-resolve the match; exit 3, half-bound; unadopt with a fresh ack."""
+    """The judge's required note: the undo's unbinds re-resolve the match; exit 3, half-bound; unadopt with a fresh ack.
+
+    Also what a CI job log shows at each point (bundle_env's own line never
+    reaches it) and that a refusal at adopt-live's summary needs 10B-0 and
+    10B-1 again, not 10B-2 alone: the binds changed the adopt plan's digest.
+    """
+
+    from tools.databricks import adopt_live
+    from tools.databricks import install_state_adopt as adopt
 
     def flat(path: str) -> str:
         return " ".join((REPO / path).read_text(encoding="utf-8").split())
@@ -386,11 +403,26 @@ def test_the_docs_say_how_a_mid_run_holder_change_ends_and_recovers() -> None:
         "| B4 | fixed |",
         "**10B walked with #344, #345, #346 and B4(c) all on `main`**",
         "**No known code gap is left on 10B's path:**",
+        # What the job log shows, by the tools' own prefixes; the cause is in the private report.
+        "The job log never prints that text",
+        f"`{adopt._PREFIX} REFUSED: bundle plan failed (exit 2)`",
+        f"`{adopt._PREFIX} REFUSED bind_failed: BundleCliError during the binds`",
+        f"`{adopt_live._PREFIX} REFUSED bindings_differ: the bundle summary failed (exit 2)`",
+        "written only to the run's private report on the runner",
+        "A read-only dispatch without `genie_pin` reveals it",
+        # A summary-time refusal: the binds stay, so the adopt plan digest moved too.
+        "re-running 10B-2 with only a fresh `genie_pin` cannot pass",
+        "refuses `ack_mismatch` before the lease",
+        "10B-0 (review, a fresh `genie_pin`), 10B-1 (a fresh `adopt_plan` and `adopt_live`), then 10B-2",
     ):
         assert anchor in runbook, anchor
+    assert "so re-run 10B-2, or unadopt, each with a fresh `genie_pin`" not in runbook
+    assert "bind plan: `governed Genie binding verification failed` with" not in runbook
     assert "B4(c), until it lands" not in runbook and "Until B4(c) lands" not in runbook
     deployment = flat("docs/deployment.md")
     assert "**The adopt phases (B4(c)).**" in deployment
     assert "the undo's unbinds included" in deployment and "with a fresh ack" in deployment
+    assert "a job log names only the call that failed" in deployment
+    assert "a re-run needs a fresh adopt plan digest as well as a fresh ack" in deployment
     assert "the cutover runbook's B4(c), a follow-up" not in deployment
     assert "B4(c), the next follow-up" not in flat("docs/clients/onboarding.md")

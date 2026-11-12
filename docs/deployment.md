@@ -2371,8 +2371,14 @@ re-resolves the match (the space list, its permissions, the deploying
 identity), the undo's unbinds included: a direct CAN_MANAGE holder that
 changes mid-run refuses every later call (`the ack names another plan`), and
 when that lands among the binds the undo is unproven (exit 3, half-bound).
+The adopt tools capture bundle_env's output, so a job log names only the call
+that failed (`bundle plan failed (exit 2)`, `bind_failed`, or `bindings_differ`
+with `the bundle summary failed`); bundle_env's own line is in the run's
+private report (`cli_errors`), and adopt-live's summary keeps none.
 The recovery is `--phase unadopt` with a fresh ack: the step-0 pin check
-prints the new plan's sha256.
+prints the new plan's sha256. A refusal at adopt-live's summary leaves the
+binds in place, so the adopt plan is another plan: a re-run needs a fresh
+adopt plan digest as well as a fresh ack.
 
 The preflight runs the same resolution read-only
 (`provision_genie_space --plan-pin`) before the signed lease and any App stop,
