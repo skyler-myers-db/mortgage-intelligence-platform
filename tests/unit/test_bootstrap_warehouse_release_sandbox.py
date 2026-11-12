@@ -17,7 +17,10 @@ client's workspace. The run must:
   bootstrap warehouse, and every warehouse reader up to the step-4 apply too;
 * switch to the bundle's own warehouse right after the apply (the bundle
   summary's ``mip_serverless_sql``), so every later reader, the step-10 Genie
-  rebind included, gets that one, and the bootstrap id is never used again.
+  rebind included, gets that one, and the bootstrap id is never used again;
+* register that warehouse as a runner mask in the very parse that reads it
+  from the summary, before any command is handed it: a first install's
+  preflight found no bundle warehouse to mask, and the log is public.
 """
 
 from __future__ import annotations
@@ -119,3 +122,22 @@ def test_the_bootstrap_id_is_printed_only_inside_the_commands_it_is_handed(fresh
     assert len(printed) >= 2 and all(f"--warehouse-id {BOOT}" in line for line in printed), printed
     assert all(ANSI.sub("", line).startswith("$ ") for line in printed), "a command echo, never prose"
     assert [line for line in fresh.result.stderr.splitlines() if BOOT in line] == [f"::add-mask::{BOOT}"] * 2
+
+
+def test_the_bundles_own_warehouse_is_masked_at_the_switch_before_any_command_is_handed_it(fresh: Release) -> None:
+    calls = fresh.python_calls
+    apply = next(index for index, call in enumerate(calls) if call["argv"][1:3] == APPLY)
+    parse = calls[apply + 2]["argv"]
+    assert parse[0] == "-c" and "mip_serverless_sql" in parse[1], "the summary's parse follows the summary"
+    assert "print(emit_mask(" in parse[1], "the id leaves the parse only through the mask"
+    assert not any(BUNDLE_WAREHOUSE in " ".join(call["argv"]) for call in calls[: apply + 2]), "unused before it"
+    # stderr: the runner reads the command there, and the capture of the parse's stdout keeps only the id.
+    assert [line for line in fresh.result.stderr.splitlines() if BUNDLE_WAREHOUSE in line] == [
+        f"::add-mask::{BUNDLE_WAREHOUSE}"
+    ]
+    out = fresh.result.stdout.splitlines()
+    applied = next(index for index, line in enumerate(out) if "-m tools.databricks.bundle_env deploy " in line)
+    printed = [index for index, line in enumerate(out) if BUNDLE_WAREHOUSE in line]
+    assert printed and printed[0] > applied, "its first print is a command echo after the switch"
+    echoes = [ANSI.sub("", out[index]) for index in printed]
+    assert all(line.startswith("$ ") and f"warehouse-id {BUNDLE_WAREHOUSE}" in line for line in echoes), echoes
