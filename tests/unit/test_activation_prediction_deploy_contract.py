@@ -308,3 +308,28 @@ def test_no_step_after_the_prediction_assigns_a_builder_input_but_the_controlled
     for text in after:
         called = set(re.findall(r"^\s*([a-z_]+)\b", text, re.M))
         assert not (called & assigners - {"restore_deployment_sync_contract"}), called & assigners
+
+
+def test_no_env_file_a_core_release_sources_carries_a_builder_input_but_the_lease() -> None:
+    """A tool's --out-env file is sourced under allexport, so it could move a builder input as an assignment could."""
+
+    names = _builder_inputs()
+    writers: dict[str, set[str]] = {}
+    for path in sorted((REPO / "tools").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if "out_env" in text or "out-env" in text or "_write_env" in text:
+            found = {name for name in names if re.search(rf'"{name}"\s*:|"{name}=', text)}
+            if found:
+                writers[path.relative_to(REPO).as_posix()] = found
+    assert writers == {"tools/databricks/app_deployment_lease_cli.py": {"MIP_APP_DEPLOYMENT_LEASE_ID"}}, writers
+    # The signed blue's binding env (step 0a, the window's re-pin, the promotion) names record facts only.
+    binding = (REPO / "tools" / "databricks" / "blue_restore_proof.py").read_text(encoding="utf-8")
+    body = binding[binding.index("def _binding_env(") : binding.index("def inspect_v7(")]
+    keys = set(re.findall(r'"([A-Z][A-Z0-9_]+)":', body))
+    assert keys and all(key.startswith("MIP_APP_ROLLBACK_") for key in keys) and not keys & names
+    # The agentic provisioner's cached --out-env is never carried into a core release.
+    promotion = (LIB / "deploy_step_app_promotion_and_refresh.sh").read_text(encoding="utf-8")
+    core_guard = 'if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" ]] && ! tier_is_agentic; then'
+    assert promotion.count('. "$AGENTIC_ENV_CACHE"') == 1
+    guard = promotion.index(core_guard)  # the sourcing sits in that guard's own elif branch
+    assert guard < promotion.index("elif [[", guard) < promotion.index('. "$AGENTIC_ENV_CACHE"') < promotion.index("\nfi\n", guard)

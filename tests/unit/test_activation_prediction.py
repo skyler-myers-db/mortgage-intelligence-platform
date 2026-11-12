@@ -193,7 +193,12 @@ def test_the_digest_never_crosses_a_copy_a_commit_or_a_payload(tmp_path: Path) -
         app_name=rr.APP_NAME, record={**record, "restore_payload_sha256": contract._payload_digest(payload)}, run_git_sha=GREEN_SHA
     )
     assert proof.ack_digest(ap.PURPOSE, plan) == digest
-    superseded = {**plan, "restore_to": proof.sha256_text(record["restore_source_path"].replace("adopted-", "adopted-f"))}
+    payloaded = {**record, "restore_payload_sha256": plan["restore_payload_sha256"]}
+    repinned = {**payloaded, "deployment_id": "deployment-of-a-start", "predecessor_deployment_id": record["deployment_id"]}
+    assert proof.unverified_frontend_plan(app_name=rr.APP_NAME, record=repinned, run_git_sha=GREEN_SHA) == plan
+    other_copy = {**payloaded, "restore_source_path": record["restore_source_path"].replace("adopted-", "adopted-f")}
+    superseded = proof.unverified_frontend_plan(app_name=rr.APP_NAME, record=other_copy, run_git_sha=GREEN_SHA)
+    assert superseded["restore_to"] != plan["restore_to"], "a supersede adopts into another copy"
     other_payload = {**plan, "restore_payload_sha256": "f" * 64}
     for other in (superseded, other_payload):
         assert proof.ack_digest(ap.PURPOSE, other) != digest

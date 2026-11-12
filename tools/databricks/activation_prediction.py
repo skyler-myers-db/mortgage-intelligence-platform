@@ -381,7 +381,8 @@ def main(argv: list[str] | None = None, *, workspace_factory: Callable[[], Any] 
             return _env_names(args, workspace_factory)
         return _predict(args, workspace_factory)
     except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
-        print(f"{_PREFIX} REFUSED: the prediction could not complete ({type(exc).__name__})", file=sys.stderr)
+        what = "env-name parity not measured" if args.action == "env-names" else "REFUSED"
+        print(f"{_PREFIX} {what}: the prediction could not complete ({type(exc).__name__})", file=sys.stderr)
         return 2
 
 

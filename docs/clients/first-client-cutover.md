@@ -422,9 +422,9 @@ and the deployer first, then reads the App, never a value). The step summary's
   step 7 leaves the install half handed over. Fix the profile field the names
   point at (an optional role name blue lacks is already left out) and re-run
   plan #1, or report it as a code follow-up; never start step 7 around it;
-- `env-name parity not measured` (the profile refuses, or the workspace or the
-  deployer is not the profile's): stop, as for any live-check line outside the
-  set above.
+- `env-name parity not measured` (the profile refuses, the workspace or the
+  deployer is not the profile's, or a read could not complete, which shows its
+  error class only): stop, as for any live-check line outside the set above.
 
 **Refusals and what to do:** `check-dispatch` names a repository-level profile
 name (delete it, step 4); `environment_protections_drift` (re-run
