@@ -370,6 +370,8 @@ if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
   # The active deployment's digest a release may pin, and the PlanReport's
   # two halves: public to the step summary, full to the workspace (M1-PR7).
   print_active_deployment_digest
+  # The digest restore_unverified_frontend an adopted blue's release needs (B3).
+  predict_activation_rollback
   publish_plan_report
   echo "${GRN}[deploy] plan phase complete: stopped before the lease; no governed resource was changed (its one write, under GitHub Actions only, is the create-only plan report in the deployer's plan-reports folder).${RST}"
   exit 0
@@ -382,6 +384,11 @@ if [[ "${DEPLOY_PHASE:-}" == "release" ]]; then
   admit_release_phase_budget
   # The deployment the dispatch expected, when it names one (M1-PR7).
   check_expected_active_deployment
+fi
+# A release, or a run with no --phase, predicts its pre-activation rollback
+# proof here, read-only, and refuses before the lease what it would refuse (B3).
+if [[ "${DEPLOY_PHASE:-}" == "release" || -z "${DEPLOY_PHASE:-}" ]]; then
+  predict_activation_rollback
 fi
 # <<< release phase: budget admission <<<
 if [[ "$DRY_RUN" -eq 0 ]]; then

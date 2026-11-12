@@ -90,7 +90,8 @@ run_adopt_phase_apply() {
 # is a one-run shell export of the digest adopt-live's plan printed, never a
 # .env.local line. MIP_ADOPT_BUILD_REFERENCE_DIST=1 (shell only, optional) has
 # adopt-live build frontend/dist from the health sha itself and compare;
-# without it the frontend reads as unverified. Main is origin/main, never this
+# without it the frontend reads as unverified, as every governed (CI-only, no
+# Node) adoption does (B3: the release carries the ack). Main is origin/main, never this
 # checkout's HEAD, and the run's source commit must already be on it.
 adopt_live_mode() {
   local phase="${1:?adopt phase is required}"

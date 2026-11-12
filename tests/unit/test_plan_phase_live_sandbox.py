@@ -55,6 +55,8 @@ PLAN_TOOLS = (
     "tools.databricks.phase_budget describe --phase release",
     "tools.databricks.phase_budget describe --phase data",
     "tools.databricks.active_deployment_pin digest --app-name mip-app",  # one apps.get (M1-PR7)
+    # B3: the activation's rollback proof, predicted read-only (a record read, no signing key).
+    "tools.databricks.activation_prediction predict --phase plan --app-name mip-app",
     "tools/render_sql.py --catalog mip",  # the EXIT trap's local restore
 )
 

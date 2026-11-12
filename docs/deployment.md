@@ -2163,12 +2163,34 @@ verifier, the agent runtime or the Supervisor proxy:
   not necessarily the adopted deployment's own. A blue whose `frontend/dist`
   is unverified is restorable only with its `restore_unverified_frontend`
   ack, so the proof requires that exact ack before activation too (export
-  `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND`, the digest the refusal prints, for
-  the run; `unverified_frontend_unacked`); adopting with
-  `MIP_ADOPT_BUILD_REFERENCE_DIST=1` avoids it. That ack covers this blue,
-  this restore payload and the run's own commit: the activation gate and the
-  same run's tier-b restore ask for the one digest, and a later run at
-  another commit needs its own, which its refusal prints.
+  `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND`, or under `deploy-dev.yml` the
+  `operation_acks` pair `restore_unverified_frontend=<sha256>`, phase release
+  only; `unverified_frontend_unacked`). An adopted blue's frontend is always
+  unverified: a live `--phase adopt` is CI-only and the deploy job has no Node,
+  so `MIP_ADOPT_BUILD_REFERENCE_DIST` has no live governed use for an adopted
+  legacy install. That ack covers blue's immutable copy (the sha256 of its
+  `restore_source_path`, which a re-pin keeps and a supersede changes), this
+  restore payload and the run's own commit: the activation gate, step 0a and
+  the same run's tier-b restore ask for the one digest, the quiesce window's
+  re-pin of blue keeps it, and a later run at another commit needs its own.
+- **The prediction before the lease (B3).** The proof above runs at step 10b,
+  after the lease, the non-App bundle apply and the window. So the core tier
+  predicts it read-only first (`tools/databricks/activation_prediction.py`,
+  `predict_activation_rollback` in `scripts/lib/deploy_plan_report_lifecycle.sh`,
+  no signing key): `--phase plan` prints `restore_unverified_frontend=<sha256>`
+  to the log and the step summary after the active deployment's digest, and a
+  release or a run with no `--phase` refuses before the lease, with nothing
+  changed, what the proof would refuse (`unverified_frontend_unacked`,
+  `no_rollback_proof`, `payload_invalid`, the tier gate's codes, and
+  `frontend_ack_unpredictable` for a payload-less blue whose env-name set
+  holds the lease name). It loads the record with the core release's own
+  loader, rebuilds the payload in process as `restore-payload` does and runs
+  the proof's own candidate check; `MIP_ACK_NO_ROLLBACK_FOR` defers each of
+  those verdicts to the proof (its value is never passed). It does not
+  predict the copy's re-hash or blue being active at activation. A plan that
+  stops at the client live checks (an install not adopted yet) first measures
+  blue's env-name parity names only (`activation_prediction env-names`): this
+  profile's rebuilt payload against the App's newest deployment.
 - **A refused pre-activation proof** (`unverified_frontend_unacked`,
   `no_rollback_proof`, a rebuild that fails) exits 2 at step 10b while signed
   blue still serves. Over signed blue the run reaches step 10b in the quiesce
@@ -3713,7 +3735,11 @@ copy of the live dist itself compares equal), so no such input exists. Equal
 bytes are `verified`, and the plan and the record carry the digest of the dist
 they matched; anything else (no build, a failed one, another Node, a lender
 mark the build cannot stage) is `unverified`, and any restore to an unverified
-record needs the `restore_unverified_frontend` ack.
+record needs the `restore_unverified_frontend` ack. A live adopt is CI-only
+(`scripts/deploy.sh` refuses it outside GitHub Actions) and the deploy job has
+no Node by design, so the flag has no live governed use: an adopted blue's
+frontend is always `unverified`, and its first release carries the ack its
+plan prints (B3).
 
 **The record slot and the modes.** adopt signs only when the slot holds no
 record, a retired tombstone, or this deployment's own adopted record (an
@@ -3823,7 +3849,10 @@ and its release id (`--source-git-sha`, `--release-id`), so an ack left
 exported in a long-lived shell never carries to another release. Tier a (start-only) refuses once blue is no longer the App's last
 deployment. The core release rebuilds an adopted blue's restore payload
 before this proof, and an unverified blue frontend needs its
-`restore_unverified_frontend` ack here too (M2-PR7b).
+`restore_unverified_frontend` ack here too (M2-PR7b). The core tier predicts
+this proof read-only before the lease (B3, "The prediction before the lease"
+above): a plan prints the frontend digest, which survives the window's re-pin,
+and a release refuses there what the proof would refuse.
 
 **Freeze.** The emergency recipe's publisher obeys a signed freeze marker
 (the emergency recipe, above).
@@ -5343,7 +5372,10 @@ satisfies another:
   a plan reads it at its pre-lease window plan), `database_instance_update`
   (plan, release), `genie_pin` and `accepted_exposure_plan` (plan, release,
   adopt, unadopt; never data, which never pins and skips the probes),
-  `data_ledger_supersede` and `data_ledger_rerun` (data), and the one
+  `restore_unverified_frontend` (release: the core release's pre-lease
+  prediction, step 0a, the pre-activation proof and the tier-b restore read
+  it; a plan prints it, B3), `data_ledger_supersede` and `data_ledger_rerun`
+  (data), and the one
   selector, `supersedes_deployment` (adopt): the sha256 of the adopted
   record's deployment id that picks adopt-live's supersede mode, exported as
   `MIP_ADOPT_LIVE_SUPERSEDE`. A selector is a digest, never a switch (`yes`,

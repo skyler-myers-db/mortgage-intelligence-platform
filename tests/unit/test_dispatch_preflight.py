@@ -215,6 +215,8 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
         "MIP_ACK_SUPERSEDE",
         "MIP_ACK_UNADOPT",
         "MIP_ADOPT_LIVE_SUPERSEDE",
+        # The core release's unverified-frontend ack (B3).
+        "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND",
     }
     # ...and each has its reader where the run looks for it (a literal snippet per env).
     for env, (path, snippet) in READERS.items():
@@ -239,6 +241,10 @@ READERS = {
     "MIP_ACK_ACCEPTED_EXPOSURE_PLAN": (
         "tools/databricks/estate/accepted_exposure.py",
         'ACK_ENV = "MIP_ACK_ACCEPTED_EXPOSURE_PLAN"',
+    ),
+    "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND": (
+        _ADOPT_LIB,
+        'tier_args+=(--restore-unverified-frontend-ack "$MIP_ACK_RESTORE_UNVERIFIED_FRONTEND")',
     ),
     "MIP_ACK_DATA_LEDGER_SUPERSEDE": ("tools/databricks/job_phase_runner.py", 'ACK_SUPERSEDE_ENV = "MIP_ACK_DATA_LEDGER_SUPERSEDE"'),
     "MIP_ACK_DATA_LEDGER_RERUN": ("tools/databricks/job_phase_runner.py", 'ACK_RERUN_ENV = "MIP_ACK_DATA_LEDGER_RERUN"'),
@@ -484,6 +490,44 @@ def test_an_adopt_dispatch_exports_its_acks_for_the_deploy_step(
     assert preflight.main(["--phase", "unadopt", *argv[2:]], environ=environ) == 2
     assert not github_env.exists(), "a refused dispatch exports nothing"
     assert "adopt_live is never read by --phase unadopt" in capsys.readouterr().out
+
+
+def test_the_unverified_frontend_ack_rides_a_release_only_and_no_rollback_never_rides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """B3: cutover step 12 carries restore_unverified_frontend; no_rollback_for has no carrier on purpose."""
+
+    digest = hashlib.sha256(b"restore_unverified_frontend").hexdigest()
+    pair = f"restore_unverified_frontend={digest}"
+    assert acks.operation_exports(pair, "release") == {"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND": digest}
+    for phase in sorted(acks.PHASES - {"release"}):
+        with pytest.raises(ProfileRefusal) as caught:
+            acks.operation_exports(pair, phase)
+        assert list(caught.value.lines) == [f"operation_acks: restore_unverified_frontend is never read by --phase {phase}"]
+    for phase in sorted(acks.PHASES):
+        with pytest.raises(ProfileRefusal) as caught:
+            acks.operation_exports(f"no_rollback_for={digest}", phase)
+        assert any("no_rollback_for is not a reviewed purpose" in line for line in caught.value.lines)
+    for shape in ("restore_unverified_frontend=yes", f"restore_unverified_frontend={digest[:63]}"):
+        with pytest.raises(ProfileRefusal):
+            acks.operation_exports(shape, "release")
+
+    monkeypatch.setattr(protections, "from_environ", lambda env: _FROM_ENVIRON(env, opener=_opener(READABLE)))
+    vars_source, secrets_source = _contexts(tmp_path)
+    github_env, summary = tmp_path / "github.env", tmp_path / "summary.md"
+    argv = [
+        "--phase", "release", "--environment", CLIENT, "--vars-json", vars_source, "--secrets-json", secrets_source,
+        "--repo", str(_repo(tmp_path)), "--github-env", str(github_env), "--step-summary", str(summary),
+    ]
+    window = hashlib.sha256(b"quiesce_window").hexdigest()
+    environ = {**ENVIRON, **_profile_ack(), "MIP_DISPATCH_OPERATION_ACKS": f"quiesce_window={window} {pair}"}
+    assert preflight.main(argv, environ=environ) == 0
+    assert github_env.read_text(encoding="utf-8").splitlines() == [
+        f"MIP_ACK_QUIESCE_WINDOW={window}",
+        f"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND={digest}",
+    ]
+    out = capsys.readouterr()
+    assert digest not in out.out + out.err + summary.read_text(encoding="utf-8"), "names only"
 
 
 def test_inside_actions_the_only_lines_that_hold_a_value_are_runner_mask_commands(

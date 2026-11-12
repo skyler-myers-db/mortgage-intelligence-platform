@@ -61,6 +61,12 @@ REMEDY = {
         purpose: f"export {name}=<its sha256> for this run only (never in .env.local)"
         for purpose, name in ACK_ENV.items()
     },
+    # deploy-dev.yml carries this one too (tools/clients/dispatch_acks.py, B3).
+    "restore_unverified_frontend": (
+        "export MIP_ACK_RESTORE_UNVERIFIED_FRONTEND=<its sha256> for this run only (never in "
+        ".env.local); under deploy-dev.yml, the dispatch input operation_acks "
+        "restore_unverified_frontend=<its sha256>"
+    ),
     "override_freeze": "pass --override-freeze-ack <its sha256> to this one publish",
     # No release reads it from the shell yet: the one release it can serve, an
     # agentic release over a core blue, is wired by M4-PR1 (blue_tier_gate.py).

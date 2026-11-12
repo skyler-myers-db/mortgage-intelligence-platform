@@ -53,17 +53,18 @@ journals the tools write name resources: keep them in `<private-dir>`.
 
 Read against `main` (which holds #334 and #337), these gaps stop the governed path, and
 one owed spike may stop it too. Each gap is a code change; nothing in this
-runbook works around one. B2, B4(a), B4(b) and B6 are fixed on `main` (their
+runbook works around one. B2, B3, B4(a), B4(b) and B6 are fixed on `main` (their
 rows stay for the record). **Do not start step 7 until B1, B4(c) and B5 have
-landed, B3 has landed or is about to land, and S0(b) is answered:** steps 7 to 12
-run as one sequence inside a 14-day window (step 7), and a sequence started
-while 10B cannot run leaves the install half handed over.
+landed, S0(b) is answered, and plan #1 reports blue's env-name parity holding
+(step 6):** steps 7 to 12 run as one sequence inside a 14-day window (step 7),
+and a sequence started while 10B or 12 cannot run leaves the install half
+handed over.
 
 | # | Blocks | What happens | The follow-up |
 |---|---|---|---|
 | B1 | step 10B | Before adoption the deployer's bundle state binds no SQL warehouse, so `scripts/deploy.sh`'s preflight needs `DATABRICKS_WAREHOUSE_ID`, which is no client profile field: `deploy-dev.yml` carries none, and every live `phase=adopt` run refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Carry a bootstrap warehouse through the profile (the same gap blocks a new client's plan and first install, [onboarding.md](onboarding.md)), or skip the warehouse read in the adopt phases. |
 | B2 | fixed | `operation_acks` carries adopt-live's acks: `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `supersede` (`MIP_ACK_SUPERSEDE`, `adopt`) with its selector `supersedes_deployment` (`MIP_ADOPT_LIVE_SUPERSEDE`, `adopt`: the sha256 of the adopted record's deployment id, a digest and never a switch), and `unadopt` (`MIP_ACK_UNADOPT`, `unadopt`). The carrier checks each entry alone: the bind's `adopt_plan` without adopt-live's ack still refuses before the lease (`the adopt needs the adopt-live ack as well`), and a selector that names no adopted record refuses in adopt-live (`supersede_mismatch`). | Fixed on `main`. Step 10B's dispatches, its supersede remedy and its rollback carry them. |
-| B3 | step 12 | adopt-live in CI cannot build a reference `frontend/dist` (the deploy job has no Node, and `MIP_ADOPT_BUILD_REFERENCE_DIST` is no dispatch input), so the adopted record's frontend is `unverified`. The release's pre-activation proof then refuses green activation (`unverified_frontend_unacked`) unless `MIP_ACK_RESTORE_UNVERIFIED_FRONTEND` or `MIP_ACK_NO_ROLLBACK_FOR` is given, and neither has a dispatch carrier. It refuses after the non-App bundle apply and any admitted window, with blue still serving. | Add `restore_unverified_frontend` (and, if the owner wants that route, `no_rollback_for`) to `OPERATION_ACKS` for phase `release`. |
+| B3 | fixed | A live `phase=adopt` is CI-only and the deploy job has no Node (by design), so an adopted blue's `frontend/dist` is always `unverified`: `MIP_ADOPT_BUILD_REFERENCE_DIST` has no live governed use for an adopted legacy install (a dist built on another host or Node never byte-equals a reference build). The release's pre-activation proof then refused green activation (`unverified_frontend_unacked`) after the non-App bundle apply and the window, and no dispatch input carried the ack. | Fixed on `main`: `operation_acks` carries `restore_unverified_frontend` (`MIP_ACK_RESTORE_UNVERIFIED_FRONTEND`, phase `release` only). The ack names blue's immutable copy, its restore payload and the run's commit, so the window's re-pin keeps it. The completing plan #3 prints it (step 11), and the release predicts the proof read-only before the lease (`[mip-activation-prediction]`), refusing there with nothing changed. Plans #1 and #2 measure blue's env-name parity, the step-7 gate (step 6). `no_rollback_for` stays shell-only on purpose. |
 | B4 | step 10B, and its rollback | (a) and (b) are fixed: `genie_pin` (`MIP_GENIE_PIN_ACK`) and `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) are admitted in `plan`, `release`, `adopt` and `unadopt` (never `data`), for the two readers the adopt phases reach: the step-0 Genie pin check (`provision_genie_space --plan-pin`, no phase guard, `scripts/lib/deploy_step_preflight_gates.sh`) and the pre-stop probes in their adopt mode. So 10B-0 refuses at the pin check and prints the pin plan's sha256, and 10B-1 carries it. **(c) remains:** before an adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well), and the adopt phases' bundle plan (`install_state_adopt`'s `bundle_env plan`), its binds and adopt-live's bundle summary refuse an unpinned space whatever `genie_pin` says: `no pin names the governed Genie space yet` (exit 2, before the lease). `phase=unadopt` meets it too while no record names the space. | (c) is the next follow-up PR (not in the carrier fix): `bundle_env` honours the exact `MIP_GENIE_PIN_ACK` for the one title match, in the adopt phases' own calls only. |
 | B5 | step 10B | The deploy job's checkout is shallow: `actions/checkout@v6` with no `fetch-depth` (depth 1, `.github/workflows/deploy-dev.yml`), and nothing in `scripts/` or `tools/` fetches more. adopt-live resolves the live App's health `git_sha` in that checkout (`rev-parse`, then an ancestor check against `origin/main`) and reads `app.yaml` and the closure at it. The App 10A starts reports the commit the emergency recipe last shipped, an older `main` commit that a depth-1 clone does not hold, so adopt-live refuses `health_sha_not_on_main` (`the health sha resolves to no single commit in this checkout (fetch full history)`), then `adopt-live (adopt) refused before the lease` (exit 2). docs/deployment.md ("Signing the live deployment as an adopted blue") already says a CI checkout needs the full history; the workflow does not fetch it. | Give the deploy job's checkout `fetch-depth: 0`, or fetch the health sha in the adopt phase. |
 | B6 | step 11 | Fixed. Plan #3 plans run 1's WR2 window, and it always exited 2: `quiesce_window` was release-only, so a plan could not carry the window's ack and the pre-lease window plan refused `window_unacked`; and the window's admission was judged against the plan job's own 30 minutes, which admit no window (each needs about an hour), so an acked plan would still refuse `window_budget_refused`. Plan #3 never printed the active deployment's sha256 or published the PlanReport step 12 needs. | Fixed on `main`: a plan carries `quiesce_window` (read-only) and forecasts the window's admission for a release dispatched now; step 11 is two dispatches. A release refuses an unacked or unadmitted window exactly as before. |
@@ -131,7 +132,7 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
 | 10 | Start the App (10A), then adopt (10B) | owner, CI | **blocked (B1, B4(c), B5; S0(b) owed)** |
 | 11 | Plan #3 | CI | after 10 (S0(b) owed) |
-| 12 | Release (run 1) | CI | **blocked (B3; S0(b) owed)** |
+| 12 | Release (run 1) | CI | **S0(b) owed** |
 | 13 | Post-release verification | agent, owner | after 12 |
 | 14 | Data phase | CI | after 13 |
 | 15 | Refresh on, after 7 green days | owner | later |
@@ -406,6 +407,25 @@ before the pre-stop probes, so the plan's other expected refusals (UC owner
 policy, Lakebase executor) are not reached until the adopt phase. The public
 summary leaks no identifier.
 
+**Blue's env-name parity (B3), the step-7 gate.** Before that exit the plan
+measures, read-only and names only, whether this CI profile rebuilds the live
+App's newest deployment's env-name set, the set 10A's start copies (spike S7)
+and step 12's tier-b restore payload must reproduce
+(`tools.databricks.activation_prediction env-names`: it proves the workspace
+and the deployer first, then reads the App, never a value). The step summary's
+"Activation prediction" section, and the log, show one verdict:
+
+- `env-name parity holds: ... (no env-name difference)`: the precondition of
+  step 7;
+- `env-name parity DIFFERS: ... (adds <names>; lacks <names>)`: **stop.**
+  Step 12 could not rebuild blue's restore payload, and a mismatch found after
+  step 7 leaves the install half handed over. Fix the profile field the names
+  point at (an optional role name blue lacks is already left out) and re-run
+  plan #1, or report it as a code follow-up; never start step 7 around it;
+- `env-name parity not measured` (the profile refuses, or the workspace or the
+  deployer is not the profile's): stop, as for any live-check line outside the
+  set above.
+
 **Refusals and what to do:** `check-dispatch` names a repository-level profile
 name (delete it, step 4); `environment_protections_drift` (re-run
 `github_environment`); `environment_protections_unreadable` (spike S8(a) owed:
@@ -426,13 +446,13 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 **Preconditions:**
 
 - **Every blocker of steps 10B and 12 has landed on `main`** (B1, B4(c) and
-  B5, and B3, or B3 is about to land before step 12), and spike S0(b) is
+  B5; B3 is fixed), and spike S0(b) is
   answered with a read that returns the owner, or its follow-up has landed
   (Blockers, above). This step starts a sequence that must finish inside the
   pairs' 14 days; started while 10B cannot run, it leaves UC (and, after
   step 8, Lakebase) handed over with no adoption to follow.
-- Step 6 showed only the expected set; the interim membership (step 4) is in
-  place.
+- Step 6 showed only the expected set, and its `env-name parity holds` (no
+  env-name difference; B3); the interim membership (step 4) is in place.
 
 **The 14-day window.** Pairs expire at most 14 days ahead (`--interim-days`,
 1 to 14). An expired pair refuses `handover_uc_ownership --plan` and `--verify`
@@ -594,7 +614,8 @@ mip.install_key`. The marker line is new since step 6 (the deployer can now
 read the catalog through `<prefix>-data-owners`), and any step-6 marker read
 refusal or storage-root line is gone. Nothing else refuses: the handovers
 changed no profile field the live checks read. A `plan` cannot show more of an
-unadopted install. The adoption's own
+unadopted install. The env-name parity verdict (step 6) still reads `holds`:
+any difference now stops the sequence before 10A. The adoption's own
 read-only readout (the bind plan, the pre-stop probes in their adopt mode and
 adopt-live's preconditions) is step 10B's first dispatch, which needs the
 running App of step 10A.
@@ -735,8 +756,9 @@ an adopt dispatch with it refuses.
 
 **Proof:** the gate shows 0 delete, 0 recreate, no instance change, creates =
 the 2 jobs the legacy install never had; the active deployment is unchanged (the
-10A start); the record verifies; `frontend_provenance` is reported
-(`unverified` in CI, see B3).
+10A start); the record verifies; `frontend_provenance` is reported, and it is
+always `unverified` here (a live adopt is CI-only, and CI builds no reference
+dist; B3).
 
 **Refusals:** before the bind plan: the warehouse (B1), the Genie pin (exit 2:
 `the governed Genie space pin was refused before the lease`; 10B-0's expected
@@ -818,7 +840,12 @@ predicted length and budget admission, read as a forecast for a release
 dispatched now (`admission (forecast for a release dispatched now) admitted`:
 the plan job's own 30 minutes admit no window, and a plan opens none); the
 EXECUTE-gap prediction is shown; the step summary prints the profile ack and
-the active deployment's sha256.
+the active deployment's sha256, then its "Activation prediction" section
+(B3): `pass` and `restore_unverified_frontend=<sha256>`, the digest step 12
+carries. Only the completing (second) dispatch prints it: the first stops at
+`window_unacked` before the plan block. It covers blue's immutable copy, its
+restore payload and this commit, so the window's re-pin keeps it; a plan at
+another commit prints another.
 
 **The window.** Plan for one window in run 1 and announce it. On the shape
 spike S2 read, #337's set comparison predicts no WR1 (order and a binding's own
@@ -836,20 +863,24 @@ second, the digest moved: dispatch again with the new one),
 `window_start_source_drift`, `window_journal_open`, `window_facts_incomplete`
 (docs/deployment.md, "Keep blue serving"); `accepted_exposure` (the ack is
 missing or names another plan: the refusal line names the exact digest);
-`owner_policy` (`cannot evaluate`: spike S0(b)'s worst case, stop). No Genie
+`owner_policy` (`cannot evaluate`: spike S0(b)'s worst case, stop); the
+activation prediction's `no_rollback_proof` (the rebuilt payload's env-name set
+is not blue's, names only), `payload_invalid` or `frontend_ack_unpredictable`
+(blue's set holds the lease name): stop and report it, never ack around it. No Genie
 pin refusal is expected: after 10B the adopted v7 record names the space the
 App binds (`genie_space_id`), and the pin check uses it. A pin refusal here
 (the record and a pin disagree, or the space is gone) means stop and read it.
 
 **Rollback:** read-only.
 
-## Step 12. Release (run 1): **blocked by B3; S0(b) owed**
+## Step 12. Release (run 1): **S0(b) owed**
 
-**Who:** CI. **Preconditions:** step 11 clean; B3 fixed on `main`; the App
+**Who:** CI. **Preconditions:** step 11 clean, at the same `main` commit this
+release dispatches (the frontend ack covers the run's commit); the App
 running; the Genie budget restored; the announcement made.
 
 ```bash
-gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="quiesce_window=<sha256> accepted_exposure_plan=<sha256>" -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="quiesce_window=<sha256> accepted_exposure_plan=<sha256> restore_unverified_frontend=<sha256>" -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true
 ```
 
 Add `genie_pin=<sha256>` or `database_instance_update=<sha256>` to
@@ -865,11 +896,15 @@ release, then opens the one admitted window with the dead-man armed, starts and
 re-pins blue, and activates green in one rollover with a signed core capture.
 The data jobs are deferred to step 14.
 
-**B3:** the pre-activation proof refuses green activation with
-`unverified_frontend_unacked` because the adopted frontend is unverified and no
-dispatch input carries `restore_unverified_frontend`. Blue keeps serving, but
-the run has already applied the bundle and taken any window the plan admitted.
-Do not dispatch step 12 until the follow-up lands.
+**The frontend ack (B3, fixed).** The adopted frontend is unverified, so the
+release carries plan #3's `restore_unverified_frontend` digest. If `main`
+moved since plan #3, plan again, or take the digest the release's own
+pre-lease refusal prints. Before the lease the release predicts its
+pre-activation proof read-only (`[mip-activation-prediction]`: the record, the
+rebuilt restore payload, the ack); the same digest then passes step 0a, the
+proof at activation after the window's re-pin and, if it is needed, the EXIT
+trap's tier-b restore. Giving it accepts that blue's `frontend/dist` is not
+reproduced from source: those bytes are exactly what serves today.
 
 **Proof:** green SUCCEEDED; health `git_sha` equals the dispatched commit; the
 env-name diff equals the plan's; jobs run as the planned identities and are
@@ -882,7 +917,12 @@ worst case, and the release's treatment-access converger reads the metastore
 the same way); `window_unacked` (the digest moved: plan and ack
 again); the release postflight's live run_as check (exit 4, before any grant,
 when a jobs-identity job or the pipeline does not run as the jobs identity);
-`no_rollback_proof`, `unverified_frontend_unacked` (B3).
+`unverified_frontend_unacked` (the ack is missing or another commit's: the line
+names the exact digest), `no_rollback_proof`, `payload_invalid` and
+`frontend_ack_unpredictable`, all before the lease (`the pre-activation rollback
+proof would refuse ...; refusing before the lease. Nothing was changed.`). The
+same codes at step 10b, after the window, mean the prediction and the proof
+disagreed: stop and report it.
 
 **Rollback:** before activation, blue keeps serving (`blue_serving`). Inside
 the window, the run starts and re-pins blue, or the dead-man restarts it at the

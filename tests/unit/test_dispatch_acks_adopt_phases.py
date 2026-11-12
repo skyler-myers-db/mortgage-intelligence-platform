@@ -50,6 +50,8 @@ READ_BY = {
     "database_instance_update": ("MIP_ACK_DATABASE_INSTANCE_UPDATE", {"plan", "release"}),
     "genie_pin": ("MIP_GENIE_PIN_ACK", {"plan", "release", "adopt", "unadopt"}),
     "accepted_exposure_plan": ("MIP_ACK_ACCEPTED_EXPOSURE_PLAN", {"plan", "release", "adopt", "unadopt"}),
+    # B3: the core release's unverified-frontend ack (its prediction, step 0a, the proof, tier b).
+    "restore_unverified_frontend": ("MIP_ACK_RESTORE_UNVERIFIED_FRONTEND", {"release"}),
     "data_ledger_supersede": ("MIP_ACK_DATA_LEDGER_SUPERSEDE", {"data"}),
     "data_ledger_rerun": ("MIP_ACK_DATA_LEDGER_RERUN", {"data"}),
 }
