@@ -23,7 +23,10 @@ and is never read as "no grantees". So does a schema listing the deployer
 cannot prove complete: the schemas API returns every schema of a catalog only
 to a metastore admin or the catalog's owner, and anyone else would see only
 the schemas it owns or may use, reading a hidden schema's grants as none
-(``assert_complete_schema_listing``). The workspace ``admins`` group's Genie
+(``assert_complete_schema_listing``). The catalog's owner is judged first and
+needs no metastore read; only when the deployer is not in it is the
+metastore's owner read, from its summary (``uc_metastore_read``), never the
+metastore-admin-only ``metastores.get`` (spike S0(b)). The workspace ``admins`` group's Genie
 ``CAN_MANAGE`` is the platform's own on every workspace object, cannot be
 revoked, and the deployer is required to be in that group, so it is the one
 grant the probe accepts by name; a Unity Catalog grant to any principal,
@@ -50,6 +53,14 @@ from tools.databricks.prestop_genie_grants import (
     shared_folder_names,
 )
 from tools.databricks.prestop_refusals import OWNER_EQUIVALENT, PrestopRefusal
+from tools.databricks.uc_metastore_read import (
+    OWNER_ABSENT,
+    OWNER_CANONICAL,
+    caller_names,
+    current_metastore,
+    owner_state,
+    readable_owner,
+)
 from tools.databricks.uc_owner_policy import parse_approved_owner_principals
 
 UC_OWNER_EQUIVALENT = frozenset({"MANAGE", "ALL_PRIVILEGES", "EXTERNAL_USE_SCHEMA"})
@@ -198,13 +209,7 @@ def _uc_grants(workspace: Any, securable_type: str, full_name: str) -> list[Owne
 def _caller_names(workspace: Any) -> frozenset[str]:
     """The deployer's own names and its ``/Me`` groups, casefolded (what an owner field names)."""
 
-    me = workspace.current_user.me()
-    names = {_text(_field(me, "user_name")), _text(_field(me, "application_id"))}
-    groups = _field(me, "groups")
-    if groups is None:
-        raise RuntimeError("the deploying identity's /Me projection omitted its groups")
-    names.update(_text(_field(group, "display")) for group in _items(groups))
-    return frozenset(name.casefold() for name in names if name)
+    return caller_names(workspace)
 
 
 def assert_complete_schema_listing(workspace: Any, *, catalog: str, catalog_owner: str) -> None:
@@ -213,17 +218,29 @@ def assert_complete_schema_listing(workspace: Any, *, catalog: str, catalog_owne
     The schemas API lists all of a catalog's schemas only for a metastore admin
     (the metastore's owner, or a member of its owning group) or the catalog's
     owner (or a member of its owning group). Anyone else gets only the schemas it
-    owns or may use, which would read a hidden schema's grants as none.
+    owns or may use, which would read a hidden schema's grants as none. The
+    catalog-owner branch needs no metastore read; the metastore-admin branch
+    reads the owner from the metastore's summary (spike S0(b)).
     """
 
-    metastore_id = _text(_field(workspace.metastores.current(), "metastore_id"))
-    if not metastore_id:
-        raise RuntimeError("the current workspace has no authoritative metastore identifier")
-    metastore_owner = _text(_field(workspace.metastores.get(metastore_id), "owner"))
-    if not catalog_owner or not metastore_owner:
+    if not catalog_owner:
         raise RuntimeError("the governed catalog or the metastore has no readable owner")
     names = _caller_names(workspace)
-    if catalog_owner.casefold() in names or metastore_owner.casefold() in names:
+    if catalog_owner.casefold() in names:
+        return
+    metastore = current_metastore(workspace)
+    state = owner_state(metastore)
+    if state == OWNER_ABSENT:
+        raise RuntimeError(
+            "the governed catalog or the metastore has no readable owner: the metastore summary "
+            "returned no owner to the deployer (spike S0(b))"
+        )
+    if state != OWNER_CANONICAL:
+        raise RuntimeError(
+            "the metastore summary returned an owner that is not a canonical principal name "
+            "(padded, blank or not a string), a fault in the metastore's data, not a withheld read"
+        )
+    if readable_owner(metastore).casefold() in names:
         return
     raise RuntimeError(
         f"the deployer is neither the owner of catalog {catalog} (or a member of its owning "

@@ -73,6 +73,7 @@ from tools.databricks.app_rollback_resource_contract import (
     validated_app_resource_contract,
 )
 from tools.databricks.app_start_deployment import env_names, env_names_digest, tree_digest
+from tools.databricks.metastore_app_grants import MetastoreAuthorityUnproven
 
 TREATMENT_ORDER = ("runtime", "quiesce")
 REPO = Path(__file__).resolve().parents[2]
@@ -200,6 +201,12 @@ def _treatment_mode(readers: Readers, principal: str) -> str:
     for mode in TREATMENT_ORDER:
         try:
             drift = readers.treatment(principal, mode)
+        except MetastoreAuthorityUnproven as exc:
+            # Value-free by construction (spike S0(b′)): it names the proof the run needs.
+            raise AdoptLiveRefused(
+                "treatment_unverified",
+                f"the treatment boundary check cannot prove the App's metastore privileges: {exc}",
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - the class only: a message can carry a name
             raise AdoptLiveRefused(
                 "treatment_unverified",

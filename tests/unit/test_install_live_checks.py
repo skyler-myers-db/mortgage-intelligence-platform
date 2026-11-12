@@ -86,13 +86,16 @@ def test_a_first_install_passes(tmp_path: Path, capsys: pytest.CaptureFixture[st
     code, text, workspace, account = _run(tmp_path, capsys)
 
     assert code == 0, text
-    assert "adoption, install marker, Cotality share, storage root and account principal hold" in text
+    assert "adoption, install marker, Cotality share, storage root, metastore owner and account principal hold" in text
     assert workspace.calls[3:] == [
         "GET apps",
         "GET workspace/export (bundle state)",
         "GET catalogs (install)",
         "GET catalogs (share)",
         *["GET tables/exists"] * 7,
+        # Check 4b, the metastore owner (spike S0(b)): the pre-stop probe's own reader.
+        "GET current-metastore-assignment",
+        "GET metastore_summary",
         # Then the agentic tier's capability preflight (M2-PR3): one list read per feature.
         "GET apps (list)",
         "GET database/instances (list)",
@@ -100,7 +103,10 @@ def test_a_first_install_passes(tmp_path: Path, capsys: pytest.CaptureFixture[st
         "GET sql/warehouses (list)",
         "GET serving-endpoints (list)",
         "GET mlflow/experiments (list)",
-    ], "the profile sets MIP_UC_CATALOG_STORAGE_ROOT, so no metastore summary is read"
+    ]
+    # The profile sets MIP_UC_CATALOG_STORAGE_ROOT, so the metastore's storage root is
+    # never consulted: check 4b reads the summary for its owner only.
+    assert "metastore_summary.storage_root" not in workspace.field_reads
     assert account.calls == ["GET accounts/scim/ServicePrincipals (id,applicationId,roles)"]
 
 
@@ -297,6 +303,8 @@ def test_a_first_install_needs_a_metastore_root_or_a_configured_one(
     code, text, workspace, _account = _run(tmp_path, capsys, profile=profile)
     assert code == 0, text
     assert "GET metastore_summary" in workspace.calls
+    # Positive control for the storage-root pins below: a first install reads it.
+    assert workspace.field_reads == ["metastore_summary.storage_root"]
 
     code, text, _workspace, _account = _run(tmp_path, capsys, profile=profile, metastore_root="")
     assert code == 2
@@ -312,7 +320,10 @@ def test_an_existing_catalog_needs_no_storage_root(tmp_path: Path, capsys: pytes
     code, text, workspace, _account = _run(tmp_path, capsys, profile=profile, metastore_root="", **_adopted())
 
     assert code == 0, text
-    assert "GET metastore_summary" not in workspace.calls
+    # The storage root is never consulted for an existing catalog (check 4b reads
+    # the summary once, for the metastore's owner).
+    assert "metastore_summary.storage_root" not in workspace.field_reads
+    assert workspace.calls.count("GET metastore_summary") == 1
 
 
 @pytest.mark.parametrize(
@@ -332,7 +343,7 @@ def test_an_existing_catalog_elsewhere_than_the_configured_root_refuses(
         "storage root: MIP_DEFAULT_CATALOG exists with another storage root than MIP_UC_CATALOG_STORAGE_ROOT; "
         "a catalog's managed location never moves, so set the catalog's own root or unset the field"
     ]
-    assert "GET metastore_summary" not in workspace.calls
+    assert "metastore_summary.storage_root" not in workspace.field_reads
 
 
 def test_an_existing_catalog_at_the_configured_root_passes_a_trailing_slash_aside(
@@ -342,6 +353,99 @@ def test_an_existing_catalog_at_the_configured_root_passes_a_trailing_slash_asid
     for actual in (root, root + "/"):
         code, text, _workspace, _account = _run(tmp_path, capsys, catalog_storage_root=actual, **_adopted())
         assert code == 0, text
+
+
+# ------------------------------------------------------------- 4b. metastore owner (spike S0(b))
+
+
+def test_the_metastore_owner_is_read_once_through_the_probes_reader(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, text, workspace, _account = _run(tmp_path, capsys, **_adopted())
+
+    assert code == 0, text
+    assert "metastore owner:" not in text
+    # The pre-stop probe's reader: the assignment, then its summary.
+    assert workspace.calls.count("GET metastore_summary") == 1
+    assert workspace.calls.count("GET current-metastore-assignment") == 2
+
+
+def test_plan_one_shape_shows_the_adoption_line_and_no_metastore_owner_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The runbook's step 6 rule: the adoption line is the positive control that
+    # check 4b ran; with a readable, exact owner it adds no line.
+    code, text, workspace, _account = _run(tmp_path, capsys, app=SimpleNamespace(name=APP))
+
+    assert code == 2
+    assert [line.split(":")[0] for line in _refusals(text)] == ["adoption"]
+    assert "GET metastore_summary" in workspace.calls
+
+
+OTHER_OWNER = "metastore-owners-beta"
+
+
+@pytest.mark.parametrize(
+    ("facts", "line"),
+    [
+        (
+            {"metastore_owner": None},
+            "metastore owner: the metastore summary returns no owner to the deployer (spike S0(b)), so the "
+            "pre-stop owner probe and the treatment-access converger would refuse; the owner-read follow-up "
+            "must land first",
+        ),
+        (
+            {"metastore_owner": f" {OTHER_OWNER}"},
+            "metastore owner: the metastore summary returns an owner that is not a canonical principal name "
+            "(padded, blank or not a string), a fault in the metastore's data, not a withheld read; the owner "
+            "policy refuses it",
+        ),
+        (
+            {"metastore_owner": OTHER_OWNER},
+            "metastore owner: the metastore's owner is not exactly MIP_UC_METASTORE_OWNER; after the client's "
+            "review set it to the actual owner (a deploy never transfers the metastore)",
+        ),
+        (
+            {"metastore_owner": DEMO_PROFILE["MIP_UC_METASTORE_OWNER"].upper()},
+            "metastore owner: the metastore's owner is not exactly MIP_UC_METASTORE_OWNER; after the client's "
+            "review set it to the actual owner (a deploy never transfers the metastore)",
+        ),
+        (
+            {"summary_metastore_id": "00000000-0000-4000-8000-00000000b002"},
+            "metastore owner: the metastore summary names another metastore than the workspace's current "
+            "assignment",
+        ),
+    ],
+    ids=["withheld", "noncanonical", "another-owner", "case-variant", "another-metastore"],
+)
+def test_a_withheld_noncanonical_or_other_metastore_owner_refuses(
+    facts: dict[str, Any], line: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, text, _workspace, _account = _run(tmp_path, capsys, **_adopted(**facts))
+
+    assert code == 2
+    assert _refusals(text) == [line]
+    assert OTHER_OWNER not in text, "the line names the check, never the owner"
+
+
+def test_the_owner_is_a_runner_mask_the_moment_it_is_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    env_file = tmp_path / "client.env"
+    env_file.write_text("".join(f"{name}='{value}'\n" for name, value in DEMO_PROFILE.items()), encoding="utf-8")
+    for owner, refused in ((DEMO_PROFILE["MIP_UC_METASTORE_OWNER"], False), (OTHER_OWNER, True), ("users", True)):
+        workspace = LiveWorkspace(DEMO_PROFILE, identity_ids=IDENTITY_IDS, metastore_owner=owner, **_adopted())
+        principal = LiveAccount(IDENTITY_IDS["account_principal"])
+        code = live_checks.main(
+            [], environ={}, env_file=env_file, client=lambda w=workspace: w, account=lambda p=principal: p
+        )
+        err = capsys.readouterr().err
+        assert code == (2 if refused else 0), err
+        masks = [line for line in err.splitlines() if line.startswith("::add-mask::")]
+        # Platform vocabulary is no identifier, and masking it would blank the log.
+        assert (f"::add-mask::{owner}" in masks) is (owner != "users"), masks
+        assert all(owner not in line for line in err.splitlines() if line.startswith("  - "))
 
 
 # ------------------------------------------------------------- 5. account principal
@@ -395,6 +499,8 @@ def test_other_account_roles_are_not_admin(tmp_path: Path, capsys: pytest.Captur
         ("GET catalogs (share)", "Cotality share"),
         ("GET tables/exists", "Cotality share table property_domain_v3"),
         ("GET metastore_summary", "storage root"),
+        # Check 4b reads the same summary for the owner; both lines may appear.
+        ("GET metastore_summary", "metastore owner"),
     ],
 )
 def test_a_read_error_refuses_and_never_reads_as_absent(

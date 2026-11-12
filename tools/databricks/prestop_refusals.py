@@ -24,6 +24,9 @@ ROLLBACK_RECORD_TAMPERED = "rollback_record_tampered"
 ROLLBACK_RECORD_DRIFT = "rollback_record_drift"
 # Governed Unity Catalog owners (prestop_owner_policy).
 OWNER_POLICY = "owner_policy"
+# The App's metastore privileges, unproven or outside the reviewed set
+# (prestop_owner_policy, metastore_app_grants; spike S0(b′)).
+METASTORE_AUTHORITY = "metastore_authority"
 # Owner-equivalent grantees on the governed catalog, schemas and space (attack G12).
 OWNER_EQUIVALENT = "owner_equivalent"
 # App serving-endpoint access outside the record-pinned endpoints.
@@ -47,6 +50,7 @@ REFUSAL_CODES = frozenset(
         ROLLBACK_RECORD_TAMPERED,
         ROLLBACK_RECORD_DRIFT,
         OWNER_POLICY,
+        METASTORE_AUTHORITY,
         OWNER_EQUIVALENT,
         SERVING_ENDPOINT,
         GENIE_BUDGET,

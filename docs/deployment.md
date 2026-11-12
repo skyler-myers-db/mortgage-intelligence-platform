@@ -1032,6 +1032,15 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
      (named to both tools, never printed). When the field is set and the
      catalog exists, it must be the catalog's own storage root (a trailing `/`
      aside), since a managed location never moves;
+   - **metastore owner** (check 4b, spike S0(b)): the metastore's owner, read
+     through the pre-stop owner probe's own reader
+     (`tools/databricks/uc_metastore_read.py`: the summary, which must name the
+     workspace's current metastore; never the metastore-admin-only
+     `metastores.get`), is exactly `MIP_UC_METASTORE_OWNER`. An owner the
+     summary does not return to the deployer, one it returns padded or blank (a
+     data fault), a summary of another metastore and a mismatch each refuse with
+     their own `metastore owner:` line, never naming the owner, which is
+     registered as a runner mask the moment it is read;
    - **account principal**: `MIP_IDENTITY_IDS_JSON.account_principal` holds no
      account admin role (read from account SCIM with its own credential).
    After the live checks, the preflight takes the SQL warehouse from this deployer's bundle
@@ -2524,11 +2533,16 @@ refusal here is the refusal that step would raise with the App down:
   the metastore: the objects `converge_campaign_treatment_access` checks after
   step 0a. An owner outside `MIP_UC_APPROVED_OWNER_PRINCIPALS` plus the
   deployer, a metastore owner other than exactly `MIP_UC_METASTORE_OWNER`, or
-  the App's own service principal, refuses, named with its object. For a group owner the
+  the App's own service principal, refuses, named with its object (the owner is
+  registered as a runner mask first; `users`, `account users` and `admins`
+  are not). For a group owner the
   post-stop converger proves the App is not a member by minting a short-lived
   credential; read-only, the probe answers from the App's workspace-visible
   groups (plus `users`), so an account-level nested membership is still caught
-  only after the stop.
+  only after the stop. Once the metastore's owner passes, the probe proves what
+  the converger proves next, the App's metastore privileges (`metastore_authority`,
+  "Metastore authority" below): an unproven set, or one outside
+  `USE_MARKETPLACE_ASSETS`, refuses here while the App still serves.
 - **Owner-equivalent grantees** (`prestop_owner_equivalent`,
   `owner_equivalent`, attack G12). Every grantee of `MANAGE`, `ALL_PRIVILEGES`
   or `EXTERNAL_USE_SCHEMA` on the governed catalog or any of its schemas
@@ -2688,12 +2702,102 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   owner probe judge the metastore with `MetastoreOwnerPolicy`:
   `ApprovedOwnerPolicy` over exactly `MIP_UC_METASTORE_OWNER`, without the
   deployer or the approved owners, with the alias and group-membership
-  exclusions kept. `users`, `account users` and `admins` refuse, and so does an
-  owner the API does not return. The owner is read with `metastores.get`, which
-  the SDK documents as metastore-admin only; whether a non-admin read
-  (`metastores.summary`) returns it is spike S0(b), still owed, as are S0(a) (a
-  service principal's own `get_effective`) and S0(c) (what a runtime service
-  principal sees of its own objects without `USE_CATALOG`).
+  exclusions kept. `users`, `account users` and `admins` refuse. The owner is
+  read from `metastores.summary()` (`GET
+  /api/2.1/unity-catalog/metastore_summary`), which must name the workspace's
+  current metastore (`metastores.current()`), through one reader
+  (`tools/databricks/uc_metastore_read.py`) that the pre-stop owner probe, the
+  owner-equivalent probe (only when the deployer does not own the governed
+  catalog), the converger and the client live checks (check 4b) share.
+  `metastores.get` is metastore-admin only (SDK and REST), and the deployer is a
+  workspace admin, not a metastore admin. Spike S0(b), measured on 2026-11-11 as
+  a fresh workspace service principal with no grants: the summary returned it
+  the owner, canonical and byte-equal to the owner's own read. An owner the
+  summary does not return refuses (`returned no owner to the deploying
+  identity (spike S0(b)'s worst case)`), and so does one it returns padded or
+  blank, with its own text (`a fault in the metastore's data, not a withheld
+  read`). No module under `tools/` calls `metastores.get` outside the owner's
+  estate inventory and the two identity-boundary verifiers that expect it to be
+  denied, and no script, workflow or job calls it by method, CLI command or REST
+  path (pinned by `tests/unit/test_uc_metastore_read.py`, with positive
+  controls). S0(a) (a service principal's own `get_effective`) and S0(c) (what
+  a runtime service principal sees of its own objects without `USE_CATALOG`)
+  are still owed.
+- **Metastore authority (spike S0(b′)).** After the owner, the converger
+  refuses unless the App's service principal holds no metastore privilege
+  outside `USE_MARKETPLACE_ASSETS` (the built-in `account users` grant). Reading
+  that set takes `grants.get_effective('metastore', <id>, principal=<App>)`,
+  which only a metastore admin may make for another principal: measured on
+  2026-11-11 as a non-admin service principal, it is HTTP 403
+  `PERMISSION_DENIED`, and the same read without `principal` answers HTTP 200
+  with only the caller's own view (1 assignment against the owner's 13). So no
+  read is ever unfiltered (every metastore grant read names its principal, in
+  `tools/` and in every script, workflow and job, whether an SDK call, a CLI
+  command or a REST path; pinned by the same test, with positive controls),
+  every returned assignment is summed (a principal
+  filter returns the grants that reach it through a group, under the group's
+  name), and one proof (`tools/databricks/metastore_app_grants.py`) serves the
+  converger, its read-only `--check` (adopt-live's `treatment_unverified`
+  fact) and the pre-stop owner probe (`metastore_authority`):
+  - a **metastore-admin deployer** (the summary's owner, casefolded, is its
+    `/Me` user name, application id or one of its `/Me` groups; anything
+    unproven is "no") reads the set live; a 403 on that read refuses, never
+    reads as none;
+  - **any other deployer** needs the metastore owner's attestation, the exact
+    ack `MIP_ACK_METASTORE_APP_GRANTS` (dispatch `operation_acks` purpose
+    `metastore_app_grants`, admitted in `plan`, `adopt`, `unadopt` and
+    `release`, the phases whose runs read it; shell only, never
+    `.env.local`). The owner prints it, read-only, as the metastore's owner (or
+    a member of its owning group): `DATABRICKS_CONFIG_PROFILE=<owner-profile>
+    python -m tools.databricks.metastore_app_grants --app-name <app-name>`. It
+    reads the App's effective metastore privileges (groups included), refuses
+    to print a digest when one is outside the reviewed set, and prints the
+    privilege names, the UTC date and the last run start that accepts it,
+    `metastore_app_grants=<sha256>` and nothing that names a principal or an
+    id. The digest covers this purpose, the metastore's id, its owner, the
+    App's application id, the privilege set and the date. The run recomputes
+    that body from what it reads itself (the metastore's id and owner, the App)
+    for every admitted date and every reviewed set, and refuses unless the ack
+    equals one exactly. A date is admitted while the judged moment is at most
+    30 days after that UTC day starts. As with the estate inventory, only the
+    check before the lease adds the 24-hour run margin: the pre-stop probe
+    judges the run's end, so the last run start the owner's command prints
+    (29 days after the day starts) is the last one its probe admits, and an
+    ack it admits cannot expire before the run's last converger; the
+    converger (step 0a's treatment quiesce, step 4b, the EXIT trap's restore)
+    and the read-only `--check` judge their own moment. It cannot re-read the
+    privileges, so a grant made after the attestation is its residual, bounded
+    by the 30 days: take it again for a run outside that window, after a grant
+    change, or for a new App. An ack given to an admin deployer is verified as
+    well, and the live set must equal the attested one.
+  - **What the ack proves.** Every field of its body but the privilege set is
+    one the deployer reads itself, and that set has two reviewed values (none,
+    or `USE_MARKETPLACE_ASSETS`), so anyone with the deployer's reads can
+    compute a digest the run accepts without the owner reading anything. Under
+    `single_maintainer_audited` it is the dispatcher's unauthenticated
+    assertion, dated and bound to this metastore, its owner and this App, that
+    the App holds only reviewed metastore privileges. It proves no owner read
+    until the deferred owner hardware-key attestation (M1-PR5) lands
+    (docs/clients/review-modes.md).
+
+  Every path that runs the converger reads it: the release's grants step, the
+  signed-blue proof's treatment quiesce, the release lifecycle, a first
+  install's recovery and the App-access lifecycle. Without the ack a
+  non-admin deployer's run refuses at the pre-stop probe (`[mip-prestop]
+  REFUSED: metastore_authority: the deploying identity is not a metastore
+  admin ...`), before the lease; adopt-live refuses `treatment_unverified`
+  with the same text. A first install has no App to attest before its first
+  release creates one. With `--phase release` (every `deploy-dev.yml`
+  release), that release stops with exit 3 right after creating the App
+  (`awaiting owner bootstrap --post-first-install`, "First install: awaiting
+  owner bootstrap"), before any App-identity proof or converger, and keeps
+  the App. The owner then runs `--post-first-install` and attests the kept App
+  (`python -m tools.databricks.metastore_app_grants --app-name <app-name>`);
+  the resumed release carries `metastore_app_grants=<sha256>`, and without it
+  its pre-stop probe refuses `metastore_authority` before the lease. A run
+  with no `--phase` has no exit-3 stop: nothing before its lease can judge an
+  App that does not exist yet, so a non-admin deployer's unphased first
+  install refuses after the lease, with no blue to protect.
 
 The deploy controls, resolved like the others (shell export, then `.env.local`):
 
@@ -5377,7 +5481,9 @@ satisfies another:
   a plan reads it at its pre-lease window plan), `database_instance_update`
   (plan, release), `genie_pin` and `accepted_exposure_plan` (plan, release,
   adopt, unadopt; never data, which never pins and skips the probes),
-  `data_ledger_supersede` and `data_ledger_rerun` (data), and the one
+  `data_ledger_supersede` and `data_ledger_rerun` (data),
+  `metastore_app_grants` (plan, adopt, unadopt, release; never data, whose
+  run never reads it: "Metastore authority"), and the one
   selector, `supersedes_deployment` (adopt): the sha256 of the adopted
   record's deployment id that picks adopt-live's supersede mode, exported as
   `MIP_ADOPT_LIVE_SUPERSEDE`. A selector is a digest, never a switch (`yes`,

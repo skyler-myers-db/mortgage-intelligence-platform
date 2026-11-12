@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,7 +11,7 @@ from databricks.sdk.errors import NotFound, PermissionDenied
 from tests.fixtures.oauth_credential_session import (
     install_in_memory_credential_mutation_session,
 )
-from tools.databricks import oauth_credential_creation
+from tools.databricks import metastore_app_grants, oauth_credential_creation
 from tools.databricks.campaign_treatment_identity_probe import (
     target_group_membership_probe,
     target_identity_groups_probe,
@@ -168,8 +169,11 @@ def _mirrored_account(workspace: object) -> object:
 
 
 def _estate_metastore_owner(workspace: Any) -> str:
-    metastores = workspace.metastores
-    return str(metastores.get(metastores.current().metastore_id).owner)
+    return str(workspace.metastores.summary().owner)
+
+
+def _metastore_get(_metastore_id: str) -> object:
+    raise AssertionError("metastores.get is metastore-admin only (spike S0(b)); read the summary")
 
 
 def converge_campaign_treatment_access(**kwargs: object) -> bool:
@@ -321,6 +325,7 @@ def _workspace(
     current_application_id: str = "",
     owner_group: str | None = None,
     target_is_owner_group_member: bool = False,
+    current_groups: tuple[str, ...] | None = None,
 ) -> tuple[object, _StatementExecution, _Grants]:
     execution = _StatementExecution()
     grants = _Grants(
@@ -348,10 +353,9 @@ def _workspace(
         grants=grants,
         metastores=SimpleNamespace(
             current=lambda: SimpleNamespace(metastore_id="metastore-1"),
-            get=lambda metastore_id: SimpleNamespace(
-                metastore_id=metastore_id,
-                owner=metastore_owner,
-            ),
+            # The deployer's read is the summary; get is metastore-admin only.
+            summary=lambda: SimpleNamespace(metastore_id="metastore-1", owner=metastore_owner),
+            get=_metastore_get,
         ),
         current_user=SimpleNamespace(
             me=lambda: SimpleNamespace(
@@ -359,6 +363,12 @@ def _workspace(
                 display_name=current_display_name,
                 id=current_user_id,
                 application_id=current_application_id,
+                # None: the projection lists no groups (the deployer's own names stand alone).
+                **(
+                    {}
+                    if current_groups is None
+                    else {"groups": [SimpleNamespace(display=name) for name in current_groups]}
+                ),
             )
         ),
         catalogs=_UcObjects(exists=catalog_exists, owner=owner, denied=catalog_denied),
@@ -633,10 +643,13 @@ def test_mutable_deployer_display_name_cannot_approve_target_app_owner() -> None
 
 def test_approved_group_owner_uses_account_membership_and_delegated_deployer() -> None:
     owner_group = "Customer-Platform-Governance"
+    # The deployer is in the owning group (a metastore admin), so it may read the
+    # App's metastore grants (spike S0(b′), test_metastore_app_grants.py).
     workspace, execution, _ = _workspace(
         owner=owner_group,
         metastore_owner=owner_group,
         owner_group=owner_group,
+        current_groups=(owner_group,),
     )
     account = _account_factory(owner_group=owner_group, target_is_member=False)
 
@@ -715,11 +728,26 @@ def test_rejects_current_user_name_resolving_to_wrong_immutable_id() -> None:
     assert execution.statements == []
 
 
-def test_explicit_third_party_service_principal_owner_resolves_canonically() -> None:
+def test_explicit_third_party_service_principal_owner_resolves_canonically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     owner_application_id = "customer-governance-sp"
     workspace, execution, _ = _workspace(
         owner=owner_application_id,
         metastore_owner=owner_application_id,
+    )
+    # A third-party service principal owns the metastore, so the deployer is no
+    # metastore admin and proves the App's metastore privileges with the owner's
+    # exact attestation (spike S0(b′), test_metastore_app_grants.py).
+    monkeypatch.setenv(
+        metastore_app_grants.ACK_ENV,
+        metastore_app_grants.attestation_digest(
+            metastore_id="metastore-1",
+            metastore_owner=owner_application_id,
+            app_application_id="app-client",
+            privileges={"USE_MARKETPLACE_ASSETS"},
+            attested_on=datetime.now(UTC).date(),
+        ),
     )
     target_api = workspace.service_principals
 
@@ -828,10 +856,12 @@ def test_rejects_nested_app_membership_in_approved_owner_group() -> None:
 
 def test_group_membership_negative_proof_is_cached_per_policy_convergence() -> None:
     owner_group = "customer-platform-governance"
+    # The deployer is in the owning group (a metastore admin): spike S0(b′).
     workspace, execution, _ = _workspace(
         owner=owner_group,
         metastore_owner=owner_group,
         owner_group=owner_group,
+        current_groups=(owner_group,),
     )
     account = _account_factory(owner_group=owner_group, target_is_member=False)
     probes: list[str] = []
