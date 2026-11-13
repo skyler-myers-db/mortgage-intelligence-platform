@@ -193,6 +193,17 @@ def test_step_4_is_silent_outside_actions(tmp_path: Path) -> None:
     assert lines[0].startswith("$ tool --expected-app-id "), "the ids still reach the command"
 
 
+def test_step_4_stops_before_any_command_when_its_ids_cannot_be_masked(tmp_path: Path) -> None:
+    # The call is bare: the entrypoint's errexit and ERR trap stop the release there (the
+    # harness's trap exits 99). A call that swallowed the failure would run the next command.
+    code, lines = merged_log(tmp_path, APPS_GET + STEP_4 + "\n" + NEXT_COMMAND, redact=False, env={"APP_JSON": _app()})
+
+    assert code == 99, lines
+    for value in (APP_ID, CLIENT, SCIM):
+        assert not carrying(lines, value), (value, lines)
+    assert "reached-after-block" not in lines
+
+
 # --------------------------------------------------------------------------
 # Before step 4: a routine release's App inventory
 # --------------------------------------------------------------------------
@@ -228,6 +239,16 @@ def test_a_first_install_inventory_registers_nothing(tmp_path: Path) -> None:
     )
 
     assert code == 0 and lines == ["existing: []", "reached-after-block"], lines
+
+
+def test_the_inventory_stops_before_any_command_when_its_ids_cannot_be_masked(tmp_path: Path) -> None:
+    apps = json.dumps([json.loads(_app())])
+    code, lines = merged_log(tmp_path, APPS_LIST + INVENTORY + RECOVERY_COMMAND, redact=False, env={"APPS_JSON": apps})
+
+    assert code == 99, lines
+    for value in (APP_ID, CLIENT, SCIM):
+        assert not carrying(lines, value), (value, lines)
+    assert "reached-after-block" not in lines
 
 
 # --------------------------------------------------------------------------
@@ -318,6 +339,73 @@ def test_a_fallback_principal_that_cannot_be_masked_is_not_used(tmp_path: Path) 
     assert code == 0, lines
     assert lines[-3:] == ["no App identity", "failed closed: 1", "reached-after-block"], lines
     assert not carrying(lines, CLIENT)
+
+
+# The trap's own order (restore_rendered_sql_fail_closed): the stop, and when that fails the
+# second quiesce, with the real functions and the real bounded-authority wrappers, each of
+# which echoes --principal. No App identity is resolved yet on this path.
+TRAP = (
+    shell_function("run_with_account_identity")
+    + shell_function("run_with_proof_signing_authority")
+    + shell_function("converge_app_treatment_access")
+    + FAIL_CLOSED
+    + shell_function("quiesce_app_treatment_after_failed_stop")
+    + "APP_FAIL_CLOSED_NAME=mip-app\nAPP_EXPECTED_IDENTITY_ARGS=()\nAPP_SP_CLIENT_ID=\n_EXISTING_APP_SP_CLIENT_ID=\n"
+    "TREATMENT_RUNTIME_QUIESCED=0\nFIRST_INSTALL_APP_CREATED=0\n_GRANTS_WAREHOUSE_ID=warehouse-1\n_GRANTS_CATALOG=mip\n"
+    "DATABRICKS_ACCOUNT_CLIENT_ID=account-EXAMPLE\nDATABRICKS_ACCOUNT_CLIENT_SECRET=placeholder\n"
+    "MIP_AI_GATEWAY_PROOF_SIGNING_KEY=placeholder\n"
+    'if stop_and_quiesce_unproven_app; then echo "trap: stopped and quiesced"; else\n'
+    '  quiesce_app_treatment_after_failed_stop || echo "trap: the second quiesce failed too"\n'
+    "fi\n"
+)
+QUIESCE = f"--principal {CLIENT} --mode quiesce"
+
+
+def _trap_tools(repo: Path, *, stop_fails: bool) -> None:
+    env_writer(repo, "stop_app_fail_closed", {"MIP_APP_STOP_OUTCOME": "stopped"})
+    if stop_fails:
+        # The identity-pinned stop cannot prove a stop (an API error, a denied stop).
+        (repo / "tools" / "databricks" / "stop_app_fail_closed.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+    (repo / "tools" / "databricks" / "converge_campaign_treatment_access.py").write_text("", encoding="utf-8")
+
+
+def test_the_traps_second_read_masks_the_principal_when_the_stop_itself_failed(tmp_path: Path) -> None:
+    # The stop returns before its own (masked) fallback read, so the second quiesce's read is the first sight.
+    _trap_tools(tmp_path, stop_fails=True)
+    code, lines = merged_log(tmp_path, APPS_GET + TRAP, env={"APP_JSON": _app()})
+
+    assert code == 0, lines
+    printed = carrying(lines, CLIENT)
+    assert printed[0] == f"::add-mask::{CLIENT}", lines
+    assert len(printed) == 3 and all(line.startswith("$ ") and QUIESCE in line for line in printed[1:]), printed
+    assert lines[-1] == "reached-after-block" and "trap: the second quiesce failed too" not in lines
+
+
+def test_the_trap_prints_no_principal_when_neither_read_can_mask_it(tmp_path: Path) -> None:
+    # The first read blanks a principal it cannot mask; the second read must not hand the same id on.
+    _trap_tools(tmp_path, stop_fails=False)
+    code, lines = merged_log(tmp_path, APPS_GET + TRAP, redact=False, env={"APP_JSON": _app()})
+
+    assert code == 0, lines
+    assert not carrying(lines, CLIENT), lines
+    assert not [line for line in lines if "converge_campaign_treatment_access" in line], "no quiesce was handed an id"
+    assert "[deploy] treatment convergence lacks an App identity or warehouse." in lines, "the first read refused"
+    assert lines[-3:] == [
+        "[deploy] secondary treatment quiescence lacks a resolved App identity or warehouse.",
+        "trap: the second quiesce failed too",
+        "reached-after-block",
+    ], lines
+
+
+def test_the_traps_first_read_still_masks_and_quiesces_with_the_real_wrappers(tmp_path: Path) -> None:
+    _trap_tools(tmp_path, stop_fails=False)
+    code, lines = merged_log(tmp_path, APPS_GET + TRAP, env={"APP_JSON": _app()})
+
+    assert code == 0, lines
+    printed = carrying(lines, CLIENT)
+    assert printed[0] == f"::add-mask::{CLIENT}" and len(printed) == 3, lines
+    assert all(line.startswith("$ ") and QUIESCE in line for line in printed[1:]), printed
+    assert lines[-2:] == ["trap: stopped and quiesced", "reached-after-block"]
 
 
 # --------------------------------------------------------------------------

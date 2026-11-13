@@ -470,6 +470,10 @@ import json, sys
 print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
 ' 2>/dev/null || true)"
     fi
+    # The trap's second read, when the stop above never resolved or could not
+    # mask the id: a runner mask before the quiesce below echoes it, and an
+    # id that cannot be masked is not used (the refusal below).
+    mask_runtime_ids "$principal" || principal=""
   fi
   if [[ -z "$principal" || -z "${_GRANTS_WAREHOUSE_ID:-}" || \
         -z "${_GRANTS_CATALOG:-}" ]]; then
