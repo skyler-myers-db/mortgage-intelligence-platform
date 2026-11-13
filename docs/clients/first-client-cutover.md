@@ -30,7 +30,7 @@ This page names no client value. Every one is a placeholder:
 | `<catalog>` | the governed catalog, `MIP_DEFAULT_CATALOG` (`mip`) |
 | `<legacy-owner>` | the identity that deployed the legacy install and owns it today |
 | `<legacy-root>` | its bundle root, `MIP_LEGACY_BUNDLE_ROOT` (`/Workspace/Users/<legacy-owner>/.bundle/mortgage-intelligence-platform/<leaf>`) |
-| `<legacy-experiment-id>` | the id the legacy bundle state binds for `experiments.mip_lead_scoring` (step 1's snapshot holds it) |
+| `<legacy-experiment-id>` | the id the legacy bundle state binds for `experiments.mip_lead_scoring` (step 1's snapshot holds it; step 6b's private report names it under that key) |
 | `<user>` | the short user name in the CLI's development-mode prefix (`[dev <user>] `) that the legacy install's names carry |
 | `<private-dir>` | a mode-0700 directory outside the checkout for reports and journals |
 | `<sha256>`, `<profile-ack>` | a digest the named read-only plan printed |
@@ -83,6 +83,11 @@ What is left is no code change:
   another base name than today's declaration. That is the install's own
   state, not a code gap: the bind plan binds the bundle's name only, so the
   owner gives the experiment that name.
+- **The owner runs a read-only preflight of the bind plan (step 6b).** Nothing
+  before 10B-1 ran the adopt bind plan, which is why that refusal stayed
+  unseen until a snapshot derived it by hand. `tools.databricks.adopt_preflight`
+  computes the plan's name and existence checks for all 16 keys, as the
+  owner, before step 7; it also proves step 3b.
 - **The owner gives two things:** the metastore owner's attestation of the
   App's metastore privileges (S0(b′)) for every adopt, plan, unadopt and
   release run, and a clean rollback-scope check (step 7).
@@ -93,7 +98,8 @@ No step from 6 on has run live. A refusal that the two walks below did not
 predict is a new blocker: stop where it appears.
 **Do not start step 7 until plan #1 (step 6) has answered S0(b) and reports
 blue's env-name parity holding, step 7's read-only
-rollback-scope check is clean, step 3b is done, and the owner can take
+rollback-scope check is clean, step 3b is done, step 6b's preflight is
+clear, and the owner can take
 S0(b′)'s attestation (below):** steps 7 to 12
 run as one sequence inside a 14-day window (step 7), and a sequence started
 while 10B or 12 cannot run leaves the install half handed over.
@@ -241,7 +247,8 @@ over an open window journal, and a freeze and thaw marker that CI signs.
 | 4 | Bootstrap: identities, environments, profile | owner | ready |
 | 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
 | 6 | Plan #1 | CI | ready |
-| 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers and step 3b (it starts the 14-day sequence) |
+| 6b | Owner preflight of the bind plan (read-only) | owner | after 3b, 4 and 6; before 7 |
+| 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers, step 3b and step 6b (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
 | 10 | Start the App (10A), then adopt (10B) | owner, CI | needs the S0(b′) attestation |
@@ -427,7 +434,9 @@ below count the grants before and after: a direct grant stops this step
 before the rename, and counts that differ after it stop the cutover.
 
 **Preconditions:** step 1. `<legacy-experiment-id>` is the id the legacy bundle
-state binds for `experiments.mip_lead_scoring` (the snapshot holds it). No
+state binds for `experiments.mip_lead_scoring` (the snapshot holds it; step
+6b's private report names it too, if you run that first: it then refuses
+`renamed` on this key, as predicted). No
 session deploys from the legacy root (step 1's freeze). Nothing here needs
 step 4. **Run every command of this step from a directory outside the
 checkout** (`cd` to one first), so no bundle context can choose the host:
@@ -480,7 +489,8 @@ databricks experiments get-permissions <legacy-experiment-id> -p <owner-profile>
 The same id answers with `name` exactly `/Shared/mip-lead-scoring`, `active`,
 and the artifact location of the first read; `same_id` is `true`; and the
 four permission counts equal the ones read first. `last_update_time` does not
-move on a rename, so it proves nothing.
+move on a rename, so it proves nothing. The final proof is step 6b: its
+preflight lists no `renamed` for `experiments.mip_lead_scoring`.
 
 **If the proof fails, stop: do not go on to step 7.** `same_id` false, or a
 `name` that is not exactly `/Shared/mip-lead-scoring`, means the governed
@@ -762,6 +772,67 @@ an existing catalog's, a `metastore owner:` line): **stop the cutover** and fix 
 
 **Rollback:** read-only.
 
+## Step 6b. Owner preflight (read-only): the bind plan's names
+
+**Who:** the owner, with their own profile. **Preconditions:** step 4 (the
+profile and its local `MIP_IDENTITY_IDS_JSON` pins), step 3b, and plan #1
+(step 6) for the profile ack it prints. Run it again right before step 7 if
+days have passed.
+
+Nothing before 10B-1 runs the adopt bind plan, and 10B-1 comes after both
+ownership handovers. This read measures, before step 7, what the owner can
+measure of it. A refusal found here costs a re-run; found at 10B-1 it leaves
+the install half handed over.
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.adopt_preflight --report-out <private-dir>/adopt-preflight.json
+```
+
+It computes the adopt plan as 10B-1 does (the legacy state under
+`MIP_LEGACY_BUNDLE_ROOT`, this deployer's state, one GET by id per legacy
+object, the same refusal codes), with one difference: the name each key must
+have comes from `databricks.yml` and the profile, not from a bundle CLI plan,
+which only the CI deployer runs. It prints counts, symbolic keys, refusal
+codes, two digests and one verdict, never a name or an id; the full document,
+which names resources, goes to the private report (mode 0600). Go on only if:
+
+- it ends `verdict: clear`: 16 legacy keys would bind, 2 expected creates, no
+  refusal;
+- **the profile ack it prints equals the one plan #1 printed**
+  (`owner_attestation=<profile-ack>`, step 6). It is the ack of the local
+  profile the preflight judged (`.env.local` and this shell). If the two
+  differ, the GitHub Environment's profile is not this one, and a `clear`
+  says nothing about the names CI will use: reconcile the two
+  (`github_environment`, step 4), dispatch plan #1 again and run this again.
+
+A refusal is one of the bind plan's own codes (10B, Refusals):
+
+- `renamed` on `experiments.mip_lead_scoring`: step 3b is not done;
+- `renamed` on the App, the Lakebase instance or the sync catalog: the profile
+  does not carry the live install's name (step 4). The live object is never
+  renamed;
+- `dashboard_parent_moved`, or `unresolved_name` on a dashboard:
+  `MIP_DASHBOARD_PARENT_PATH` is not the dashboards' live folder (step 4);
+- `missing`, `foreign_bound`, `bound_elsewhere`, `duplicate_id`,
+  `legacy_key_unknown`, `deployer_state_orphan`, `malformed_state`,
+  `legacy_state_missing`: the legacy state and the estate disagree. Stop and
+  read the private report;
+- `read_failed`, or `verdict: not measured` (a read that failed, which shows
+  its error class only; a CLI profile on another workspace than the client
+  profile; a `databricks.yml` shape the reader does not resolve names from):
+  fix the cause and run it again. Not measured is not clear.
+
+It does not measure the CI deployer's own reads (the deployer first reads the
+legacy root, as a workspace admin, at 10B-1), the bundle CLI's plan (10B-1's
+is the first governed one), the pre-stop probes or adopt-live's checks of the
+running App. Keep the `bind plan document sha256` it prints: 10B-1's adopt
+plan sha256 is expected to equal it while the legacy state, the objects and
+their names are unchanged. The `adopt_plan` ack comes from 10B-1's own output
+only, never from this preflight; if the two digests differ, read why before
+10B-2.
+
+**Rollback:** read-only.
+
 ## Step 7. Unity Catalog ownership handover
 
 **Who:** the owner, as the legacy owner (an agent only on the owner's explicit
@@ -787,6 +858,8 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 - Step 3b is done and proven: the legacy MLflow experiment carries the
   bundle's name. Until it does, 10B-1's bind plan refuses `renamed` on
   `experiments.mip_lead_scoring`, after the handovers.
+- Step 6b's preflight ends `verdict: clear`, and prints the profile ack plan
+  #1 printed. A refusal it predicts stops 10B-1 after the handovers.
 
 **The rollback-scope check (read-only).** As the owner:
 
@@ -1154,7 +1227,10 @@ stops before the lease. adopt-live's plan line names the 40-hex `git_sha` it
 resolved, which starts with the source check's sha12. Expect 16 legacy keys
 to bind, 2 planned creates, no delete, recreate or instance change, the
 dashboards `pinned_permanent`, and
-`s7_default_source: not_settable`. Keep the adopt-live plan's
+`s7_default_source: not_settable`. The adopt plan's sha256 is expected to
+equal step 6b's preflight digest; if it does not, the legacy state, an object
+or a name moved since, or CI saw another estate: read why before 10B-2. Keep
+the adopt-live plan's
 `deployment_sha256`: it is the `supersedes_deployment` selector should a
 supersede ever be needed.
 
@@ -1221,7 +1297,9 @@ printed: `missing`, `renamed`, `foreign_bound`,
 nothing changed, the owner renames as step 3b says, and 10B-1 is dispatched
 again with steps 7 and 8 left as they are; `renamed` on the App, the Lakebase
 instance or the sync catalog means the profile does not carry the live
-install's name, step 4, and the live object is never renamed); post-bind gate:
+install's name, step 4, and the live object is never renamed; step 6b's
+preflight predicts each of the plan's name and existence codes before step
+7); post-bind gate:
 `instance_change`, `create_set_mismatch`, `dashboard_recreate`,
 `dashboard_move`, `rename_collision`; adopt-live: `deployment_unstable`,
 `env_names_not_proxyless`, `bindings_invalid`, `bindings_differ`,

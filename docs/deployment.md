@@ -3850,6 +3850,25 @@ legacy MLflow experiment carries the bundle's name (the cutover runbook's
 step 3b: until the owner's rename, the bind plan refuses that key `renamed`
 before the lease).
 
+**The owner's preflight (read-only, before the handovers).**
+`tools.databricks.adopt_preflight` computes the same plan with the owner's
+own CLI profile and no bundle CLI: the names come from `databricks.yml` and
+the client profile's bundle variables. It refuses to vouch for a bundle shape
+that would let the CLI plan other keys or names than it reads: a client
+target that is not production mode or that sets a name prefix, a top-level
+`include`, target-level `variables`, or a kind without a reviewed read; a
+name the profile does not resolve stays unresolved and refuses that key
+(`unresolved_name`). It prints counts, symbolic keys, the refusal codes
+above, the document's sha256 and the profile ack of the local profile it
+judged, writes the full document to `--report-out` (mode 0600), and exits 0
+only with `verdict: clear`. The profile ack is the value every governed plan
+prints as `owner_attestation=`: a `clear` from a local profile whose ack is
+not the one CI prints says nothing about the names CI will use. It takes no
+lease, binds nothing and is no acknowledgement: `MIP_ADOPT_PLAN_ACK` is the
+digest the adopt phase's own plan prints. It does not measure the CI
+deployer's reads, the CLI's plan, the pre-stop probes or adopt-live (the
+cutover runbook's step 6b).
+
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
 of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
 pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
