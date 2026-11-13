@@ -70,7 +70,9 @@ def test_the_governed_job_installs_the_reviewed_cli_version() -> None:
     lines = _setup_cli_lines(DEPLOY_DEV)
     assert len(lines) == 1, "deploy-dev.yml installs the CLI exactly once"
     pin = _PIN_LINE.fullmatch(lines[0])
-    assert pin is not None, "the setup-cli step is a full commit sha with its `# vX.Y.Z` tag comment"
+    assert (
+        pin is not None
+    ), "the setup-cli step is a full commit sha with its `# vX.Y.Z` tag comment"
 
     assert (pin["sha"], pin["version"]) == REVIEWED_SETUP_CLI
     assert pin["version"] == REVIEWED_CLI_VERSION
@@ -103,8 +105,13 @@ def test_no_other_workflow_or_action_installs_a_databricks_cli() -> None:
 def test_the_gates_name_the_reviewed_cli_version() -> None:
     tag = f"v{REVIEWED_CLI_VERSION}"
 
-    assert f"Databricks CLI {tag}, plan_version {PLAN_VERSION})" in bundle_plan_gate.REMEDIES["malformed_plan"]
-    assert f"the installed\ntag, {tag}, not from a live capture" in (bundle_plan_shape.__doc__ or "")
+    assert (
+        f"Databricks CLI {tag}, plan_version {PLAN_VERSION})"
+        in bundle_plan_gate.REMEDIES["malformed_plan"]
+    )
+    assert f"the installed\ntag, {tag}, not from a live capture" in (
+        bundle_plan_shape.__doc__ or ""
+    )
     assert f"the reviewed {tag} shape" in (bundle_plan_shape.PlanShapeError.__doc__ or "")
     assert bundle_plan_fixtures.CLI_VERSION == REVIEWED_CLI_VERSION
 
