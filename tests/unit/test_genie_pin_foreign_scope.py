@@ -232,5 +232,5 @@ def test_the_runbook_names_the_check_its_clean_answer_and_the_refusals_log_lines
         assert anchor in runbook, anchor
     step_7 = runbook[runbook.index("## Step 7. Unity Catalog ownership handover") : runbook.index("## Step 8.")]
     assert OWNER_CHECK in step_7, "the check is a step 7 precondition, before the 14-day sequence starts"
-    walk = runbook[runbook.index("**10B walked with") : runbook.index("Two smaller gaps are noted")]
+    walk = runbook[runbook.index("**10B walked with") : runbook.index("One smaller gap is noted")]
     assert "an App rollback scope that already exists" in walk

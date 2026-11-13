@@ -43,7 +43,16 @@ interface MultiFilterSelectProps<T extends string> {
   allLabel: string;
   selected: readonly T[];
   options: ReadonlyArray<MultiFilterSelectOption<T>>;
-  onChange: (next: T[]) => void;
+  /**
+   * `next` is the selection after the pick, built from the `selected` this
+   * control last RENDERED. `picked` is the pick itself: the option toggled,
+   * or null for the "all" row. An owner whose `selected` can trail its own
+   * state (URL state: the data router commits a navigation to React in a
+   * transition) applies `picked` to its live value instead of taking
+   * `next`, so a second pick before the re-render keeps the first
+   * (routes/lead-queue.columns.ts).
+   */
+  onChange: (next: T[], picked: T | null) => void;
   /** Trigger text when more than one option is selected. Default: "N selected". */
   formatCount?: (count: number) => string;
 }
@@ -83,11 +92,11 @@ export function MultiFilterSelect<T extends string>({
 
   const pickIndex = (idx: number) => {
     if (idx === 0) {
-      onChange([]);
+      onChange([], null);
       return;
     }
     const option = options[idx - 1];
-    if (option) onChange(toggleValue(selected, option.value));
+    if (option) onChange(toggleValue(selected, option.value), option.value);
   };
 
   const listbox = useListboxNavigation({

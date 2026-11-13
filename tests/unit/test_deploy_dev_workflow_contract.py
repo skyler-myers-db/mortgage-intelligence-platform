@@ -63,6 +63,11 @@ def _unbound_workflow_text() -> str:
         text = text.replace(block, "")
     return text
 RUN_STEP = "Run the client phase"
+# Wave 7c: the marker phases' step (tools/clients/publisher_freeze.py), in place of the run step.
+FREEZE_STEP = "Freeze or thaw the emergency publisher"
+MARKER_PHASES = ("freeze", "thaw")
+RUN_STEP_IF = "${{ inputs.phase != 'freeze' && inputs.phase != 'thaw' }}"
+FREEZE_STEP_IF = "${{ inputs.phase == 'freeze' || inputs.phase == 'thaw' }}"
 OIDC_PROOF_STEP = "Prove the GitHub OIDC deployer identity"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 DEPLOY_LIB_SCRIPTS = DEPLOY_SOURCED_SCRIPTS
@@ -143,6 +148,20 @@ def test_deploy_script_runs_deploy_dev_with_a_phase_and_a_prebuilt_release(tmp_p
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines()[-1] == "client"
+
+
+@pytest.mark.parametrize("phase", MARKER_PHASES)
+def test_deploy_script_has_no_marker_phase_even_under_deploy_dev(tmp_path: Path, phase: str) -> None:
+    """Wave 7c: freeze and thaw are the workflow's own step; scripts/deploy.sh is unchanged and refuses the name."""
+
+    result = _target_parse(
+        "-t", "client", "--phase", phase, "--prebuilt-release", str(tmp_path),
+        env={"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF},
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stderr.strip() == f"[deploy] phase must be plan, release, data, adopt or unadopt; refusing '{phase}'"
+    assert result.stdout == ""
 
 
 @pytest.mark.parametrize(
@@ -5242,8 +5261,9 @@ def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> N
     }
 
     # M0-PR9's read-only journal record (tests/unit/test_quiesce_window_workflow.py)
-    # selects the profile too; it carries no App client pair.
-    assert list(deployer_steps) == [OIDC_PROOF_STEP, RUN_STEP, "Record the quiesce window journal state"]
+    # selects the profile too; it carries no App client pair. So does wave 7c's
+    # marker step, which runs in place of the run step for freeze and thaw.
+    assert list(deployer_steps) == [OIDC_PROOF_STEP, RUN_STEP, FREEZE_STEP, "Record the quiesce window journal state"]
     for step in steps:
         env = step.get("env") or {}
         assert "DATABRICKS_TOKEN" not in env, step.get("name")
@@ -7269,7 +7289,7 @@ def test_dev_workflow_deploys_one_client_environment_per_manual_dispatch() -> No
         "type": "string",
         "required": "true",
     }
-    assert workflow_inputs["phase"]["options"] == ["plan", "release", "data", "adopt", "unadopt"]
+    assert workflow_inputs["phase"]["options"] == ["plan", "release", "data", "adopt", "unadopt", "freeze", "thaw"]
     assert workflow_inputs["phase"]["default"] == "plan", "a dispatch that names no phase only reads"
 
     break_glass_input = workflow_inputs["acknowledge_single_maintainer_break_glass"]
@@ -7288,6 +7308,10 @@ def test_dev_workflow_deploys_one_client_environment_per_manual_dispatch() -> No
     (
         ("client-one", "plan", 0),
         ("client-one", "unadopt", 0),
+        ("client-one", "freeze", 0),
+        ("client-one", "thaw", 0),
+        ("client-one", "Freeze", 1),
+        ("client-one", "unfreeze", 1),
         ("Client-One", "plan", 1),
         ("c", "plan", 1),
         ("client/one", "plan", 1),
@@ -7345,7 +7369,9 @@ def test_dev_workflow_has_no_credential_repair_or_remediation_input() -> None:
     for retired in ("--set-gh-secrets", "provision_m2m_oauth", "gh secret set"):
         assert retired not in text, retired
     deploy = steps[names.index(RUN_STEP)]
-    assert "if" not in deploy, "the run step runs whenever the job does"
+    # Premise change (wave 7c): the run step runs whenever the job does for every
+    # scripts/deploy.sh phase; the two marker phases run their own step instead.
+    assert deploy["if"] == RUN_STEP_IF, "the run step runs for every scripts/deploy.sh phase"
     assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS" not in deploy["env"]
 
 
@@ -7537,3 +7563,56 @@ def test_the_deploy_job_sets_the_foreign_name_switch_and_reads_inputs_through_en
     for name, job in jobs.items():
         for step in job.get("steps", []):
             assert "${{" not in str(step.get("run", "")), f"{name}/{step.get('name')}: inputs reach a script through env"
+
+
+# ------------------------------------------- the marker phases' step (wave 7c)
+
+
+def test_the_freeze_step_is_exact_binds_no_secret_and_runs_only_for_the_marker_phases() -> None:
+    """tools/clients/publisher_freeze.py reads the signing key in-process from .env.local: nothing is bound here."""
+
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = yaml.load(text, Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["deploy"]["steps"]
+    names = [step.get("name") for step in steps]
+    step = steps[names.index(FREEZE_STEP)]
+
+    assert step == {
+        "name": FREEZE_STEP,
+        "if": FREEZE_STEP_IF,
+        "env": {"DATABRICKS_CONFIG_PROFILE": "DEFAULT", "MIP_DISPATCH_PHASE": "${{ inputs.phase }}"},
+        "run": 'python -m tools.clients.publisher_freeze --phase "$MIP_DISPATCH_PHASE" --env-file .env.local',
+    }, "no secret, no variable, no input but the phase, and the key in no argv"
+    assert "secrets." not in json.dumps(step) and "vars." not in json.dumps(step)
+    # After the profile, the OIDC proof and the preflight (which exports the thaw's ack), in
+    # place of the run step, and before the read-only record and the profile files' removal.
+    assert names.index("Resolve the client profile") < names.index(OIDC_PROOF_STEP) < names.index("Preflight the dispatch")
+    assert names.index("Preflight the dispatch") < names.index(RUN_STEP) == names.index(FREEZE_STEP) - 1
+    assert names[names.index(FREEZE_STEP) + 1 :] == ["Record the quiesce window journal state", "Remove the profile files"]
+    assert steps[names.index(RUN_STEP)]["if"] == RUN_STEP_IF
+    # Neither condition names a status function, so a failed proof or preflight skips both.
+    for condition in (RUN_STEP_IF, FREEZE_STEP_IF):
+        assert not re.search(r"\b(?:always|failure|cancelled|success)\s*\(", condition)
+    # It is the only step that runs the tool, and no step runs deploy.sh for a marker phase.
+    assert [s.get("name") for s in steps if "publisher_freeze" in str(s.get("run", ""))] == [FREEZE_STEP]
+    assert [s.get("name") for s in steps if "deploy.sh" in str(s.get("run", ""))] == [RUN_STEP]
+    assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" not in json.dumps([s for s in steps if s.get("name") != "Collect the client's profile from its environment"])
+
+
+def test_every_phase_keyed_map_and_the_dispatch_check_know_the_marker_phases() -> None:
+    from tests.unit.test_quiesce_window_workflow import phase_timeouts
+
+    workflow = yaml.load(DEPLOY_DEV.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    deploy = workflow["jobs"]["deploy"]
+    options = workflow["on"]["workflow_dispatch"]["inputs"]["phase"]["options"]
+    minutes = phase_timeouts(deploy["timeout-minutes"])
+
+    assert options[-2:] == list(MARKER_PHASES)
+    assert {phase: minutes[phase] for phase in MARKER_PHASES} == {"freeze": 15, "thaw": 15}
+    assert deploy["steps"][0]["env"]["MIP_JOB_TIMEOUT_MINUTES"] == deploy["timeout-minutes"], "one expression, twice"
+    assert list(minutes) == options, "every dispatchable phase states its timeout"
+    check = next(s for s in workflow["jobs"]["check-dispatch"]["steps"] if s.get("name") == "Refuse a malformed client key or phase")
+    assert "plan|release|data|adopt|unadopt|freeze|thaw) ;;" in check["run"]
+    assert "phase must be plan, release, data, adopt, unadopt, freeze or thaw." in check["run"]
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["phase"]["default"] == "plan", "the default still only reads"
+    assert len(workflow["on"]["workflow_dispatch"]["inputs"]) == 10, "the marker phases add no input"

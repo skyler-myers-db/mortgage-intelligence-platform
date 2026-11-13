@@ -27,7 +27,7 @@ import { ApprovalRequestScopeRow } from '../components/mortgage/ApprovalRequestS
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
-import { leadQueueColumns, searchParamsWithLeadTableColumns, useLeadQueueColumnState } from './lead-queue.columns';
+import { leadQueueColumns, useLeadQueueColumnState, useLeadQueueColumnWrites } from './lead-queue.columns';
 import { LeadQueueHideSlot } from './lead-queue.hideSlot';
 import { buildPortfolioBuilderUrlFromQueue } from './lead-queue.handoff';
 import { copyLink } from '../lib/copyLink';
@@ -68,7 +68,6 @@ import {
   searchParamsWithTriageMode,
   searchWithoutTriageMode,
   segmentFilterChips,
-  type LeadQueueColumns,
   type LeadQueueExportFiltersInput,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
@@ -144,10 +143,11 @@ export default function LeadQueue() {
   );
   // The effective columns (lead-queue.columns.ts, tables-05 step 2): the
   // URL's ?view= / ?hide=, else the actor's default saved view. Display
-  // state: a change pushes the URL and reads nothing.
+  // state: a change pushes the URL and reads nothing. A write builds on the
+  // URL the router holds now, not on this render's copy of it.
   const columnState = useLeadQueueColumnState(searchParams);
   const tableView = columnState.view;
-  const writeColumns = (next: LeadQueueColumns) => setSearchParams(searchParamsWithLeadTableColumns(searchParams, next, columnState));
+  const columnWrites = useLeadQueueColumnWrites(searchParams, setSearchParams);
   const stateOptions = useMemo(() => {
     const states = footprint.ready && !footprint.usingFallback
       ? footprint.states.map((s) => s.state_code).sort()
@@ -700,7 +700,7 @@ export default function LeadQueue() {
                     <LeadQueueHideSlot
                       view={tableView}
                       hidden={columnState.hidden}
-                      onChange={(hidden) => writeColumns({ view: tableView, hidden })}
+                      onPick={columnWrites.pickHidden}
                     />
                   )}>
                     <LeadTable
@@ -721,7 +721,7 @@ export default function LeadQueue() {
                       exportContext={exportContext}
                       salesTeam={salesTeam}
                       view={tableView}
-                      onViewChange={(next) => writeColumns({ view: next, hidden: [...columnState.hidden] })}
+                      onViewChange={columnWrites.setView}
                       fillHeight
                       restoreScroll
                       headerStatus={freshness}
