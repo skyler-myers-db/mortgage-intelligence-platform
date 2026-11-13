@@ -47,7 +47,7 @@ REPOSITORY = "example-org/mortgage-intelligence-platform"
 TOKEN = "ghs_EXAMPLE_PLACEHOLDER_TOKEN"
 # Steps the offline sandbox cannot run: their headers are still rendered and checked.
 HEADER_ONLY = {"Install the deploy tooling offline and hash-pinned", "Prove the GitHub OIDC deployer identity",
-               "Record the quiesce window journal state"}
+               "Record the quiesce window journal state", "Freeze or thaw the emergency publisher"}
 DEFAULT_INPUTS: dict[str, Any] = {
     "phase": "plan", "owner_attestation": "", "operation_acks": "",
     "expected_active_deployment_sha256": "", "protections_unverified_ack": "", "skip_silver": True,
