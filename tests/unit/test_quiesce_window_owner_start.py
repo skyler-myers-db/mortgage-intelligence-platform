@@ -955,6 +955,15 @@ def test_every_refusal_code_is_reviewed_and_public_output_is_codes_only() -> Non
         "owner_start_not_current",
         "owner_start_not_a_start",
     )
+    # What the marker may read is exactly what the dead-man job may write, plus the three
+    # reads of a missing, foreign or broken marker: a state added to the job is reviewed here.
+    from pathlib import Path
+
+    from tests.fixtures.quiesce_window_estate import load_deadman
+
+    job = load_deadman((Path(__file__).resolve().parents[2] / "jobs" / "window_deadman.py").read_bytes(), "deadman_states")
+    assert job["MARKER_STATES"] | {"absent", "mismatch", "unreadable"} == recovery.MARKER_READS
+    assert recovery.KNOWN_START_MARKERS - {recovery.SUPERSEDED} < job["MARKER_STATES"]
     under_the_lease = {"owner_start_usage", "owner_start_no_window", "owner_start_deadman", "owner_start_unacked", "owner_start_unproven"}
     assert {*OWNER_START_REFUSALS, *under_the_lease} == REFUSAL_CODES
     with pytest.raises(ValueError):

@@ -402,6 +402,8 @@ def test_an_owner_start_passes_the_open_journal_only_before_the_lease_with_its_e
         *(replace(CANDIDATE, owner_start_state=code, owner_start_sha256="") for code in ("absent", *OWNER_START_REFUSALS)),
         replace(CANDIDATE, owner_start_sha256=""),
         replace(CANDIDATE, owner_start_sha256="not-a-digest"),
+        # A digest beside a code that is not ``candidate`` is never one to acknowledge.
+        *(replace(CANDIDATE, owner_start_state=code) for code in ("absent", "owner_start_ambiguous", "owner_start_none")),
     ),
     ids=lambda facts: f"{facts.owner_start_state}:{facts.owner_start_sha256[:6] or 'no-digest'}",
 )
