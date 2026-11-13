@@ -100,6 +100,7 @@ if str(REPO_ROOT) not in sys.path:
 from backend.config import source_names  # noqa: E402
 from backend.config.source_names import CotalitySource  # noqa: E402
 from tools import render_sql  # noqa: E402
+from tools.clients.redact import emit_mask  # noqa: E402
 from tools.databricks import genie_space_pin  # noqa: E402
 from tools.databricks.genie_space_writes import (  # noqa: E402
     _create_with_fallback,
@@ -741,7 +742,9 @@ def run(args: argparse.Namespace) -> int:
                 warehouse_id=args.warehouse_id,
                 title=target_name,
             )
-            space_id = getattr(created, "space_id", None) or ""
+            # A runner mask before any print: a pinned or acked id is masked
+            # where the pin resolves it, a created one exists only from here.
+            space_id = emit_mask(getattr(created, "space_id", None) or "")
         except Exception as exc:  # noqa: BLE001
             print(f"error: create_space failed: {exc}", file=sys.stderr)
             return 6

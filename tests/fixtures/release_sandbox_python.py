@@ -19,6 +19,10 @@ identity-bearing environment names it was handed. Then, by what it is:
   ``--recover-bootstrap-only`` call finds no creator to recover;
 * the App payload builder, for real (it reads only the profile), so a test
   reads the payload each activation deployed;
+* ``bundle_state``: a first install's deployer, whose state binds no
+  warehouse yet (``warehouse-id`` prints nothing); ``bootstrap-warehouse-id``
+  runs the real check (B1) against a fresh client's workspace: no state, no
+  App unless the estate has one, the profile's warehouse live and PRO;
 * a scripted answer for each tool whose output the deploy reads (the lease,
   the first-install journal, the bundle summary, the release id, the stop
   outcome, the resource bindings, the Genie space id, the catalog bootstrap
@@ -49,6 +53,7 @@ WATCHED = (
     "DATABRICKS_VERIFIER_CLIENT_ID",
     "BUNDLE_VAR_require_ai_gateway_verifier",
     "BUNDLE_VAR_ai_gateway_verifier_client_id",
+    "DATABRICKS_WAREHOUSE_ID",
 )
 APP = {
     "name": "mip-app",
@@ -218,6 +223,44 @@ def _converge_lakebase_role(args: list[str]) -> int:
     return 0
 
 
+def _bundle_state(args: list[str]) -> int:
+    """A first install's state binds no warehouse; the bootstrap check runs for real (B1)."""
+
+    if args != ["bootstrap-warehouse-id"]:
+        return 0  # warehouse-id: this deployer's state binds no warehouse yet
+    from types import SimpleNamespace
+
+    from databricks.sdk.errors import NotFound
+    from databricks.sdk.service.sql import (
+        GetWarehouseResponse,
+        GetWarehouseResponseWarehouseType,
+        State,
+    )
+
+    from tools.databricks import bundle_state
+
+    estate = json.loads(Path(os.environ["MIP_TEST_PRESTOP_ESTATE"]).read_text(encoding="utf-8"))
+
+    def download(_path: str) -> Any:
+        raise NotFound("a fresh client's deployer has no bundle state")
+
+    def get_app(*, name: str) -> Any:
+        if estate.get("app") is None:
+            raise NotFound("no App yet")
+        return SimpleNamespace(name=name)
+
+    def get_warehouse(*, id: str) -> Any:  # noqa: A002 - the SDK's keyword
+        pro = GetWarehouseResponseWarehouseType.PRO
+        return GetWarehouseResponse(id=id, state=State.STOPPED, warehouse_type=pro, enable_serverless_compute=True)
+
+    workspace = SimpleNamespace(
+        workspace=SimpleNamespace(download=download),
+        apps=SimpleNamespace(get=get_app),
+        warehouses=SimpleNamespace(get=get_warehouse),
+    )
+    return bundle_state.main(args, client=workspace)
+
+
 def _core_rollback(args: list[str]) -> int:
     """The core capture (M2-PR7b): its own tests prove it; here, record it and bind green."""
 
@@ -264,11 +307,10 @@ def main() -> int:
         "tools.databricks.verify_reviewed_function_execute_grants": _function_grants,
         "tools.databricks.converge_lakebase_oauth_role": _converge_lakebase_role,
         "tools.databricks.app_core_rollback": _core_rollback,
+        "tools.databricks.bundle_state": _bundle_state,
     }
     if module in handlers:
         return handlers[module](rest)
-    if module == "tools.databricks.bundle_state":
-        return 0  # a first install: this deployer's state binds no warehouse yet
     if module == "tools.databricks.app_release_contract":
         print(f"{_option(rest, '--expected-commit')[:12]}-{'0' * 12}")
         return 0

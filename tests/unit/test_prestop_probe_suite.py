@@ -93,7 +93,9 @@ def test_a_clean_install_passes_every_suite_probe(monkeypatch: pytest.MonkeyPatc
 
     assert found == []
     assert asked == [GOVERNED_SPACE], "the Genie turn asks the record-pinned space"
-    assert len(notes) == 5
+    # One note per probe, the App's metastore authority (spike S0(b′)) included.
+    assert len(notes) == 6
+    assert "the App holds no metastore privilege outside the reviewed set (a live read as a metastore admin)" in notes
 
 
 def test_the_plan_phase_asks_no_genie_turn_and_every_other_probe_still_runs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,7 +104,7 @@ def test_the_plan_phase_asks_no_genie_turn_and_every_other_probe_still_runs(monk
 
     found, notes, asked = _suite(monkeypatch, clean_estate(), config=replace(CONFIG, genie_turn=False))
     assert found == [] and asked == []
-    assert notes[-1].startswith("Genie budget: no turn in --phase plan") and len(notes) == 5
+    assert notes[-1].startswith("Genie budget: no turn in --phase plan") and len(notes) == 6
 
 
 def test_a_record_whose_space_was_retired_yields_to_the_provisioners_resolution(

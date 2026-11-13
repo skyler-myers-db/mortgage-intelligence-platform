@@ -156,6 +156,7 @@ jobs:
             ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE && 'MIP_APP_ROLLBACK_SECRET_SCOPE' || '' }}
             ${{ vars.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
             ${{ vars.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ vars.MIP_BOOTSTRAP_WAREHOUSE_ID && 'MIP_BOOTSTRAP_WAREHOUSE_ID' || '' }}
             ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID && 'MIP_CI_DEPLOYER_CLIENT_ID' || '' }}
             ${{ vars.MIP_CLIENT && 'MIP_CLIENT' || '' }}
             ${{ vars.MIP_CLOUD && 'MIP_CLOUD' || '' }}
@@ -240,6 +241,7 @@ jobs:
             ${{ secrets.MIP_APP_ROLLBACK_SECRET_SCOPE && 'MIP_APP_ROLLBACK_SECRET_SCOPE' || '' }}
             ${{ secrets.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
             ${{ secrets.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ secrets.MIP_BOOTSTRAP_WAREHOUSE_ID && 'MIP_BOOTSTRAP_WAREHOUSE_ID' || '' }}
             ${{ secrets.MIP_CI_DEPLOYER_CLIENT_ID && 'MIP_CI_DEPLOYER_CLIENT_ID' || '' }}
             ${{ secrets.MIP_CLIENT && 'MIP_CLIENT' || '' }}
             ${{ secrets.MIP_CLOUD && 'MIP_CLOUD' || '' }}
@@ -520,6 +522,7 @@ jobs:
           MIP_CLIENT_SECRET__MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ secrets.MIP_APP_ROLLBACK_SECRET_SCOPE }}
           MIP_CLIENT_SECRET__MIP_AUDITOR_EMAILS: ${{ secrets.MIP_AUDITOR_EMAILS }}
           MIP_CLIENT_SECRET__MIP_AUDITOR_IDENTITIES: ${{ secrets.MIP_AUDITOR_IDENTITIES }}
+          MIP_CLIENT_SECRET__MIP_BOOTSTRAP_WAREHOUSE_ID: ${{ secrets.MIP_BOOTSTRAP_WAREHOUSE_ID }}
           MIP_CLIENT_SECRET__MIP_CLIENT: ${{ secrets.MIP_CLIENT }}
           MIP_CLIENT_SECRET__MIP_CLOUD: ${{ secrets.MIP_CLOUD }}
           MIP_CLIENT_SECRET__MIP_COTALITY_SHARE_NAME: ${{ secrets.MIP_COTALITY_SHARE_NAME }}
@@ -581,6 +584,7 @@ jobs:
             ${{ vars.MIP_APPROVER_IDENTITIES && 'MIP_APPROVER_IDENTITIES' || '' }}
             ${{ vars.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
             ${{ vars.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ vars.MIP_BOOTSTRAP_WAREHOUSE_ID && 'MIP_BOOTSTRAP_WAREHOUSE_ID' || '' }}
             ${{ vars.MIP_COTALITY_SHARE_NAME && 'MIP_COTALITY_SHARE_NAME' || '' }}
             ${{ vars.MIP_COTALITY_SHARE_PROVIDER && 'MIP_COTALITY_SHARE_PROVIDER' || '' }}
             ${{ vars.MIP_DASHBOARD_PARENT_PATH && 'MIP_DASHBOARD_PARENT_PATH' || '' }}

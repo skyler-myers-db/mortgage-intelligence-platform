@@ -4,7 +4,9 @@
 ``--phase unadopt``) runs this tool twice:
 
 * ``plan`` before the signed lease, read-only: the pre-bind bundle plan
-  (``bundle_env plan -t client -o json``), this deployer's state, the legacy
+  (``bundle_env plan -t client -o json --adopt-acked-genie-pin``, which binds
+  the one Genie title match the shell's exact ``MIP_GENIE_PIN_ACK`` names
+  while nothing pins the space), this deployer's state, the legacy
   state under ``MIP_LEGACY_BUNDLE_ROOT`` and one GET by id per legacy object
   give the canonical plan of tools/databricks/adopt_legacy_map.py. It prints
   that plan's sha256. Given ``--ack-plan`` it refuses unless the digest is
@@ -37,6 +39,15 @@ freeze) is M2-PR7's; this tool only binds. Exit codes: 0 done (or planned),
 2 refused with nothing left changed, 3 refused with the inverse unproven (the
 report names what the state may still bind: run ``--phase unadopt``, whose
 live checks, like adopt's, accept that half-bound state).
+
+Every bundle_env call (each bind and each of the undo's unbinds included)
+re-resolves that title match: the space list, its permissions and the
+deploying identity. A direct CAN_MANAGE holder that changes mid-run makes the
+pin plan another one, so each later call refuses ``the ack names another
+plan``; when that lands among the binds, the undo's unbinds refuse too and the
+run exits 3, half-bound. The recovery is ``--phase unadopt`` with a fresh
+``MIP_GENIE_PIN_ACK`` (the new pin plan's sha256, which the deploy's step-0
+pin check prints).
 """
 
 from __future__ import annotations
@@ -122,7 +133,13 @@ class BundleCli(Protocol):
 
 
 class BundleEnvCli:
-    """``python -m tools.databricks.bundle_env`` with the client target's own variables."""
+    """``python -m tools.databricks.bundle_env`` with the client target's own variables.
+
+    Every call passes ``bundle_env_adopt.ADOPT_GENIE_FLAG``: before an adoption
+    nothing pins the governed Genie space, so bundle_env binds the one title
+    match the shell's exact ``MIP_GENIE_PIN_ACK`` names (a pin, once one
+    exists, wins). Each call re-resolves it, the undo's unbinds included.
+    """
 
     def __init__(self, python: str = sys.executable) -> None:
         self.python = python
@@ -144,7 +161,8 @@ class BundleEnvCli:
         return result.stdout
 
     def plan(self) -> BundlePlan:
-        return parse_plan(self._run("plan", ["plan", "-t", "client", "-o", "json"]))
+        args = ["plan", "-t", "client", "-o", "json", bundle_env_adopt.ADOPT_GENIE_FLAG]
+        return parse_plan(self._run("plan", args))
 
     def bind(self, key: str, live_id: str, authority: Authority) -> None:
         self._run(
@@ -157,8 +175,11 @@ class BundleEnvCli:
 
 
 def _flags(authority: Authority) -> list[str]:
+    """The wrapper-only flags of one state edit: the adopt authority's four, then the Genie flag."""
+
     values = (str(authority.plan_path), authority.sha256, authority.lease_id, authority.source_git_sha)
-    return [part for flag, value in zip(bundle_env_adopt.FLAGS, values, strict=True) for part in (flag, value)]
+    pairs = [part for flag, value in zip(bundle_env_adopt.FLAGS, values, strict=True) for part in (flag, value)]
+    return [*pairs, bundle_env_adopt.ADOPT_GENIE_FLAG]
 
 
 def inputs_from_profile(profile: Any) -> legacy_map.AdoptInputs:

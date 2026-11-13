@@ -103,6 +103,13 @@ OPERATION_ACKS: dict[str, OperationAck] = {
     "restore_unverified_frontend": OperationAck("MIP_ACK_RESTORE_UNVERIFIED_FRONTEND", frozenset({"release"})),
     "data_ledger_supersede": OperationAck("MIP_ACK_DATA_LEDGER_SUPERSEDE", frozenset({"data"})),
     "data_ledger_rerun": OperationAck("MIP_ACK_DATA_LEDGER_RERUN", frozenset({"data"})),
+    # The metastore owner's attestation of the App's metastore privileges (spike
+    # S0(b′), tools/databricks/metastore_app_grants.py): read by the pre-stop
+    # probes (plan, adopt, unadopt, release), adopt-live's treatment fact
+    # (adopt) and the release's treatment converger, never by the data phase.
+    "metastore_app_grants": OperationAck(
+        "MIP_ACK_METASTORE_APP_GRANTS", frozenset({"plan", "adopt", "unadopt", "release"})
+    ),
 }
 
 

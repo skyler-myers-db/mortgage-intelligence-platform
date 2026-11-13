@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from databricks.sdk import AccountClient, WorkspaceClient
 from tools.clients.shapes import PRINCIPAL_VOCABULARY
 from tools.databricks.uc_interim_owner_pairs import EXPIRED, MATCH, InterimOwnerPairs
+from tools.databricks.uc_metastore_read import OWNER_ABSENT, OWNER_NONCANONICAL, owner_state
 
 METASTORE_OWNER_ENV = "MIP_UC_METASTORE_OWNER"
 
@@ -501,10 +502,13 @@ class MetastoreOwnerPolicy(ApprovedOwnerPolicy):
     are refused, and the inherited checks stay: account and workspace SCIM
     resolve it to one immutable principal, it is never the App's service
     principal or one of its aliases, and a group owner must not contain the
-    App's service principal. An owner the API does not return refuses: the
-    owner is read with ``metastores.get``, which the SDK documents as
-    metastore-admin only, and whether a non-admin read (``summary``) returns
-    the owner is spike S0(b), still owed.
+    App's service principal. The owner is read from ``metastores.summary()``
+    (``tools/databricks/uc_metastore_read.current_metastore``), never the
+    metastore-admin-only ``metastores.get``; spike S0(b) measured that the
+    summary returns it to a non-admin. An owner the summary does not return
+    refuses (S0(b)'s worst case), and so does one it returns padded, blank or
+    not as a string, each with its own text: a data fault is never reported
+    as a withheld read.
     """
 
     metastore_owner: str = ""
@@ -534,11 +538,24 @@ class MetastoreOwnerPolicy(ApprovedOwnerPolicy):
     def assert_objects(self, objects: Iterable[object | None]) -> None:
         items = [item for item in objects if item is not None]
         for item in items:
+            state = owner_state(item)
+            if state == OWNER_ABSENT:
+                raise RuntimeError(
+                    "Governed UC object inventory returned a noncanonical owner: the metastore "
+                    "summary returned no owner to the deploying identity (spike S0(b)'s worst "
+                    f"case), so the metastore cannot be judged against {METASTORE_OWNER_ENV}"
+                )
             owner = getattr(item, "owner", None)
             if isinstance(owner, str) and _is_principal_vocabulary(owner):
                 raise RuntimeError(
                     "The metastore owner is users, account users or admins, which never "
                     "satisfy the metastore-owner policy"
+                )
+            if state == OWNER_NONCANONICAL:
+                raise RuntimeError(
+                    "Governed UC object inventory returned a noncanonical owner: the metastore "
+                    "summary returned an owner that is not a canonical principal name (padded, "
+                    "blank or not a string), a fault in the metastore's data, not a withheld read"
                 )
             if isinstance(owner, str) and owner and owner == owner.strip() and owner != self.metastore_owner:
                 raise RuntimeError(

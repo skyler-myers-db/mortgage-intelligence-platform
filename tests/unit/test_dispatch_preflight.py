@@ -217,6 +217,8 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
         "MIP_ADOPT_LIVE_SUPERSEDE",
         # The core release's unverified-frontend ack (B3).
         "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND",
+        # tools/databricks/metastore_app_grants.py (spike S0(b′)).
+        "MIP_ACK_METASTORE_APP_GRANTS",
     }
     # ...and each has its reader where the run looks for it (a literal snippet per env).
     for env, (path, snippet) in READERS.items():
@@ -248,6 +250,7 @@ READERS = {
     ),
     "MIP_ACK_DATA_LEDGER_SUPERSEDE": ("tools/databricks/job_phase_runner.py", 'ACK_SUPERSEDE_ENV = "MIP_ACK_DATA_LEDGER_SUPERSEDE"'),
     "MIP_ACK_DATA_LEDGER_RERUN": ("tools/databricks/job_phase_runner.py", 'ACK_RERUN_ENV = "MIP_ACK_DATA_LEDGER_RERUN"'),
+    "MIP_ACK_METASTORE_APP_GRANTS": ("tools/databricks/metastore_app_grants.py", 'ACK_ENV = "MIP_ACK_METASTORE_APP_GRANTS"'),
 }
 
 

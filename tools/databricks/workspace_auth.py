@@ -50,11 +50,31 @@ def deployment_workspace_client(
             raise RuntimeError("Deployer Databricks auth cannot bind both PAT and profile")
         return build(host=host, token=token, auth_type="pat")
     if profile:
-        client = _github_oidc_client(build, profile)
-        return build(profile=profile) if client is None else client
+        return deployer_profile_client(profile, factory=build)
     ambient_profile = os.environ.get(_AMBIENT_PROFILE_ENV, "").strip()
     client = _github_oidc_client(build, ambient_profile) if ambient_profile else None
     return build() if client is None else client
+
+
+def deployer_profile_client(
+    profile: str,
+    *,
+    factory: Callable[..., WorkspaceClient] | None = None,
+) -> WorkspaceClient:
+    """The client of a bound deployer profile (``MIP_DEPLOYER_DATABRICKS_PROFILE``).
+
+    A ``github-oidc`` profile gets the cached strategy with the profile's own
+    host and client id; any other is ``WorkspaceClient(profile=...)``. Every
+    deployer client of a profile binding is built here, so two tools in one
+    run (the Genie pin plan's provisioner and bundle_env) resolve the same
+    identity; a github-oidc profile's explicit client id also outranks an
+    app-facing ``DATABRICKS_CLIENT_ID`` a shell exported, which a bare
+    ``WorkspaceClient(profile=...)`` lets the SDK take instead.
+    """
+
+    build = factory or WorkspaceClient
+    client = _github_oidc_client(build, profile)
+    return build(profile=profile) if client is None else client
 
 
 def _github_oidc_client(

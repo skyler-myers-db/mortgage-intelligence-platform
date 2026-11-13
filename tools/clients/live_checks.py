@@ -17,7 +17,8 @@ Steps 2-4 are three GETs (SCIM ``Me`` twice and the current metastore
 assignment); every refusal among them is reported. Once all four hold, the
 read-only install checks run (tools/clients/install_checks.py, M1-PR3):
 adoption, the ``mip.install_key`` install marker, the Cotality share, the
-storage root and the account principal's roles, and then the capability
+storage root, the metastore owner (spike S0(b), through the pre-stop probe's
+own reader) and the account principal's roles, and then the capability
 preflight (tools/clients/capabilities.py, M2-PR3): every workspace feature the
 profile's ``MIP_AGENTIC_TIER`` needs. They never run against a workspace or as
 a principal that is not the profile's. ``--phase adopt`` and ``--phase
@@ -115,7 +116,7 @@ def main(
         return 2
     print(
         "client live checks ok: host, workspace id, metastore id and deployer are the profile's; "
-        "adoption, install marker, Cotality share, storage root and account principal hold; "
+        "adoption, install marker, Cotality share, storage root, metastore owner and account principal hold; "
         "the workspace offers every feature the agentic tier setting needs"
     )
     return 0

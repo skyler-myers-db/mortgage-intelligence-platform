@@ -9,7 +9,16 @@ to produce one refusal. The document is plain JSON, so
 ``deploy.sh`` (tests/unit/test_prestop_refusal_matrix.py).
 
 ``FakeWorkspace`` and ``FakeAccount`` model only the read calls the probes
-make. Every non-read call fails the test, except ``apps.stop``, which a
+make. The metastore answers ``current`` and ``summary`` only, never ``get``
+(metastore-admin only, spike S0(b)): ``metastore.owner`` ``None`` omits the
+summary's owner, and ``metastore.summary_id`` makes it name another
+metastore. ``grants.get_effective`` on the metastore keeps the API's rule
+(spike S0(b′)): for another principal it answers only a deployer that owns the
+metastore or is in its owning group, and raises ``PermissionDenied`` for
+anyone else; ``effective`` scripts what it answers (``account users``'
+``USE_MARKETPLACE_ASSETS`` by default), and ``effective_fail_open`` makes a
+non-admin's read answer an empty listing instead of 403, the fail-open shape a
+probe must never reach. Every non-read call fails the test, except ``apps.stop``, which a
 matrix test must prove never happens: it marks the App STOPPED in the
 document instead. The rollback-record verifier, the first-install journal
 read, the record-less Genie pin resolution and the Genie turn are seams the
@@ -27,7 +36,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import NotFound, PermissionDenied
 
 from tests.fixtures.client_profiles import IDENTITY_IDS
 
@@ -224,11 +233,11 @@ class FakeWorkspace:
         self.api_client = SimpleNamespace(do=self._do)
         self.workspace = SimpleNamespace(get_status=lambda path: SimpleNamespace(object_id=5))
         self.secrets = SimpleNamespace(list_scopes=self._scopes)
-        self.metastores = SimpleNamespace(current=self._metastore, get=self._metastore_get)
+        self.metastores = SimpleNamespace(current=self._metastore, summary=self._metastore_summary)
         self.catalogs = SimpleNamespace(get=self._catalog)
         self.schemas = SimpleNamespace(get=self._schema, list=self._schemas)
         self.tables = SimpleNamespace(get=self._table)
-        self.grants = SimpleNamespace(get=self._grants)
+        self.grants = SimpleNamespace(get=self._grants, get_effective=self._effective_grants)
         self.serving_endpoints = SimpleNamespace(
             list=self._endpoints, get=self._endpoint, get_permissions=self._endpoint_acl
         )
@@ -302,8 +311,31 @@ class FakeWorkspace:
     def _metastore(self) -> Any:
         return SimpleNamespace(metastore_id=self.estate["metastore"]["id"])
 
-    def _metastore_get(self, metastore_id: str) -> Any:
-        return SimpleNamespace(metastore_id=metastore_id, owner=self.estate["metastore"]["owner"])
+    def _metastore_summary(self) -> Any:
+        self.estate["calls"].append("GET metastore_summary")
+        metastore = self.estate["metastore"]
+        fields: dict[str, Any] = {"metastore_id": metastore.get("summary_id", metastore["id"])}
+        if metastore["owner"] is not None:
+            fields["owner"] = metastore["owner"]
+        return SimpleNamespace(**fields)
+
+    def _deployer_is_metastore_admin(self) -> bool:
+        owner = self.estate["metastore"]["owner"]
+        names = {self.estate["deployer"]} | {group["display"] for group in self._me().groups}
+        return isinstance(owner, str) and owner.casefold() in {name.casefold() for name in names}
+
+    def _effective_grants(self, securable_type: Any, full_name: str, **kwargs: Any) -> Any:
+        key = f"{getattr(securable_type, 'value', securable_type)}/{full_name}".lower()
+        self.estate["calls"].append(f"GET effective-grants/{key}")
+        assert key.startswith("metastore/"), f"a pre-stop probe read effective grants on {key}"
+        assert kwargs.get("principal"), "a metastore grant read always names its principal"
+        if not self._deployer_is_metastore_admin():
+            if self.estate.get("effective_fail_open"):
+                return _ns({"privilege_assignments": [], "next_page_token": ""})
+            raise PermissionDenied("PERMISSION_DENIED: not a metastore admin")
+        default = [{"principal": "account users", "privileges": ["USE_MARKETPLACE_ASSETS"]}]
+        assignments = self.estate.get("effective", {}).get(key, default)
+        return _ns({"privilege_assignments": assignments, "next_page_token": ""})
 
     def _catalog(self, name: str) -> Any:
         if name not in self.estate["catalogs"]:
