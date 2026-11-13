@@ -21,7 +21,7 @@ are the plan's named attestation reasons: ``adopt_live``, ``supersede``,
 ``tier_transition`` (M2-PR7b: a release whose tier is not its signed blue's;
 tools/databricks/blue_tier_gate.py) and ``owner_start_repin`` (an owner's
 break-glass start over an open quiesce window, re-pinned by the next release:
-tools/databricks/quiesce_window_recovery.py).
+docs/deployment.md, "Owner break-glass").
 
 A digest is not a signature: anyone holding the plan can compute it. It
 proves the operator reviewed this exact plan, not who the operator is; the
@@ -71,7 +71,7 @@ REMEDY = {
         ".env.local); under deploy-dev.yml, the dispatch input operation_acks "
         "restore_unverified_frontend=<its sha256>"
     ),
-    # The release's own tools read it (quiesce_window plan, repin --from-owner-start).
+    # The release's own tools read it (the window plan, repin --from-owner-start).
     "owner_start_repin": (
         "dispatch the release with the deploy-dev.yml input operation_acks "
         "owner_start_repin=<its sha256>; a local run exports "
