@@ -1,0 +1,83 @@
+{
+  "plan_version": 2,
+  "cli_version": "1.10.0",
+  "lineage": "5ca1ab1e-5eed-4000-8000-00000000c0de",
+  "serial": 8,
+  "plan": {
+    "resources.experiments.mip_lead_scoring": {
+      "action": "recreate",
+      "new_state": {
+        "value": {
+          "artifact_location": "dbfs:/databricks/mlflow-tracking/elsewhere",
+          "name": "/Shared/mip-lead-scoring",
+          "tags": [
+            {
+              "key": "mip_client",
+              "value": "client-one"
+            }
+          ]
+        }
+      },
+      "remote_state": {
+        "artifact_location": "dbfs:/databricks/mlflow-tracking/1001",
+        "creation_time": 1,
+        "experiment_id": "1001",
+        "last_update_time": 2,
+        "lifecycle_stage": "active",
+        "name": "/Shared/mip-lead-scoring",
+        "tags": [
+          {
+            "key": "dev",
+            "value": "someone"
+          },
+          {
+            "key": "mlflow.ownerEmail",
+            "value": "owner@example.invalid"
+          },
+          {
+            "key": "mlflow.experimentType",
+            "value": "MLFLOW_EXPERIMENT"
+          }
+        ]
+      },
+      "changes": {
+        "artifact_location": {
+          "action": "recreate",
+          "reason": "immutable",
+          "new": "dbfs:/databricks/mlflow-tracking/elsewhere",
+          "remote": "dbfs:/databricks/mlflow-tracking/1001"
+        },
+        "tags": {
+          "action": "skip",
+          "reason": "terraform_compat",
+          "old": [
+            {
+              "key": "mip_client",
+              "value": "client-one"
+            }
+          ],
+          "new": [
+            {
+              "key": "mip_client",
+              "value": "client-one"
+            }
+          ],
+          "remote": [
+            {
+              "key": "dev",
+              "value": "someone"
+            },
+            {
+              "key": "mlflow.ownerEmail",
+              "value": "owner@example.invalid"
+            },
+            {
+              "key": "mlflow.experimentType",
+              "value": "MLFLOW_EXPERIMENT"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

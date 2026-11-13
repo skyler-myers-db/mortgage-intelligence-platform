@@ -1,0 +1,20 @@
+{
+  "plan_version": 2,
+  "cli_version": "1.10.0",
+  "plan": {
+    "resources.experiments.mip_lead_scoring": {
+      "action": "create",
+      "new_state": {
+        "value": {
+          "name": "/Shared/mip-lead-scoring",
+          "tags": [
+            {
+              "key": "mip_client",
+              "value": "client-one"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
