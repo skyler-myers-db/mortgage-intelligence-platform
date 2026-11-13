@@ -22,7 +22,10 @@ release gate's `--client` evidence), and reads only the client's
 environments; docs/deployment.md, "Live validation per client", holds its
 jobs, identities, the protections that moved to `scripts/deploy.sh` and the
 owner actions. `deploy-dev.yml` takes `client` (the client's GitHub
-Environment) and `phase` (`plan`, `release`, `data`, `adopt` or `unadopt`);
+Environment) and `phase` (`plan`, `release`, `data`, `adopt` or `unadopt`,
+the `scripts/deploy.sh` phases; or `freeze` or `thaw`, which run no
+`scripts/deploy.sh` and sign the marker the emergency recipe's publisher
+obeys, the thaw with its exact `freeze_thaw` ack);
 docs/deployment.md, "CI deploy (deploy-dev.yml): one client environment per
 dispatch", holds its jobs, its preflight and every variable and secret a
 client environment holds.
@@ -55,7 +58,9 @@ writing an ephemeral mode-0600 `.env.local` and a `DEFAULT` Databricks CLI
 profile that holds no credential: `auth_type = github-oidc` for the profile's
 deployer service principal), proves that identity read-only, runs the dispatch
 preflight and then `scripts/deploy.sh -t client --phase <phase>
---prebuilt-release <dir>`. Its deployer's federation subject is
+--prebuilt-release <dir>` (for `freeze` and `thaw`, in its place,
+`tools/clients/publisher_freeze.py`, which reads the proof-signing key from
+that `.env.local` in-process: no secret is bound to the step). Its deployer's federation subject is
 `repo:<owner>/<repo>:environment:<client>`. Each client gets its own
 non-cancelling concurrency lane (`mip-client-<client>`).
 

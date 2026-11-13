@@ -14,7 +14,12 @@
  * (lead-queue.savedViewPrefs.ts). Columns are display state: none of this
  * reaches /api/leads, the leads or paged query keys, the export filters or
  * the Growth Agent proof key, and a change reads nothing.
+ *
+ * WRITES derive from the URL the router holds NOW, never from the committed
+ * render (useLeadQueueColumnWrites): the URL is the one source of truth for
+ * the hidden set, and the render's copy trails it while a write commits.
  */
+import { useLiveSearchParams } from '../hooks/useLiveSearchParams';
 import type { LeadTableHiddenColumns, LeadTableHideToken, LeadTableView } from '../components/mortgage/LeadTable.columns';
 import {
   LEAD_TABLE_HIDE_NONE,
@@ -66,6 +71,51 @@ export function leadQueueColumnState(searchParams: URLSearchParams, defaultView:
 /** The effective columns for the signed-in actor (reads their saved-view preferences; no request). */
 export function useLeadQueueColumnState(searchParams: URLSearchParams): LeadQueueColumnState {
   return leadQueueColumnState(searchParams, useSavedViewPrefs().defaultView);
+}
+
+/** `hidden` after one HIDE pick: `pick` toggled, or nothing hidden for the "No columns" row (null). */
+export function hiddenAfterPick(hidden: Iterable<LeadTableHideToken>, pick: LeadTableHideToken | null): LeadTableHideToken[] {
+  if (pick === null) return [];
+  const next = new Set(hidden);
+  if (!next.delete(pick)) next.add(pick);
+  return [...next];
+}
+
+export interface LeadQueueColumnWrites {
+  /** One HIDE pick: the token toggled, or null for "No columns". */
+  pickHidden: (pick: LeadTableHideToken | null) => void;
+  /** The VIEW preset; the hidden columns the new view can hide are kept. */
+  setView: (view: LeadTableView) => void;
+}
+
+/**
+ * The column writes of the route. Each one reads the columns of the URL the
+ * router holds NOW (hooks/useLiveSearchParams) and writes into that URL.
+ *
+ * The data router pushes a `?hide=` write to history at once and commits it
+ * to React in a transition, so for one route render the committed `hidden`,
+ * the HIDE menu's `selected` and every handler of that render are one write
+ * behind the address bar. Deriving the next URL from them lost an update: a
+ * second HIDE pick inside that render (two quick picks, or any two on a
+ * loaded CPU) rebuilt `hide` from the stale set and dropped the first
+ * column. A pick is therefore applied to the live set, and so is the VIEW
+ * preset, which would otherwise drop a hide still committing.
+ */
+export function useLeadQueueColumnWrites(
+  searchParams: URLSearchParams,
+  setSearchParams: (next: URLSearchParams) => void,
+): LeadQueueColumnWrites {
+  const liveSearchParams = useLiveSearchParams(searchParams);
+  const { defaultView } = useSavedViewPrefs();
+  const write = (next: (live: LeadQueueColumnState) => LeadQueueColumns) => {
+    const live = liveSearchParams();
+    const state = leadQueueColumnState(live, defaultView);
+    setSearchParams(searchParamsWithLeadTableColumns(live, next(state), state));
+  };
+  return {
+    pickHidden: (pick) => write((live) => ({ view: live.view, hidden: hiddenAfterPick(live.hidden, pick) })),
+    setView: (view) => write((live) => ({ view, hidden: [...live.hidden] })),
+  };
 }
 
 /** The state as share / saved-view input (lead-queue.filters leadQueueShareParams). */

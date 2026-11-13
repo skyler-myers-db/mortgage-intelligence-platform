@@ -1,7 +1,8 @@
 """deploy-dev.yml sets the job deadline at job start and records the window journal, read-only (M0-PR9).
 
 Since M1-PR7 the deploy job runs one client's phase under that phase's own
-timeout (plan 30, release 330, data 330 minutes; adopt and unadopt 60). The
+timeout (plan 30, release 330, data 330 minutes; adopt and unadopt 60; the two
+marker phases, freeze and thaw, 15: wave 7c). The
 first step turns ``timeout-minutes`` into ``MIP_JOB_DEADLINE_EPOCH`` (the
 quiesce window's admission and its dead-man's deadline), and the last,
 ``if: always()``, reads the window journal and the dead-man's marker and
@@ -27,6 +28,7 @@ import yaml
 
 from tests.fixtures.deploy_script import deploy_contract_text
 from tests.fixtures.quiesce_window_estate import APP_NAME, run_deadman
+from tests.fixtures.workflow_expressions import render
 from tests.unit.test_quiesce_window_start_repin import (  # noqa: F401 - the autouse env
     _env,
     _estate,
@@ -39,6 +41,8 @@ REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 DEADLINE_STEP = "Record the job deadline"
 RECORD_STEP = "Record the quiesce window journal state"
+# Wave 7c: the marker phases' own step, which runs in place of scripts/deploy.sh.
+FREEZE_STEP = "Freeze or thaw the emergency publisher"
 
 
 def _workflow() -> dict[str, Any]:
@@ -63,7 +67,7 @@ def phase_timeouts(expression: str) -> dict[str, int]:
 def test_each_phase_has_its_own_timeout_and_every_dispatchable_phase_one() -> None:
     workflow = _workflow()
     minutes = phase_timeouts(workflow["jobs"]["deploy"]["timeout-minutes"])
-    assert minutes == {"plan": 30, "release": 330, "data": 330, "adopt": 60, "unadopt": 60}
+    assert minutes == {"plan": 30, "release": 330, "data": 330, "adopt": 60, "unadopt": 60, "freeze": 15, "thaw": 15}
     triggers = workflow[True]  # YAML 1.1 reads the bare key `on` as true
     assert set(minutes) == set(triggers["workflow_dispatch"]["inputs"]["phase"]["options"])
 
@@ -118,9 +122,21 @@ def test_the_journal_is_recorded_last_whatever_happened_and_read_only() -> None:
 def test_the_deploy_step_sits_between_them_and_keeps_its_own_env() -> None:
     names = [step.get("name") for step in _steps()]
     assert names.index(DEADLINE_STEP) == 0
-    assert names.index("Run the client phase") == names.index(RECORD_STEP) - 1
-    deploy = _steps()[names.index("Run the client phase")]
+    # Between the deploy step and the record sits only the marker phases' step (wave 7c),
+    # and exactly one of the two runs: their conditions partition the phases.
+    run = names.index("Run the client phase")
+    assert names[run + 1 : names.index(RECORD_STEP)] == [FREEZE_STEP]
+    deploy = _steps()[run]
     assert "MIP_JOB_DEADLINE_EPOCH" not in deploy["env"], "it arrives through GITHUB_ENV, set at job start"
+    marker = _steps()[run + 1]
+    assert deploy["if"] == "${{ inputs.phase != 'freeze' && inputs.phase != 'thaw' }}"
+    assert marker["if"] == "${{ inputs.phase == 'freeze' || inputs.phase == 'thaw' }}"
+    phases = _workflow()[True]["workflow_dispatch"]["inputs"]["phase"]["options"]
+    for phase in phases:
+        context = {"inputs": {"phase": phase}}
+        ran = [render(step["if"], context) for step in (deploy, marker)]
+        assert ran == (["false", "true"] if phase in ("freeze", "thaw") else ["true", "false"]), phase
+    assert "MIP_JOB_DEADLINE_EPOCH" not in marker["env"] and "deploy.sh" not in marker["run"]
 
 
 # Every key the journal's signature check reads: none reaches the record step.

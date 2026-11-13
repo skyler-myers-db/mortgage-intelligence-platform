@@ -38,7 +38,8 @@ from tools.databricks.estate.accepted_exposure import ExposureRefusal, load_poli
 from tools.databricks.operation_ack import AckRefused, ack_digest, require_ack
 
 ROOT = Path(__file__).resolve().parents[2]
-PHASES = ("plan", "release", "data", "adopt", "unadopt")
+# freeze and thaw (wave 7c) run no scripts/deploy.sh: deploy-dev.yml's own step writes the freeze marker.
+PHASES = ("plan", "release", "data", "adopt", "unadopt", "freeze", "thaw")
 # key -> (the env its tool reads, the phases whose run reads it)
 READ_BY = {
     "adopt_plan": ("MIP_ADOPT_PLAN_ACK", {"adopt", "unadopt"}),
@@ -58,6 +59,8 @@ READ_BY = {
     "data_ledger_rerun": ("MIP_ACK_DATA_LEDGER_RERUN", {"data"}),
     # The metastore owner's attestation (spike S0(b′)): never data, whose run never reads it.
     "metastore_app_grants": ("MIP_ACK_METASTORE_APP_GRANTS", {"plan", "adopt", "unadopt", "release"}),
+    # Wave 7c: the thaw of one signed freeze marker. Only the thaw phase reads it; a freeze takes none.
+    "freeze_thaw": ("MIP_ACK_FREEZE_THAW", {"thaw"}),
 }
 NEW_KEYS = ("adopt_live", "supersede", "supersedes_deployment", "unadopt", "quiesce_window", "genie_pin", "accepted_exposure_plan")
 

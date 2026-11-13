@@ -114,7 +114,7 @@ def test_the_runbooks_step_6_lists_every_verdict_env_names_prints_and_only_holds
     assert measured == "no_deployment" and "parity" not in message and measured not in ap._CUTOVER_STOP
 
 
-def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_names_the_follow_up_left() -> None:
+def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_that_no_follow_up_is_left() -> None:
     runbook = _flat("docs/clients/first-client-cutover.md")
     blockers = runbook[runbook.index("## Blockers on main") : runbook.index("## Decisions taken")]
     assert "**What still blocks the cutover: no known code gap.**" in blockers
@@ -124,11 +124,26 @@ def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_names_th
     assert "**No known code gap is left on 10B's path:**" in blockers
     assert "**12 walked with #343 to #348 and B3 (#349) all on `main`**" in blockers
     assert "**No known code gap is left on step 12's path.**" in blockers
-    # Wave 7c closed the owner break-glass re-pin; the CI-signed freeze marker is the follow-up left.
-    assert "**One follow-up stops nothing:** a CI-signed freeze marker" in blockers
+    # Premise change (wave 7c, both parts on main): the owner break-glass re-pin (#356) and the
+    # CI-signed freeze and thaw (#352) are both built, so the section names no follow-up left.
+    assert "**No follow-up is left in this list:** both that it named are closed on `main` (wave 7c)" in blockers
     assert "a release re-pins an owner's break-glass start over an open quiesce window, with the exact `owner_start_repin` digest a plan prints" in blockers
-    assert "One smaller gap is noted at its step and does not stop the cutover" in blockers
+    assert "The CI-signed freeze and thaw marker is on `main` (wave 7c): steps 6b and 13." in blockers
+    assert "No smaller gap is left at its step: wave 7c closed both that this section named." in blockers
+    assert "so CI signs it (`phase=freeze`, step 6b) and its thaw (`phase=thaw`, the end of step 13)" in blockers
+    assert "the next release re-pins that start under its lease, only with the owner's exact `owner_start_repin` ack" in blockers
     assert "an open quiesce window that the owner restarts by hand stays refused" not in blockers
+    for stale in (
+        "a CI-run freeze is a follow-up",
+        "a freeze and thaw marker that CI signs",
+        "and a CI-signed freeze marker (",
+        "follow-up stops nothing",
+        "follow-ups stop nothing",
+        "smaller gap is noted",
+        "smaller gaps are noted",
+        "It is a follow-up: a reviewed owner break-glass re-pin",
+    ):
+        assert stale not in runbook, stale
     assert "No step from 6 on has run live." in blockers
     # Nothing still calls B3 open, in the runbook or beside it.
     onboarding = _flat("docs/clients/onboarding.md")

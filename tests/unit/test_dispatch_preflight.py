@@ -219,6 +219,8 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
         "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND",
         # tools/databricks/metastore_app_grants.py (spike S0(b′)).
         "MIP_ACK_METASTORE_APP_GRANTS",
+        # tools/clients/publisher_freeze.py: the thaw of one signed freeze marker (wave 7c).
+        "MIP_ACK_FREEZE_THAW",
         # An owner's break-glass start over an open quiesce window (wave 7c): the
         # release's window plan and repin --from-owner-start recompute its digest.
         "MIP_ACK_OWNER_START_REPIN",
@@ -254,6 +256,8 @@ READERS = {
     "MIP_ACK_DATA_LEDGER_SUPERSEDE": ("tools/databricks/job_phase_runner.py", 'ACK_SUPERSEDE_ENV = "MIP_ACK_DATA_LEDGER_SUPERSEDE"'),
     "MIP_ACK_DATA_LEDGER_RERUN": ("tools/databricks/job_phase_runner.py", 'ACK_RERUN_ENV = "MIP_ACK_DATA_LEDGER_RERUN"'),
     "MIP_ACK_METASTORE_APP_GRANTS": ("tools/databricks/metastore_app_grants.py", 'ACK_ENV = "MIP_ACK_METASTORE_APP_GRANTS"'),
+    # No scripts/deploy.sh phase reads it: deploy-dev.yml's own thaw step does (wave 7c).
+    "MIP_ACK_FREEZE_THAW": ("tools/clients/publisher_freeze.py", 'ACK_ENV = "MIP_ACK_FREEZE_THAW"'),
     "MIP_ACK_OWNER_START_REPIN": ("tools/databricks/quiesce_window_recovery.py", 'ACK_ENV = "MIP_ACK_OWNER_START_REPIN"'),
 }
 
@@ -274,11 +278,20 @@ def test_the_adopt_phases_reach_the_genie_pin_and_exposure_readers_they_carry_ac
 
 # Pinned literally: the module's own set never parametrizes a test of itself.
 MUTATING = ("adopt", "data", "release", "unadopt")
+# The two marker phases (wave 7c, a reviewed extension of the phase pin): they run no
+# scripts/deploy.sh, and each writes one create-only freeze-marker file
+# (tools/clients/publisher_freeze.py), so the preflight holds them to the mutating rules.
+MARKER = ("freeze", "thaw")
+GATED = (*MUTATING, *MARKER)
 
 
 def test_exactly_these_phases_mutate_and_need_the_acks() -> None:
     assert frozenset(MUTATING) == acks.MUTATING_PHASES
-    assert frozenset({"plan", *MUTATING}) == acks.PHASES
+    assert frozenset(MARKER) == acks.MARKER_PHASES
+    assert frozenset({"plan", *MUTATING, *MARKER}) == acks.PHASES
+    assert not acks.MUTATING_PHASES & acks.MARKER_PHASES, "a marker phase is no scripts/deploy.sh phase"
+    held = {phase: preflight.Verdict(phase).mutating for phase in sorted(acks.PHASES)}
+    assert held == {"plan": False, **dict.fromkeys(GATED, True)}, "only a plan records what the others refuse"
 
 
 @pytest.mark.parametrize("mode", ("independent", "", "single_maintainer"))
@@ -313,7 +326,7 @@ def test_a_plan_passes_without_any_ack_and_prints_the_profile_ack_a_release_need
     assert verdict.exports == {}, "only what a later step reads is exported"
 
 
-@pytest.mark.parametrize("phase", MUTATING)
+@pytest.mark.parametrize("phase", GATED)
 def test_a_mutating_phase_refuses_without_the_exact_profile_ack(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
@@ -332,7 +345,7 @@ def test_s8_readable_protections_that_match_let_a_release_run(tmp_path: Path, mo
     assert "environment protections: environment_protections_verified (single_maintainer_audited)" in verdict.facts
 
 
-@pytest.mark.parametrize("phase", MUTATING)
+@pytest.mark.parametrize("phase", GATED)
 def test_s8_drifted_protections_are_recorded_by_a_plan_and_refuse_a_mutating_phase(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
@@ -346,7 +359,7 @@ def test_s8_drifted_protections_are_recorded_by_a_plan_and_refuse_a_mutating_pha
     assert release.refusals == [f"environment_protections_drift: github: {CLIENT} can_admins_bypass differs from single_maintainer_audited"]
 
 
-@pytest.mark.parametrize("phase", MUTATING)
+@pytest.mark.parametrize("phase", GATED)
 def test_s8_worst_case_unreadable_protections_a_plan_records_and_a_mutating_phase_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
@@ -393,6 +406,26 @@ def test_s8_worst_case_the_exact_protections_unverified_ack_lets_a_release_run(
         assert [refusal.split(":", 1)[0] for refusal in verdict.refusals] == ["environment_protections_unreadable"], name
 
 
+@pytest.mark.parametrize("phase", MARKER)
+def test_s8_worst_case_the_exact_protections_unverified_ack_lets_a_marker_phase_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    """freeze and thaw take the same one ack a release does: this client, this environment, this commit."""
+
+    exact = acks.protections_ack(CLIENT, CLIENT, SHA)
+    ok = _decide(
+        _mkdir(tmp_path / "ok"), monkeypatch, phase=phase, responses=None,
+        environ={**_profile_ack(), "MIP_DISPATCH_PROTECTIONS_ACK": exact},
+    )
+    assert ok.refusals == []
+    assert "protections_unverified ack: exact for this client, environment and commit" in ok.facts
+    other = _decide(
+        _mkdir(tmp_path / "other"), monkeypatch, phase=phase, responses=None,
+        environ={**_profile_ack(), "MIP_DISPATCH_PROTECTIONS_ACK": acks.protections_ack(CLIENT, CLIENT, "b" * 40)},
+    )
+    assert [refusal.split(":", 1)[0] for refusal in other.refusals] == ["environment_protections_unreadable"]
+
+
 @pytest.mark.parametrize(
     ("environ", "code"),
     (
@@ -420,7 +453,7 @@ def test_the_expected_active_deployment_reaches_a_release_only(tmp_path: Path, m
     assert [refusal.split(":", 1)[0] for refusal in data.refusals] == ["expected_active_deployment_sha256"]
 
 
-@pytest.mark.parametrize("phase", MUTATING)
+@pytest.mark.parametrize("phase", GATED)
 def test_a_tracked_identifying_value_is_recorded_by_a_plan_and_refuses_a_mutating_phase(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
@@ -535,6 +568,53 @@ def test_the_unverified_frontend_ack_rides_a_release_only_and_no_rollback_never_
     ]
     out = capsys.readouterr()
     assert digest not in out.out + out.err + summary.read_text(encoding="utf-8"), "names only"
+
+
+def test_the_thaw_ack_rides_a_thaw_only_and_a_freeze_takes_no_operation_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Wave 7c: freeze_thaw is exported for the thaw step alone; no deploy.sh phase and no freeze ever reads it."""
+
+    digest = hashlib.sha256(b"freeze_thaw").hexdigest()
+    pair = f"freeze_thaw={digest}"
+    assert acks.operation_exports(pair, "thaw") == {"MIP_ACK_FREEZE_THAW": digest}
+    assert acks.operation_exports("", "freeze") == {} == acks.operation_exports("", "thaw")
+    for phase in sorted(acks.PHASES - {"thaw"}):
+        with pytest.raises(ProfileRefusal) as caught:
+            acks.operation_exports(pair, phase)
+        assert list(caught.value.lines) == [f"operation_acks: freeze_thaw is never read by --phase {phase}"]
+    # No deploy.sh ack rides a marker phase: neither step reads one.
+    for name, ack in acks.OPERATION_ACKS.items():
+        assert not ack.phases & acks.MARKER_PHASES or name == "freeze_thaw", name
+    for shape in ("freeze_thaw=yes", f"freeze_thaw={digest[:63]}", f"MIP_ACK_FREEZE_THAW={digest}"):
+        with pytest.raises(ProfileRefusal):
+            acks.operation_exports(shape, "thaw")
+
+    monkeypatch.setattr(protections, "from_environ", lambda env: _FROM_ENVIRON(env, opener=_opener(READABLE)))
+    vars_source, secrets_source = _contexts(tmp_path)
+    github_env, summary = tmp_path / "github.env", tmp_path / "summary.md"
+    argv = [
+        "--phase", "thaw", "--environment", CLIENT, "--vars-json", vars_source, "--secrets-json", secrets_source,
+        "--repo", str(_repo(tmp_path)), "--github-env", str(github_env), "--step-summary", str(summary),
+    ]
+    environ = {**ENVIRON, **_profile_ack(), "MIP_DISPATCH_OPERATION_ACKS": pair}
+    assert preflight.main(argv, environ=environ) == 0
+    assert github_env.read_text(encoding="utf-8").splitlines() == [f"MIP_ACK_FREEZE_THAW={digest}"]
+    out = capsys.readouterr()
+    printed = out.out + out.err + summary.read_text(encoding="utf-8")
+    assert digest not in printed and "operation acks: MIP_ACK_FREEZE_THAW" in printed, "the name only"
+    github_env.unlink()
+    # The same dispatch as a freeze, or without the profile ack, exports nothing.
+    assert preflight.main(["--phase", "freeze", *argv[2:]], environ=environ) == 2
+    assert "freeze_thaw is never read by --phase freeze" in capsys.readouterr().out
+    assert preflight.main(argv, environ={**ENVIRON, "MIP_DISPATCH_OPERATION_ACKS": pair}) == 2
+    assert "REFUSED profile_ack: dispatch with owner_attestation=" in capsys.readouterr().out
+    assert not github_env.exists(), "a refused dispatch exports nothing"
+    # The expected active deployment stays a release's input.
+    pinned = {**ENVIRON, **_profile_ack(), "MIP_DISPATCH_EXPECTED_ACTIVE_DEPLOYMENT_SHA256": "c" * 64}
+    for phase in MARKER:
+        verdict = _decide(_mkdir(tmp_path / f"pinned-{phase}"), monkeypatch, phase=phase, environ=pinned)
+        assert [refusal.split(":", 1)[0] for refusal in verdict.refusals] == ["expected_active_deployment_sha256"]
 
 
 def test_inside_actions_the_only_lines_that_hold_a_value_are_runner_mask_commands(

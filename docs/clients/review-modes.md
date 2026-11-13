@@ -50,13 +50,15 @@ review.
 - **Exact digest acks.** Every attestation the plan names is replaced by an
   exact sha256 ack over a purpose-named body that a read-only plan printed
   (`tools/clients/dispatch_acks.py`, `tools/databricks/operation_ack.py`):
-  the `profile` ack (`owner_attestation`) on every mutating phase, and the
+  the `profile` ack (`owner_attestation`) on every mutating phase and on the
+  two marker phases, `freeze` and `thaw`, and the
   operation acks a tool printed (`adopt_plan`, `adopt_live`, `supersede`,
   `unadopt`, `quiesce_window`, `database_instance_update`, `genie_pin`,
   `accepted_exposure_plan`, `restore_unverified_frontend` and
   `owner_start_repin`, which a plan prints and only a release reads,
   `data_ledger_supersede`, `data_ledger_rerun`,
-  `metastore_app_grants`, and the selector `supersedes_deployment`, a digest of the superseded
+  `metastore_app_grants`, `freeze_thaw`, which a CI freeze prints and only a thaw reads,
+  and the selector `supersedes_deployment`, a digest of the superseded
   record's deployment id and never a switch), each admitted only in the
   phases that read it. `no_rollback_for` has no dispatch carrier: it would
   drop blue's only rollback in one field, so it stays a shell export. The run recomputes each body

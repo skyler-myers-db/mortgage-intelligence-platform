@@ -14,12 +14,19 @@ Two purposes are new here:
 
 * ``profile`` (the dispatch input ``owner_attestation``): the client and the
   profile digest (tools/clients/profile.digest, over the public and
-  identifying fields). Every mutating phase needs it; ``--phase plan``
-  prints it.
+  identifying fields). Every mutating phase needs it, and so do the two
+  marker phases; ``--phase plan`` prints it.
 * ``protections_unverified``: the client, the GitHub Environment and the
   run's head sha. Spike S8 is owed: GITHUB_TOKEN may be unable to read the
-  environment's protection rules. When it cannot, every mutating phase
-  refuses unless the dispatch carries this ack.
+  environment's protection rules. When it cannot, every mutating phase and
+  both marker phases refuse unless the dispatch carries this ack.
+
+The phases are ``plan``, the four ``scripts/deploy.sh`` phases that mutate
+(``MUTATING_PHASES``) and the two marker phases (``MARKER_PHASES``, ``freeze``
+and ``thaw``), which never run ``scripts/deploy.sh``: deploy-dev.yml's own
+step signs or thaws the freeze marker the emergency publisher obeys
+(tools/clients/publisher_freeze.py). They write one create-only file each, so
+the preflight holds them to the mutating phases' rules.
 
 The operation acks keep their own purposes and their own tools: the dispatch
 input ``operation_acks`` carries ``purpose=<sha256>`` pairs from the closed
@@ -57,7 +64,8 @@ from tools.databricks.bundle_plan_shape import canonical_json
 PROFILE_PURPOSE = "profile"
 PROTECTIONS_PURPOSE = "protections_unverified"
 MUTATING_PHASES = frozenset({"release", "data", "adopt", "unadopt"})
-PHASES = frozenset({"plan", *MUTATING_PHASES})
+MARKER_PHASES = frozenset({"freeze", "thaw"})
+PHASES = frozenset({"plan", *MUTATING_PHASES, *MARKER_PHASES})
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _SHA = re.compile(r"[0-9a-f]{40}")
 _PAIR = re.compile(r"([a-z_]+)=([0-9a-f]{64})")
@@ -115,6 +123,10 @@ OPERATION_ACKS: dict[str, OperationAck] = {
     "metastore_app_grants": OperationAck(
         "MIP_ACK_METASTORE_APP_GRANTS", frozenset({"plan", "adopt", "unadopt", "release"})
     ),
+    # The thaw of one signed freeze marker (tools/clients/publisher_freeze.py):
+    # the freeze prints it, and only the thaw phase reads it. A freeze takes no
+    # operation ack, and no scripts/deploy.sh phase ever reads this one.
+    "freeze_thaw": OperationAck("MIP_ACK_FREEZE_THAW", frozenset({"thaw"})),
 }
 
 

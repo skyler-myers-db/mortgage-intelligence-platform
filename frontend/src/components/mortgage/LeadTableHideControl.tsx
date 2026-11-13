@@ -15,7 +15,10 @@ import {
  * hidden. The selection, row expand, Borrower, Primary offer (it carries the
  * rules evidence chip), Score, Signal and Approval columns are never
  * offered (LeadTable.columns.ts). The route owns the value (`?hide=`,
- * lead-queue.columns.ts) and renders this through LeadTableHeaderSlotContext;
+ * lead-queue.columns.ts) and renders this through LeadTableHeaderSlotContext.
+ * It reports the PICK (the token toggled, or null for "No columns"), never
+ * the list after it: `hidden` is the last committed render's, and the route
+ * applies the pick to the URL the router holds now (useLeadQueueColumnWrites);
  * it loads right after the queue (routes/lead-queue.hideSlot.tsx), so neither
  * it nor MultiFilterSelect rides the route's or the LeadTable chunk. Hiding a
  * column reads nothing and writes no audit row; the CSV export keeps every
@@ -36,11 +39,11 @@ const columnsLabel = (count: number) => `${count} columns`;
 export function LeadTableHideControl({
   view,
   hidden,
-  onChange,
+  onPick,
 }: {
   view: LeadTableView;
   hidden: LeadTableHiddenColumns;
-  onChange: (next: LeadTableHideToken[]) => void;
+  onPick: (pick: LeadTableHideToken | null) => void;
 }) {
   const options = hideOptions(view);
   return (
@@ -49,7 +52,7 @@ export function LeadTableHideControl({
       allLabel="No columns"
       selected={options.filter((option) => hidden.has(option.value)).map((option) => option.value)}
       options={options}
-      onChange={onChange}
+      onChange={(_next, picked) => onPick(picked)}
       formatCount={columnsLabel}
     />
   );

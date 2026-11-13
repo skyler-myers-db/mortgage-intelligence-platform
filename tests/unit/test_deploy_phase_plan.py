@@ -170,6 +170,9 @@ def test_a_live_plan_phase_outside_github_actions_is_refused_before_any_call(
         (["--phase=Data"], "phase must be plan, release, data, adopt or unadopt; refusing 'Data'"),
         (["--phase=adopt-live"], "phase must be plan, release, data, adopt or unadopt; refusing 'adopt-live'"),
         (["--phase="], "phase must be plan, release, data, adopt or unadopt; refusing ''"),
+        # deploy-dev.yml's marker phases (wave 7c) are the workflow's own step, never a deploy.sh phase.
+        (["--phase", "freeze"], "phase must be plan, release, data, adopt or unadopt; refusing 'freeze'"),
+        (["--phase=thaw"], "phase must be plan, release, data, adopt or unadopt; refusing 'thaw'"),
         (["--phase"], "missing value for --phase (expected plan, release, data, adopt or unadopt)"),
         (["--phase", "plan", "--phase", "plan"], "phase may be supplied only once"),
         (["--phase=plan", "--phase", "plan"], "phase may be supplied only once"),
