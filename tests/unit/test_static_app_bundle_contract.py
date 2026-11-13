@@ -53,7 +53,9 @@ def test_every_snapshot_converges_static_source_immediately_before_activation() 
         '    --expected-principal "$APP_RELEASE_PRINCIPAL" \\\n'
         '    --expected-target "$TARGET" \\\n'
         '    --expected-root-leaf "$APP_RELEASE_ROOT_LEAF"\n'
-        '  run databricks apps deploy "$APP_NAME"'
+        # The CLI renders the created deployment on stdout: kept off the job log
+        # (keep_cli_result_private, tests/unit/test_cli_result_private.py).
+        '  run keep_cli_result_private databricks apps deploy "$APP_NAME"'
     ) in function_body
 
 

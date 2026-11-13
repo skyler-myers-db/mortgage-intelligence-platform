@@ -442,18 +442,25 @@ def _first_install_capture_finalize_block() -> str:
     return text[start:end]
 
 
+# The entrypoint's runner-mask helpers (scripts/deploy.sh), which the blocks below
+# call. They do nothing in these harnesses, under GitHub Actions too, so a fake
+# interpreter's call log is the same in CI; tests/unit/test_runtime_id_runner_masks.py
+# drives the real ones.
+_MASK_HELPER_STUBS = "mask_runtime_ids() { :; }\nmask_deployment_ids() { :; }\n"
+
+
 def _first_install_cleanup_block() -> str:
     text = _deploy_entrypoint_text()
     start = text.index("refresh_first_install_journal_status() {")
     end = text.index("restore_rendered_sql_fail_closed() {", start)
-    return text[start:end]
+    return _MASK_HELPER_STUBS + text[start:end]
 
 
 def _app_failure_compensation_block() -> str:
     text = _deploy_contract_text()
     start = text.index("converge_app_treatment_access() {")
     end = text.index("quiesce_app_treatment_after_failed_stop() {", start)
-    return text[start:end]
+    return _MASK_HELPER_STUBS + text[start:end]
 
 
 def _deploy_auth_function_block() -> str:

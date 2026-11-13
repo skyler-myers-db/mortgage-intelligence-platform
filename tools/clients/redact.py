@@ -6,6 +6,8 @@ Genie, App, deployment, workspace or metastore id, or a service principal's
 application or SCIM id. It writes the ``::add-mask::`` command to stderr, so
 a ``$(...)`` capture of the tool's stdout neither swallows the command nor
 receives it as data, and it does nothing outside GitHub Actions.
+``scripts/deploy.sh`` registers what its own shell resolves the same way
+(``mask_runtime_ids``): its ``run`` helpers echo every command line.
 
 ``foreign`` replaces another team's object, owner or email with a stable
 ``foreign#n`` handle when ``MIP_REDACT_FOREIGN_NAMES=1`` (plan §4.16). It never

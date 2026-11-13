@@ -37,6 +37,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -347,6 +348,30 @@ def test_the_role_table_fails_closed_for_every_shape_the_deploy_uses() -> None:
     assert roles.module_role("tools.databricks.unreviewed_tool") == roles.UNCLASSIFIED
     # A tool outside the proof is unclassified should a dry run ever reach it.
     assert roles.module_role("tools.databricks.app_core_rollback") == roles.UNCLASSIFIED
+
+
+def test_the_result_keeping_wrapper_is_classed_by_the_command_it_runs() -> None:
+    """``keep_cli_result_private`` (#350) keeps the apps CLI's rendered result off the log and adds no authority."""
+
+    deploy = (cp.REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    start = deploy.index("\nkeep_cli_result_private() {\n")
+    body = deploy[start : deploy.index("\n}\n", start)]
+    # The premise of its WRAPPERS entry: it runs its arguments as given, once, under the caller's identity.
+    assert re.findall(r'"\$@"[^\n]*', body) == ['"$@" > "$result" || rc=$?']
+    assert "run_with" not in body and "databricks" not in body
+
+    wrapped = "keep_cli_result_private databricks apps"
+    assert roles.planned_role(f"{wrapped} deploy acme-app --json @/tmp/mip-app-deploy.json --timeout 20m") == roles.WORKSPACE
+    assert roles.planned_role(f"{wrapped} start acme-app") == roles.WORKSPACE
+    # The wrapper hides nothing: an account call or an unreviewed command under it is what it is alone.
+    assert roles.planned_role("keep_cli_result_private databricks -p account-admin account groups list") == roles.ACCOUNT_ADMIN
+    for command in (
+        "keep_cli_result_private databricks auth token",
+        f"{wrapped} list {roles.ACCOUNT_IDENTITY_LABEL}",
+        "keep_cli_result_private bash scripts/unreviewed.sh",
+        "keep_cli_result_private",
+    ):
+        assert roles.planned_role(command) == roles.UNCLASSIFIED, command
 
 
 def _executed(*argv: str, stdin: str | None = None) -> str:

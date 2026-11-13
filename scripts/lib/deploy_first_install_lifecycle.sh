@@ -54,6 +54,9 @@ refresh_first_install_journal_status() {
   unset MIP_FIRST_INSTALL_JOURNAL_STATUS MIP_FIRST_INSTALL_APP_ID
   unset MIP_FIRST_INSTALL_APP_CLIENT_ID MIP_FIRST_INSTALL_APP_SCIM_ID
   rm -f "$status_env"
+  # The journal can name an App the inventory never saw (an interrupted first
+  # install): its ids are runner masks before any recovery command is handed one.
+  mask_runtime_ids "$FIRST_INSTALL_APP_ID" "$FIRST_INSTALL_APP_CLIENT_ID" "$FIRST_INSTALL_APP_SCIM_ID" || return 1
   if [[ ( "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" || \
           "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed" ) ]] && \
      [[ -z "$FIRST_INSTALL_APP_ID" || -z "$FIRST_INSTALL_APP_CLIENT_ID" || \
