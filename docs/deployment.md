@@ -759,9 +759,16 @@ databricks apps start <app-name> -p <owner-profile>
 ### The release that re-pins an owner start
 
 The plan that prints the digest, then the release that carries it (rules 4
-and 5 above). The release also carries what it carried before: the window's
-own `quiesce_window` digest when the plan still predicts a window, the
-frontend ack, and the active deployment's digest the plan printed. A local
+and 5 above). This plan stops at `window_journal_open` inside the pre-lease
+plan gate, so it prints only the `owner_start_repin` digest and the window's
+own sha256: it never reaches the active deployment's digest or the
+frontend-ack prediction, which a completed plan prints after that gate. The
+release also carries what it carried before: the window's own
+`quiesce_window` digest when the plan still predicts a window, and the
+`restore_unverified_frontend` ack when its blue needs one, from the last plan
+that completed (in the first-client cutover, plan #3's while `main` has not
+moved). It carries no `expected_active_deployment_sha256`: the App now serves
+the owner's start, which the `owner_start_repin` digest already names. A local
 release hands the digest in as the one-run export `MIP_ACK_OWNER_START_REPIN`
 (shell only, never a `.env.local` line).
 

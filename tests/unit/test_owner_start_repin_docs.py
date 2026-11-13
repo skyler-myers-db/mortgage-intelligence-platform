@@ -133,6 +133,23 @@ def test_every_refusal_and_the_guard_are_documented_and_the_ack_is_release_only(
     assert "admitted in the release phase only" in _flat(section)
 
 
+def test_the_plan_that_prints_the_digest_prints_no_active_deployment_digest_or_frontend_ack() -> None:
+    # The window plan refuses window_journal_open inside the pre-lease plan gate, and a plan
+    # phase prints the active deployment's digest and predicts the frontend ack only after it.
+    shell = _read("scripts/lib/deploy_step_automation_identities.sh")
+    gate = shell.index("\n  run_bundle_plan_gate pre-lease\n")
+    assert gate < shell.index("\n  print_active_deployment_digest\n") and gate < shell.index("\n  predict_activation_rollback\n")
+    deployment = _read("docs/deployment.md")
+    section = _flat(deployment[deployment.index(REPIN_HEADING) : deployment.index(NEXT_HEADING)])
+    assert "it never reaches the active deployment's digest or the frontend-ack prediction" in section
+    assert "It carries no `expected_active_deployment_sha256`" in section and "plan #3's while `main` has not moved" in section
+    assert "the active deployment's digest the plan printed" not in section
+    for doc in ("docs/deployment.md", "docs/clients/first-client-cutover.md"):
+        for line in _read(doc).splitlines():
+            if "owner_start_repin=" in line and "gh workflow run" in line:
+                assert "expected_active_deployment_sha256" not in line, doc
+
+
 def test_no_documented_shell_block_exports_the_ack() -> None:
     """A local run's export is prose: a bash block's only environment is the owner's CLI profile."""
 
