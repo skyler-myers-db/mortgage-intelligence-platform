@@ -86,6 +86,9 @@ mint_m2m_token() { :; }
 # log is the same in CI (tests/unit/test_deployment_id_runner_masks.py drives the real ones).
 mask_runtime_ids() { :; }
 mask_deployment_ids() { :; }
+# The entrypoint keeps an apps CLI mutation's rendered result off the job log; here the
+# command just runs, so the call log is the same (tests/unit/test_cli_result_private.py drives the real one).
+keep_cli_result_private() { "$@"; }
 converge_app_treatment_access() { echo "treatment $1" >> "$CALLS"; }
 converge_runtime_app_release_access() { echo "release-runtime" >> "$CALLS"; }
 reconcile_reviewed_function_execute_grants() { echo "function-reconcile" >> "$CALLS"; }
@@ -764,7 +767,7 @@ def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the
     wr4 = at("ensure_quiesce_window_open_for WR4")
     apply = at('step "deploy non-App bundle resources without activating an App candidate"')
     wr1 = at("ensure_quiesce_window_open_for WR1")
-    update = at('run databricks apps update "$_GRANTS_APP_NAME"')
+    update = at('run keep_cli_result_private databricks apps update "$_GRANTS_APP_NAME"')
     wr2 = at("ensure_quiesce_window_open_for WR2")
     role = at('step "converge App Lakebase OAuth role to exact LOGIN-only profile"')
     # The verifier exists in the agentic tier only (M2-PR3): its check and converge sit in that branch.

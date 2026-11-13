@@ -494,6 +494,42 @@ mask_deployment_ids() {
     "${MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID:-}"
 }
 
+# The apps CLI renders what a mutation returned as JSON on its stdout: the
+# created deployment (its id, source path and creator) or the whole App (its
+# service principal's name and OAuth client ids, its deployments, its URL).
+# The shell holds none of those values when the CLI prints them, so no mask
+# could come first. Run the command with that result in a private file
+# instead, never on the job log, and register the deployment ids it names as
+# runner masks before the release goes on (the capture hands the shell the
+# same id later, and a tool may name it before then). The command's stderr
+# and exit status stay its own. Like mask_runtime_ids it fails closed, and
+# outside GitHub Actions it starts no interpreter.
+keep_cli_result_private() {
+  local result rc=0
+  result="$(mktemp -t mip-cli-result.XXXXXX)" || return 1
+  chmod 600 "$result"
+  "$@" > "$result" || rc=$?
+  if [[ "$rc" -eq 0 && "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    "$PYTHON" -c '
+import json
+import sys
+
+from tools.clients.redact import emit_mask
+
+try:
+    result = json.load(sys.stdin)
+except ValueError:
+    result = None
+if isinstance(result, dict):
+    for holder in (result, result.get("active_deployment"), result.get("pending_deployment")):
+        if isinstance(holder, dict):
+            emit_mask(str(holder.get("deployment_id") or ""))
+' < "$result" || rc=$?
+  fi
+  rm -f "$result"
+  return "$rc"
+}
+
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 APP_DEPLOY_PAYLOAD=""
 APP_LAST_DEPLOY_PAYLOAD=""

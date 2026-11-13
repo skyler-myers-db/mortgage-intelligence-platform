@@ -807,9 +807,9 @@ stop_unproven_candidate_before_rollback() {
 
 # A STOPPED App before an activation deploy (first install, rebase, idle stop,
 # or a contract window): the start's own deployment is superseded at once by
-# the activation, so it is never re-pinned.
+# the activation, so it is never re-pinned. The CLI prints the whole App.
 start_stopped_app_before_activation() {
-  databricks apps start "$APP_NAME"
+  keep_cli_result_private databricks apps start "$APP_NAME"
 }
 
 # ---------------------------------------------------------------------------
