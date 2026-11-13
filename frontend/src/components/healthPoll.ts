@@ -56,7 +56,7 @@ export function shouldPollFast(health: HealthPayload | null): boolean {
  *  "up" probe after a "down" — null when the dep is currently "up" or
  *  has never been "up". `filtered` is what we expose to consumers. */
 export interface DebounceState {
-  filtered: 'up' | 'down' | 'resuming' | 'unknown';
+  filtered: 'up' | 'down' | 'resuming' | 'degraded' | 'unknown';
   pendingUpSince: number | null;
 }
 
@@ -75,6 +75,10 @@ const DEPS_TRACKED = ['warehouse', 'lakebase', 'genie'] as const;
  *    raw=resuming → filtered=resuming at once, clear pending (not an outage)
  *    raw=up + filtered=resuming → flip to up at once (a finished resume is
  *                                 not a flap; the debounce is for down → up)
+ *    raw=degraded → filtered=degraded at once, clear pending (Genie pings up
+ *                   but its recent turns hit a budget wall; not an outage,
+ *                   and masking it as the prior "up" would hide the reason)
+ *    raw=up + filtered=degraded → flip to up at once (like a finished resume)
  *    raw=unknown → keep prior filter (don't flap on missing data)
  *
  *  Returned payload is a shallow copy of `raw` with `dependencies`
@@ -96,11 +100,11 @@ export function applyDownUpDebounce(
     if (rawState === 'down') {
       next[dep] = { filtered: 'down', pendingUpSince: null };
       filteredDeps[dep] = 'down';
-    } else if (rawState === 'resuming') {
-      next[dep] = { filtered: 'resuming', pendingUpSince: null };
-      filteredDeps[dep] = 'resuming';
+    } else if (rawState === 'resuming' || rawState === 'degraded') {
+      next[dep] = { filtered: rawState, pendingUpSince: null };
+      filteredDeps[dep] = rawState;
     } else if (rawState === 'up') {
-      if (priorState.filtered === 'up' || priorState.filtered === 'resuming') {
+      if (priorState.filtered === 'up' || priorState.filtered === 'resuming' || priorState.filtered === 'degraded') {
         next[dep] = { filtered: 'up', pendingUpSince: null };
         filteredDeps[dep] = 'up';
       } else if (debounceMs <= 0) {

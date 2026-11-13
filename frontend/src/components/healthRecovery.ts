@@ -30,7 +30,7 @@ const DEPENDENCIES = ['warehouse', 'lakebase', 'genie'] as const;
 
 /** Per-dependency filtered state, as tracked by HealthProvider's debounce. */
 export interface FilteredDependencyState {
-  filtered: 'up' | 'down' | 'resuming' | 'unknown';
+  filtered: 'up' | 'down' | 'resuming' | 'degraded' | 'unknown';
 }
 
 /**
