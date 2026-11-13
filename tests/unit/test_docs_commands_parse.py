@@ -310,7 +310,7 @@ RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
     "tools.clients.estate_inventory": _parse_only("tools.clients.estate_inventory"),
     "tools.clients.genie_pin_review": _injected("tools.clients.genie_pin_review", workspace_factory=_stop),
     "tools.databricks.estate.cli": _estate,
-    # The owner's read-only adopt preflight (cutover step 6b): stopped at its profile read.
+    # The owner's read-only adopt preflight (cutover step 6c): stopped at its profile read.
     "tools.databricks.adopt_preflight": _injected(
         "tools.databricks.adopt_preflight", profile=_stop, workspace_factory=_stop
     ),
@@ -549,7 +549,7 @@ def test_the_runbooks_show_each_kind_of_command() -> None:
     # Cutover step 3b: the one rename, and each of its reads.
     for prefix in ("databricks experiments update-experiment", *(f"databricks {' '.join(read)} " for read in EXPERIMENT_READS)):
         assert any(command.startswith(prefix) for command in commands), prefix
-    # Cutover step 6b: the owner's read-only adopt preflight.
+    # Cutover step 6c: the owner's read-only adopt preflight.
     assert any("python -m tools.databricks.adopt_preflight" in command for command in commands)
 
 

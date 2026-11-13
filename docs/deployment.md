@@ -2417,7 +2417,7 @@ emergency recipe gates on.
    the grantees the pre-stop owner-equivalent probe would refuse on that
    space, direct or inherited (an inherited grant, such as the one a space in
    a user's home folder gives that user, is on no creator line and cannot be
-   removed on the space itself; the cutover runbook's 10B-0 and step 6b).
+   removed on the space itself; the cutover runbook's 10B-0 and step 6c).
 4. **More than one.** Refused as ambiguous.
 
 **The adopt phases (B4(c)).** Adopting an existing install (below) binds the
@@ -3869,7 +3869,7 @@ not the one CI prints says nothing about the names CI will use. It takes no
 lease, binds nothing and is no acknowledgement: `MIP_ADOPT_PLAN_ACK` is the
 digest the adopt phase's own plan prints. It does not measure the CI
 deployer's reads, the CLI's plan, the pre-stop probes or adopt-live (the
-cutover runbook's step 6b).
+cutover runbook's step 6c).
 
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
 of every other declared kind (App, Lakebase instance and catalog, warehouse,

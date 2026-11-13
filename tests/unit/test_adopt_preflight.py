@@ -1,4 +1,4 @@
-"""The owner's read-only adopt preflight computes the bind plan from the declared names (cutover step 6b).
+"""The owner's read-only adopt preflight computes the bind plan from the declared names (cutover step 6c).
 
 ``tools/databricks/adopt_preflight.py`` feeds the unchanged
 ``adopt_legacy_map.compute`` with names read from the real databricks.yml and
@@ -669,7 +669,7 @@ def test_the_reader_resolves_every_declared_key_of_the_real_bundle_for_an_adopte
                 ), (kind, key, name_field)
 
 
-# --- the runbook's step 6b says what the tool prints ------------------------------------------
+# --- the runbook's step 6c says what the tool prints ------------------------------------------
 
 RUNBOOK = "docs/clients/first-client-cutover.md"
 COMMAND = (
@@ -686,7 +686,7 @@ def test_the_runbook_makes_the_preflight_a_step_7_precondition_and_quotes_what_t
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runbook = _flat(RUNBOOK)
-    step = runbook[runbook.index("## Step 6b.") : runbook.index("## Step 7.")]
+    step = runbook[runbook.index("## Step 6c.") : runbook.index("## Step 7.")]
     assert COMMAND in (REPO / RUNBOOK).read_text(encoding="utf-8").splitlines()
     assert (REPO / "tools" / "databricks" / "adopt_preflight.py").read_text(encoding="utf-8").count(COMMAND) == 1
 
@@ -714,15 +714,15 @@ def test_the_runbook_makes_the_preflight_a_step_7_precondition_and_quotes_what_t
     assert {"renamed", "missing", "dashboard_parent_moved", "unresolved_name", "read_failed", "foreign_bound"} <= codes
 
     blockers = runbook[runbook.index("## Blockers on main") : runbook.index("## Decisions taken")]
-    assert "**The owner runs a read-only preflight of the bind plan (step 6b).**" in blockers
-    assert "step 3b is done, step 6b's preflight is clear" in blockers
+    assert "**The owner runs a read-only preflight of the bind plan (step 6c).**" in blockers
+    assert "step 3b is done, step 6c's preflight is clear" in blockers
     glance = runbook[runbook.index("## Steps at a glance") : runbook.index("## Step 1. Freeze and snapshot")]
-    assert "| 6b | Owner preflight" in glance and "step 6's two answers, step 3b and step 6b (it starts the 14-day sequence)" in glance
+    assert "| 6c | Owner preflight" in glance and "step 6's two answers, step 3b and step 6c (it starts the 14-day sequence)" in glance
     step_7 = runbook[runbook.index("## Step 7. Unity Catalog ownership handover") : runbook.index("## Step 8.")]
     preconditions = step_7[: step_7.index("**The rollback-scope check (read-only).**")]
-    assert "- Step 6b's preflight ends `verdict: clear`, and prints the profile ack plan #1 printed." in preconditions
+    assert "- Step 6c's preflight ends `verdict: clear`, and prints the profile ack plan #1 printed." in preconditions
     adopt_step = runbook[runbook.index("**10B-1, read-only: the adopt plans.**") : runbook.index("**10B-2, the adoption.**")]
-    assert "The adopt plan's sha256 is expected to equal step 6b's preflight digest" in adopt_step
+    assert "The adopt plan's sha256 is expected to equal step 6c's preflight digest" in adopt_step
 
     deployment = _flat("docs/deployment.md")
     paragraph = deployment[deployment.index("**The owner's preflight (read-only, before the handovers).**") :]
@@ -735,4 +735,4 @@ def test_the_runbook_makes_the_preflight_a_step_7_precondition_and_quotes_what_t
     ):
         assert words in paragraph, words
     onboarding = _flat("docs/clients/onboarding.md")
-    assert "the read-only adopt preflight (`tools.databricks.adopt_preflight`; first-client-cutover.md, step 6b)" in onboarding
+    assert "the read-only adopt preflight (`tools.databricks.adopt_preflight`; first-client-cutover.md, step 6c)" in onboarding

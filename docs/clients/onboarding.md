@@ -254,7 +254,7 @@ the exact ack the refusal prints for that client, environment and commit.
   adopted blue"), in the order [first-client-cutover.md](first-client-cutover.md)
   gives, after both ownership handovers. Before those handovers, the owner
   runs the read-only adopt preflight (`tools.databricks.adopt_preflight`;
-  first-client-cutover.md, step 6b), which predicts the bind plan's name and
+  first-client-cutover.md, step 6c), which predicts the bind plan's name and
   existence refusals from `databricks.yml` and the profile. Never set
   `rebase_unverified_app=true` on an install you mean to adopt: that one-time
   rebase stops the existing App.

@@ -1,4 +1,4 @@
-"""The owner's read-only preflight of an adoption's bind plan (cutover step 6b).
+"""The owner's read-only preflight of an adoption's bind plan (cutover step 6c).
 
 ``scripts/deploy.sh -t client --phase adopt`` computes the adopt plan before
 its lease (tools/databricks/install_state_adopt.py, ``plan``): which legacy

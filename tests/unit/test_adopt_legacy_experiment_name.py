@@ -224,8 +224,8 @@ def test_the_runbook_renames_to_the_declared_name_and_rolls_back_to_the_refused_
         # Run from outside the checkout, as the experiment rename spike measured it (binding change 2).
         "**Run every command of this step from a directory outside the checkout**",
         "so no bundle context can choose the host",
-        # A failed proof stops the cutover, before step 6b's preflight too (binding change 4).
-        "**If the proof fails, stop: do not go on to step 6b or 7.**",
+        # A failed proof stops the cutover, before step 6c's preflight too (binding change 4).
+        "**If the proof fails, stop: do not go on to step 6c or 7.**",
         "`same_id` false, or a `name` that is not exactly",
         "a create call at an existing name returns that experiment's id with exit 0",
         # The experiment bind spike measured a rename onto another experiment's name: refused, both unchanged.
@@ -244,7 +244,7 @@ def test_the_runbook_renames_to_the_declared_name_and_rolls_back_to_the_refused_
         assert unmeasured not in flat, unmeasured
     for collision in ("(spike S8)", "spike S8 measured", "spike S8 did not", "(spike S9", "Spike S9", "Spike S8 measured"):
         assert collision not in flat, collision
-    assert "do not go on to step 7.**" not in flat, "a failed proof stops before step 6b's preflight too"
+    assert "do not go on to step 7.**" not in flat, "a failed proof stops before step 6c's preflight too"
     same_id = next(line for line in proof if "same_id" in line)
     assert same_id.startswith(f"databricks experiments get-by-name {declared} ") and f'== "{_ID}"' in same_id
 

@@ -528,10 +528,10 @@ def test_the_runbooks_review_rule_quotes_the_reviews_own_lines(capsys: pytest.Ca
     assert "every reviewed manager is among the holders" not in runbook, "unsatisfiable for a space in a home folder"
     step_2 = runbook[runbook.index("## Step 2. Owner decisions") : runbook.index("## Step 3.")]
     assert "by inheritance from the folder it lives in" in step_2 and "Settle this list before step 6" in step_2
-    step_6b = runbook[runbook.index("## Step 6b.") : runbook.index("## Step 7.")]
-    assert "python -m tools.clients.genie_pin_review --app-name <app-name>" in step_6b
-    assert "the unapproved count is 0 and no reviewed manager is with neither" in step_6b
+    step_6c = runbook[runbook.index("## Step 6c.") : runbook.index("## Step 7.")]
+    assert "python -m tools.clients.genie_pin_review --app-name <app-name>" in step_6c
+    assert "the unapproved count is 0 and no reviewed manager is with neither" in step_6c
     step_7 = runbook[runbook.index("## Step 7. Unity Catalog ownership handover") : runbook.index("## Step 8.")]
-    assert "- Step 6b's Genie review shows one title match, an unapproved count of 0 and no reviewed manager with neither." in step_7
+    assert "- Step 6c's Genie review shows one title match, an unapproved count of 0 and no reviewed manager with neither." in step_7
     deployment = " ".join((ROOT / "docs" / "deployment.md").read_text(encoding="utf-8").split())
     assert "would refuse on that space, direct or inherited (an inherited grant" in deployment
