@@ -71,6 +71,15 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-11-13, after the OpenTelemetry API 1.45.2 bump (see
+  the 2026-11-13 addendum below): CI's command, `pip-audit -r
+  requirements-dev.txt --strict` with no ignore, reports no known
+  vulnerabilities from the default PyPI service or from `-s osv`. The lock
+  form `pip-audit -r uv.lock -r requirements-dev.lock --no-deps --disable-pip
+  --strict` audits 134 packages, none twice, with no finding on either
+  service. Both commands on the old lock report one finding,
+  `opentelemetry-api` 1.45.1 under GHSA-mf5v-w3w3-f6cg. This is a dated
+  result, not a standing claim.
 - Backend `pip-audit`, 2026-10-28, after the runtime-only split (see "2026-10-28
   addendum: a runtime-only App image" below): CI's command, now `pip-audit -r
   requirements-dev.txt --strict` (the App's `requirements.txt` plus the dev
@@ -929,3 +938,171 @@ packaging, typing-extensions) carry the App's pin in both files.
   dev tools are absent from `requirements.in` and `uv.lock`.
 - **Licences.** No change to `docs/THIRD_PARTY_LICENSES.md`: it never listed
   the connector closure, and hypothesis is still listed as test-only.
+
+## 2026-11-13 addendum: OpenTelemetry API 1.45.2 for GHSA-mf5v-w3w3-f6cg
+
+GHSA-mf5v-w3w3-f6cg (CVE-2026-126360, medium, CVSS 5.3) was published on
+2026-11-13 at 16:43 UTC. The next security job to run failed at its pip-audit
+step, on a pull request that changes no requirement (PR #351, CI run
+43471075084, job 132042812427): `Found 1 known vulnerability in 1 package`,
+`opentelemetry-api 1.45.1`. `main` at 4596990e carries the same pin; its last
+CI run (43358364153) is green only because it finished at 03:47 UTC, about
+thirteen hours before the advisory existed. The advisory has a patched
+release that resolves cleanly, so this is a pin, not an ignore.
+
+| Advisory | Package | First patched | Action |
+|---|---|---|---|
+| GHSA-mf5v-w3w3-f6cg (medium, CWE-1333): `TraceContextTextMapPropagator.extract()` parses a crafted `traceparent` (a trace-context prefix, a long whitespace run and an embedded newline) in quadratic time | `opentelemetry-api` 1.45.1 | 1.45.2 | Floors `opentelemetry-api` and `opentelemetry-sdk` `>=1.45.2,<2` and `opentelemetry-instrumentation-logging` `>=0.66b2,<1`. Five pins move: api and sdk 1.45.1 -> 1.45.2, and semantic-conventions, instrumentation and instrumentation-logging 0.66b1 -> 0.66b2. Nothing is added or removed. |
+
+- **The fix version comes from the advisory.** `gh api
+  /advisories/GHSA-mf5v-w3w3-f6cg` names one package, `opentelemetry-api`,
+  with the range `<= 1.45.1` and `first_patched_version` 1.45.2. Listing
+  GitHub advisories by package (`gh api
+  '/advisories?ecosystem=pip&affects=<pkg>'`) for all twelve OpenTelemetry
+  distributions in the lock returns this id and GHSA-xcq7-p3pf-p88h for the
+  API (neither affects 1.45.2), one 2023 id for
+  `opentelemetry-instrumentation` (`< 0.41b0`), and nothing for the other
+  ten. PyPI has carried 1.45.2 and its 0.66b2 companions since 2026-10-29,
+  fifteen days before the advisory.
+- **What had to move, and what did not.** Each wheel's `Requires-Dist`
+  decides. `opentelemetry-sdk` 1.45.1 requires `opentelemetry-api==1.45.1`
+  and `opentelemetry-semantic-conventions==0.66b1`; semantic-conventions
+  0.66b1 requires `opentelemetry-api==1.45.1` as well; and
+  `opentelemetry-instrumentation` and `-instrumentation-logging` 0.66b1
+  require `opentelemetry-semantic-conventions==0.66b1`. Those five move
+  together. The exporter side does not have to:
+  `opentelemetry-exporter-otlp-proto-http` and `-proto-grpc` 1.45.1 and
+  `opentelemetry-exporter-otlp-common` 0.66b1 require
+  `opentelemetry-sdk~=1.45.1`, which admits 1.45.2, and
+  `opentelemetry-exporter-http-transport` 0.66b1 requires
+  `opentelemetry-api~=1.15`. So `opentelemetry-exporter-otlp`, its
+  `-proto-grpc`, `-proto-http` and `-proto-common` exporters,
+  `opentelemetry-proto`, `opentelemetry-exporter-otlp-common` and
+  `opentelemetry-exporter-http-transport` stay on 1.45.1 and 0.66b1 (seven
+  pins), and the `opentelemetry-exporter-otlp>=1.45.1,<2` floor is unchanged.
+  The resolver agrees: with only the API floor raised and no
+  `--upgrade-package`, it moves the same five pins and writes a
+  byte-identical lock. The `otel` extra in `pyproject.toml` (`>=1.27,<2`,
+  and `opentelemetry-instrumentation-logging>=0.66b1,<1` for the handler's
+  existence) and the matching `pip install` line in `docs/observability.md`
+  stay as they are: they are functional floors for minimal local installs,
+  never carried the 1.45.1 security floor either, and resolve to the newest
+  release; the App installs `requirements.txt`.
+- **Lock refresh, narrow.** The three header commands, the first with the
+  five packages named, then the digest:
+
+  ```bash
+  uv pip compile requirements.in --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
+    --format requirements.txt --output-file uv.lock \
+    --upgrade-package opentelemetry-api --upgrade-package opentelemetry-sdk \
+    --upgrade-package opentelemetry-semantic-conventions \
+    --upgrade-package opentelemetry-instrumentation \
+    --upgrade-package opentelemetry-instrumentation-logging
+  uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
+    --format requirements.txt --output-file requirements-dev.lock
+  uv pip compile requirements.in -c uv.lock --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
+    --generate-hashes --format requirements.txt --output-file requirements-deploy.hashes.txt
+  python tools/requirements_digest.py --write
+  ```
+
+  As a control, each file's own header command (the first one without the
+  `--upgrade-package` flags), run on the unchanged tree, reproduces all three
+  committed files byte for byte. The flagged first command on the unchanged
+  tree does not reproduce it: PyPI's latest releases are 1.45.2 and 0.66b2
+  and the old floors admit them, so it writes the same five-line change as
+  the floor change does (the floors make the move binding). After the floor
+  change,
+  `uv.lock` differs in exactly five version lines and no provenance line;
+  `requirements-dev.lock` is byte-identical (it pins none of the five);
+  `requirements-deploy.hashes.txt` differs in the same five blocks (a
+  version line and two hashes each, equal to the sha256 PyPI publishes for
+  each wheel and sdist); and `requirements.txt` changes only its digest
+  line. `test_supply_chain_licenses` pins the new literals in both files.
+- **The App's Linux x86_64 closure is unchanged in shape.** The offline
+  replay (`uv pip install --target <dir> --python-platform
+  x86_64-manylinux_2_28 --python-version 3.11 -r requirements.txt`, then
+  `compute_drift` over that directory's metadata with Linux x86_64 markers)
+  gives the same answer on the old and the new files: 117 installed
+  distributions for 117 pins, `pins_checked` 117, nothing unpinned, nothing
+  not applicable, no drift. The control, the new lock with its greenlet pin
+  deleted, reports `unpinned` 1, `greenlet`, so the replay sees an unpinned
+  dist when there is one. Hashing both install trees (16,482 files each),
+  the only package content that differs is 13 files under `opentelemetry/`
+  plus the five `dist-info` directories; the 23 console scripts under `bin/`
+  and the RECORD lines naming them differ only in the shebang's interpreter
+  path, which follows the install directory.
+- **What 1.45.2 changes, read from the installed wheels.** In the API,
+  `opentelemetry/trace/propagation/tracecontext.py` alone: values longer
+  than 512 characters are rejected before the regular expression runs, and
+  the overlapping optional-suffix and trailing-whitespace groups are now
+  alternatives. The SDK also carries a metrics change (six files under
+  `sdk/metrics`): it now enforces a default cardinality limit of 2,000
+  attribute sets on every metric stream, with no View or configuration
+  needed, folds the excess into one `otel.metric.overflow=true` point, and
+  takes the limit per view (`aggregation_cardinality_limit`) and per reader
+  (`cardinality_limits`). A default `MeterProvider` with an
+  `InMemoryMetricReader` and 2,005 distinct attribute sets on one counter
+  reports 2,005 points on 1.45.1 and 2,001 on 1.45.2, one of them the
+  overflow point with value 5. Nothing here reaches it: no first-party code
+  builds a `MeterProvider`, and the one installed builder outside
+  OpenTelemetry, mlflow's `tracing/processor/otel_metrics_mixin.py`, does so
+  only when `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` or
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, which nothing in the repository
+  sets (`git grep -P` outside `docs/` finds neither; the
+  `OTEL_EXPORTER_OTLP_` prefix control matches). The rest
+  is five version files and the version strings in
+  `instrumentation/bootstrap_gen.py`. The wiring in
+  `backend/services/observability.py` (`opentelemetry._logs`,
+  `opentelemetry.sdk._logs` and its `export`, `opentelemetry.sdk.resources`,
+  `opentelemetry.instrumentation.logging.handler`, and the unmoved OTLP HTTP
+  log exporter) loads 105 OpenTelemetry files; two of the 13 are among them,
+  the SDK's version file and `tracecontext.py`, which is imported and never
+  called there.
+- **Behaviour checks at the broken layer.** Two Python 3.11 venvs, one built
+  from the old `requirements-dev.txt` and one from the new. (1) The fix: on
+  1.45.1, extracting a `traceparent` made of a valid prefix, `-`, a run of
+  spaces and `\nx` takes 0.93 s for 4,000 spaces, 3.17 s for 8,000 and
+  12.79 s for 16,000 (about 14 times longer for 4 times the input, on a
+  loaded host); on 1.45.2 each is
+  refused in under 2 ms with one `traceparent header exceeded the maximum
+  length of 512 characters` log line, and a valid `traceparent` still
+  extracts on both. (2) The wiring: `configure_logging()` with `MIP_OTEL_ENDPOINT`
+  pointed at a local HTTP collector, one record emitted, `force_flush()` and
+  `shutdown()`. On both venvs the collector receives one `POST /v1/logs`
+  that decodes as an `ExportLogsServiceRequest` holding the probe record
+  with the same attribute keys and resource, the handler is
+  `opentelemetry.instrumentation.logging.handler.LoggingHandler`, and no
+  warning of any category is recorded under
+  `warnings.simplefilter("always")` (the same recorder does catch the SDK's
+  own deprecated `LoggingHandler`, the control). On the new venv that run is
+  the mixed set as locked: API and SDK 1.45.2 with the 1.45.1 exporter.
+  (3) The same wiring pointed at a refused port with
+  `OTEL_EXPORTER_OTLP_LOGS_TIMEOUT=0.2`: on both venvs the exporter logs one
+  `Failed to export logs batch due to timeout, max retries or shutdown.`
+  line, `force_flush()` plus `shutdown()` return in under 0.2 s, and no
+  warning, DeprecationWarning included, is recorded.
+  `tests/unit/test_observability.py`, including the real-wheel
+  warnings-as-errors test, passes on both venvs.
+- **Reachability, for the record.** No first-party code extracts trace
+  context: `backend/services/observability.py` is the only first-party
+  OpenTelemetry importer and it exports logs. `git grep -P` over backend,
+  jobs, tools, pipelines, scripts and notebooks finds no `traceparent`,
+  `TraceContextTextMapPropagator` or mlflow distributed-tracing call (a
+  control pattern matches). Outside OpenTelemetry itself, the one installed
+  caller of `extract()` is `mlflow.tracing.distributed`'s
+  `set_tracing_context_from_http_request_headers`, used by mlflow's own
+  `mlflow/gateway/tracing_utils.py` (mlflow's provider autologgers import
+  only its header-writing helper). The pin does not depend on this.
+- **Proof** (pip-audit 2.9.0 in a private venv). CI's literal command,
+  `pip-audit -r requirements-dev.txt --strict`, through the symlink-forcing
+  driver: on the old files, `Found 1 known vulnerability in 1 package`
+  (`opentelemetry-api 1.45.1 GHSA-mf5v-w3w3-f6cg`, fix 1.45.2), exactly CI's
+  line; on the new files, `No known vulnerabilities found`, and the same
+  with `-s osv`. The lock form, `pip-audit -r uv.lock -r
+  requirements-dev.lock --no-deps --disable-pip --strict`: the same single
+  finding on the old locks from the PyPI service and from `-s osv`, and no
+  finding on the new ones from either, over 134 packages, none twice.
+  `uv pip check` reports every installed package compatible in Python 3.11
+  venvs built from the old and from the new `requirements-dev.txt`.
+- **Licences.** Unchanged: all five moved wheels are Apache-2.0, as before,
+  and no distribution enters or leaves the lock.
