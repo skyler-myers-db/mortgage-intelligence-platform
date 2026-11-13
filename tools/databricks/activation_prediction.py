@@ -355,12 +355,16 @@ def _env_names(args: argparse.Namespace, workspace_factory: Callable[[], Any]) -
         workspace, app_name=profile.app_name, payload_inputs=inputs, derived_sentinels=True
     )
     stop = _CUTOVER_STOP.get(verdict)
-    if stop is not None:
-        message = f"{message}. {stop}"
-    # The summary first: a verdict it could not take is not measured, never a log-only ``holds``.
-    _summary(args.step_summary, [message])
-    print(f"{_PREFIX} {message}", file=sys.stdout if stop is None else sys.stderr)
-    return 0 if stop is None else 2
+    if stop is None:
+        # The summary first: a passing verdict it could not take is not measured, never a log-only ``holds``.
+        _summary(args.step_summary, [message])
+        print(f"{_PREFIX} {message}")
+        return 0
+    # A stop verdict is printed whatever becomes of the summary: its names are the remedy.
+    print(f"{_PREFIX} {message}. {stop}", file=sys.stderr)
+    with contextlib.suppress(OSError):
+        _summary(args.step_summary, [f"{message}. {stop}"])
+    return 2
 
 
 def _not_measured(args: argparse.Namespace, why: str) -> int:

@@ -248,6 +248,12 @@ def test_a_step_summary_that_cannot_be_written_is_not_measured_and_never_a_log_o
     # The same App, with a summary that can be written, holds: only the write differed.
     assert ap.main(["env-names", "--step-summary", str(tmp_path / "s.md")], workspace_factory=lambda: _workspace(live, world.apps)) == 0
     assert "parity holds" in capsys.readouterr().out
+    # A stop verdict keeps its names in the log even then: they are what the owner fixes.
+    world.add_deployment("deployment-with-otel", source=rr.LEGACY_FOLDER, env_names=sorted({*D0_NAMES, "MIP_OTEL_ENDPOINT"}))
+    assert ap.main(["env-names", "--step-summary", str(nowhere)], workspace_factory=lambda: _workspace(live, world.apps)) == 2
+    printed = capsys.readouterr()
+    assert "env-name parity DIFFERS" in printed.err and "(adds none; lacks MIP_OTEL_ENDPOINT)" in printed.err
+    assert "do not start step 7" in printed.err and "parity holds" not in printed.out + printed.err
 
 
 @pytest.mark.usefixtures("adopted_world")
