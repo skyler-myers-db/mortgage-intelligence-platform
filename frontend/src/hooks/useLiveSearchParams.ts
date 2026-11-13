@@ -12,7 +12,8 @@ import { UNSAFE_DataRouterContext, useLocation } from 'react-router';
  * address bar. A write derived from them drops the navigation in flight:
  * two HIDE picks inside the gap kept only the second column
  * (routes/lead-queue.columns.ts). The gap is one route render, so it grows
- * with CPU load.
+ * with CPU load. setSearchParams' updater form does not close it: react-router
+ * hands the updater a copy of the same committed params and queues nothing.
  *
  * Returns a reader for EVENT time. It is never called during render: the
  * router's state is not React state, and the committed render must keep
@@ -21,7 +22,9 @@ import { UNSAFE_DataRouterContext, useLocation } from 'react-router';
  * value) when there is no data router (the declarative MemoryRouter of the
  * route unit tests) and when the router is not on the caller's pathname: a
  * navigation away is in flight, or the Lead Queue is kept alive behind a
- * dossier and renders its kept location (LeadQueueKeepAlive).
+ * dossier and renders its kept location (LeadQueueKeepAlive). The two
+ * pathnames compare as they are: the app's router has no basename
+ * (appRouter.tsx).
  */
 export function useLiveSearchParams(committed: URLSearchParams): () => URLSearchParams {
   const router = useContext(UNSAFE_DataRouterContext)?.router ?? null;
