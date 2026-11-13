@@ -11,8 +11,10 @@ client's snapshot found (another folder, another base name), which refuses
 ``renamed`` until the owner's rename.
 
 Pinned: the verdict before and after that rename; that the tool reads only
-(GETs by id and two state downloads), runs no child process and calls no
-bundle CLI; that it prints no identifier and no acknowledgement; that its
+(GETs by id and two state downloads) on every path, the refused and the not
+measured ones included, starts no child process of its own and calls no
+bundle CLI, and calls nothing but its reviewed callees; that it prints no
+identifier and no acknowledgement; that its
 digest is the one a CLI-sourced plan gives for the same estate; that it prints
 the profile ack of the profile it judged; and that every bundle or profile
 shape it cannot resolve refuses, never guesses a name.
@@ -24,8 +26,10 @@ import ast
 import copy
 import functools
 import json
+import os
 import re
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -72,6 +76,33 @@ GETS = frozenset(
         ("experiments", "get_experiment"),
     }
 )
+# Every way a Python process starts another one: patched in every test, so a call is recorded even
+# when the module swallows the error it raises.
+_CHILD_PROCESS = (
+    (subprocess, ("run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput")),
+    (os, ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "execl", "execle", "execlp",
+          "execlpe", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv",
+          "spawnve", "spawnvp", "spawnvpe")),
+)  # fmt: skip
+
+
+@pytest.fixture(autouse=True)
+def _no_child_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    started: list[str] = []
+
+    def forbidden(qualified: str) -> Any:
+        def never(*_args: Any, **_kwargs: Any) -> Any:
+            started.append(qualified)
+            raise AssertionError(f"the preflight starts no child process ({qualified})")
+
+        return never
+
+    for module, names in _CHILD_PROCESS:
+        for name in names:
+            if hasattr(module, name):
+                monkeypatch.setattr(module, name, forbidden(f"{module.__name__}.{name}"))
+    yield started
+    assert started == [], f"a child process was started, its error swallowed or not: {started}"
 
 
 def _profile(**overrides: str | None) -> Any:
@@ -121,11 +152,21 @@ def _estate(profile: Any, *, experiment: str | None = LEGACY_EXPERIMENT) -> es.E
     return estate
 
 
+def _tree(estate: es.Estate) -> dict[str, Any]:
+    return {path: (node.kind, node.data) for path, node in estate.tree.nodes.items()}
+
+
 def _run(
     estate: Any, profile: Any, capsys: pytest.CaptureFixture[str], *argv: str, bundle_path: Path = BUNDLE
 ) -> tuple[int, str, str]:
+    before = _tree(estate)
     code = preflight.main(list(argv), profile=lambda: profile, workspace_factory=lambda: estate, bundle_path=bundle_path)
     printed = capsys.readouterr()
+    # Read-only on every path, refused and not measured too. The double records a call before it
+    # answers or raises, so a write whose error the module swallowed is still seen here.
+    assert set(estate.reads()) <= GETS, f"a workspace call that is no reviewed GET: {set(estate.reads()) - GETS}"
+    assert {op for op, _path in estate.tree.calls} <= {"download"}, estate.tree.calls
+    assert _tree(estate) == before, "the workspace tree changed"
     return code, printed.out, printed.err
 
 
@@ -249,6 +290,90 @@ def test_the_module_imports_no_child_process_or_bundle_cli_and_calls_no_write() 
     assert _static_findings(planted) == {
         "import subprocess", "import bundle_env", "import BundleEnvCli", "call .plan(", "call .bind(", "call .upload(",
     }  # fmt: skip
+
+
+# The module's reviewed callees and imports, exactly. A forbidden-name list misses the SDK's real
+# mutators (update_experiment, set_experiment_tag, api_client.do, jobs.reset) and os.system, so every
+# call and import is matched against what was reviewed: a new one is a finding until it is reviewed.
+_REVIEWED_CALLEES = frozenset(
+    {"<boolop>.splitlines", "<constant>.join", "DeclaredNameError", "Path", "Path().resolve", "SystemExit",
+     "_VAR.fullmatch", "_literal", "_mapping", "_mapping().get", "_mapping().items", "_not_measured", "_print",
+     "_resolved", "_write_private", "argparse.ArgumentParser", "body.get", "bundle_path.read_text", "declared_plan",
+     "deployment_workspace_client", "dispatch_acks.profile_ack", "from_local", "getattr", "handle.write",
+     "host_refusals", "inputs_from_profile", "isinstance", "json.dump", "json.dumps", "legacy_map.compute", "len",
+     "main", "match.group", "merged.get", "merged.items", "os.chmod", "os.fdopen", "os.open", "parse_plan",
+     "parser.add_argument", "parser.parse_args", "plan.full", "print", "profile", "re.compile", "read_state",
+     "resolve", "sorted", "spec.get", "str", "super", "super().__init__", "sys.path.insert", "target.get", "top.get",
+     "type", "views.bundle_vars", "views.digest", "workspace_factory", "yaml.safe_load"}
+)  # fmt: skip
+_REVIEWED_IMPORTS = frozenset(
+    {"__future__:annotations", "argparse", "collections.abc:Callable", "collections.abc:Mapping", "json", "os",
+     "pathlib:Path", "re", "sys", "tools.clients.environment:from_local", "tools.clients.environment:resolve",
+     "tools.clients.errors:ProfileRefusal", "tools.clients.live_identity:host_refusals", "tools.clients:dispatch_acks",
+     "tools.clients:profile", "tools.databricks.bundle_plan_lookups:KIND_LOOKUPS",
+     "tools.databricks.bundle_plan_shape:BundlePlan", "tools.databricks.bundle_plan_shape:PlanShapeError",
+     "tools.databricks.bundle_plan_shape:parse_plan", "tools.databricks.bundle_state:BundleStateError",
+     "tools.databricks.bundle_state:STATE_FILE", "tools.databricks.bundle_state:read_state",
+     "tools.databricks.install_state_adopt:inputs_from_profile",
+     "tools.databricks.workspace_auth:deployment_workspace_client", "tools.databricks:adopt_legacy_map",
+     "typing:Any", "yaml"}
+)  # fmt: skip
+
+
+def _dotted(node: ast.expr) -> str:
+    """A callee as written: names and attributes kept, a call in the chain as ``()``, anything else by its kind."""
+
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_dotted(node.value)}.{node.attr}"
+    if isinstance(node, ast.Call):
+        return f"{_dotted(node.func)}()"
+    return f"<{type(node).__name__.lower()}>"
+
+
+def _uses(source: str) -> tuple[set[str], set[str]]:
+    callees: set[str] = set()
+    imports: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            callees.add(_dotted(node.func))
+        elif isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.update(f"{node.module}:{alias.name}" for alias in node.names)
+    return callees, imports
+
+
+def _unreviewed(source: str) -> set[str]:
+    callees, imports = _uses(source)
+    return {f"call {name}(" for name in callees - _REVIEWED_CALLEES} | {
+        f"import {name}" for name in imports - _REVIEWED_IMPORTS
+    }
+
+
+def test_the_module_calls_and_imports_only_its_reviewed_callees() -> None:
+    source = MODULE.read_text(encoding="utf-8")
+
+    assert _unreviewed(source) == set()
+    assert _uses(source) == (set(_REVIEWED_CALLEES), set(_REVIEWED_IMPORTS)), "no stale entry admits a later call"
+    # Positive controls: the SDK's mutators, its raw client, and every way to start a child process.
+    for planted, finding in (
+        ("workspace.experiments.update_experiment(experiment_id=i, new_name=n)", "workspace.experiments.update_experiment"),
+        ("workspace.experiments.set_experiment_tag(experiment_id=i, key=k, value=v)", "workspace.experiments.set_experiment_tag"),
+        ('workspace.api_client.do("POST", "/api/2.0/mlflow/experiments/update", body={})', "workspace.api_client.do"),
+        ("workspace.jobs.reset(job_id=1, new_settings=s)", "workspace.jobs.reset"),
+        ("workspace.workspace.upload(path, data)", "workspace.workspace.upload"),
+        ('os.system("true")', "os.system"),
+        ('os.popen("true")', "os.popen"),
+        ("os.posix_spawn(path, argv, env)", "os.posix_spawn"),
+        ("os.execv(path, argv)", "os.execv"),
+        ("os.spawnv(mode, path, argv)", "os.spawnv"),
+        ('getattr(workspace.experiments, "update_experiment")(experiment_id=i)', "getattr()"),
+    ):
+        assert _unreviewed(planted) == {f"call {finding}("}, planted
+    assert _unreviewed('from os import system\nsystem("true")\n') == {"import os:system", "call system("}
+    assert _unreviewed("import pty\nimport subprocess\n") == {"import pty", "import subprocess"}
 
 
 # --- no identifier, no acknowledgement --------------------------------------------------------

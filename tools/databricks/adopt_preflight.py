@@ -37,7 +37,9 @@ local profile whose ack is not the one CI prints says nothing about the names
 CI will use.
 
 Read-only: workspace GETs and two state downloads; no bundle CLI, no child
-process, no lease, no state edit and no workspace write. It is no
+process of its own, no lease, no state edit and no workspace write. (With a
+``databricks-cli`` auth profile, the SDK's own authentication may run
+``databricks auth token``, a token read, as for any SDK client.) It is no
 acknowledgement: the digest a mutating adopt run needs is the one the adopt
 phase's own plan prints. It does not measure the CI deployer's own reads, the
 CLI's plan, the pre-stop probes or adopt-live.
