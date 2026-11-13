@@ -1189,8 +1189,8 @@ capture bundle_env's output, and the log names only the call that failed.
 
 The Genie cause is written only to the run's private report (`cli_errors`;
 adopt-live's summary keeps none), never to the log; the deploy publishes that
-report to the deployer's plan-reports folder (one per run). A
-read-only dispatch without `genie_pin` also reveals it: the unadopt's (or 10B-0's)
+report to the deployer's plan-reports folder (one per run). A read-only
+dispatch without `genie_pin` reveals it as well: the unadopt's (or 10B-0's)
 refuses at the step-0 pin check, whose lines the log does print, and a pin
 plan sha256 other than the acked one says a holder or the deployer changed.
 
