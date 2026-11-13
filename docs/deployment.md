@@ -814,7 +814,12 @@ re-pin.
 and the journal open, and exits 2 before the fail-closed arm with the lease
 released. Until the record's new version is saved, the record is unchanged
 too; a health failure after that save leaves it re-pinned, and the same ack
-then resumes at the journal close.
+then resumes at the journal close. A candidate that is gone by step 0a (the
+App went down, or a second start landed, after the pre-lease plan matched the
+ack) is refused there too: an `owner_start_repin` ack over an open journal
+reaches `repin --from-owner-start` whatever the status reads (only a dead-man
+restart the App serves keeps `repin --from-deadman`), and that tool classifies
+again and exits with its code. The run never goes on into step 0a over it.
 
 | Code | What it means | The exit |
 | --- | --- | --- |
@@ -3673,6 +3678,8 @@ bindings: re-run the dead window's commit, then roll forward. An App no longer
 serving the dead-man's start (stopped or restarted by hand) is no longer the
 dead-man's path: the plan reads its marker as `deadman_superseded` and refuses
 before the lease, where it used to pass and then refuse under every lease.
+One that stops serving it between that plan and step 0a still reaches
+`repin --from-deadman` there, which refuses it before the fail-closed arm.
 Any other open journal still refuses before the lease
 (`window_journal_open`): a contract window the dead-man left stopped, a start
 it could not prove, or a dead-man that has not reached its deadline. That is

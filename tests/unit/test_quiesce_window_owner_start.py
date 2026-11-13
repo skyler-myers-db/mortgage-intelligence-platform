@@ -771,6 +771,60 @@ def test_the_plan_the_status_and_the_re_pin_under_the_lease_compute_one_digest(
     assert _classify(estate).sha256 == facts.owner_start_sha256
 
 
+def test_the_plan_command_reads_the_ack_from_its_environment_and_only_before_the_lease(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI the deploy shell runs: the plan phase prints the digest, the release carries it."""
+
+    estate = _estate()
+    started = _open_then_die(estate)
+    digest = _classify(estate).sha256
+    files = {
+        "--plan-gate-report": {"verdict": "passed", "instance_update_sha256": ""},
+        "--binding-payload": {"name": APP_NAME, "description": "", "resources": estate.apps.resources},
+        "--migration-plan": MIGRATION_NOOP,
+    }
+    argv = ["plan", "--app-name", APP_NAME, "--scope", SCOPE, "--lakebase-instance", "mip-app-state"]
+    for flag in ("--role-check", "--verifier-role-check", "--jobs-reader-role-check"):
+        argv += [flag, "exact"]
+    for index, (flag, payload) in enumerate(files.items()):
+        path = tmp_path / f"input-{index}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        argv += [flag, str(path)]
+
+    def plan(position: str) -> tuple[int, str, dict[str, Any]]:
+        out = tmp_path / f"{position}.json"
+        code = window.main([*argv, "--position", position, "--out", str(out)], workspace_factory=lambda: estate.workspace)
+        printed = capsys.readouterr()
+        assert started not in printed.out + printed.err and RELEASE not in printed.out + printed.err
+        return code, printed.out + printed.err, json.loads(out.read_text(encoding="utf-8"))
+
+    before = _frozen(estate)
+    monkeypatch.delenv(window.ACK_ENV, raising=False)
+    monkeypatch.delenv(recovery.ACK_ENV, raising=False)
+    code, printed, written = plan("pre-lease")
+    assert code == 2 and written["refusals"] == ["window_journal_open"]
+    assert f"re-pin it on a release with operation_acks owner_start_repin={digest}" in printed
+    assert "REFUSED window_journal_open (remedy in the private plan)" in printed
+    assert "owner_start_repin digest this plan prints (repin --from-owner-start;" in written["remedies"]["window_journal_open"]
+
+    monkeypatch.setenv(recovery.ACK_ENV, "0" * 64)
+    assert plan("pre-lease")[0] == 2, "another plan's digest"
+    monkeypatch.setenv(window.ACK_ENV, digest)  # the window's own ack is another purpose
+    monkeypatch.delenv(recovery.ACK_ENV)
+    assert plan("pre-lease")[0] == 2
+    monkeypatch.delenv(window.ACK_ENV)
+
+    monkeypatch.setenv(recovery.ACK_ENV, f" {digest}\n")
+    code, printed, written = plan("pre-lease")
+    assert code == 0 and written["refusals"] == [] and written["code"] == "none"
+    assert "this run re-pins it under the lease (repin --from-owner-start" in printed
+    # Under the lease the recovery ran first: a journal still open at pre-apply is refused, acked or not.
+    code, _printed, written = plan("pre-apply")
+    assert code == 2 and written["refusals"] == ["window_journal_open"]
+    assert _frozen(estate) == before, "a plan reads only"
+
+
 def test_a_re_pin_signed_before_a_failed_journal_close_resumes_with_the_same_ack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
