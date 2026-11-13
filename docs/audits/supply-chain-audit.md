@@ -1012,9 +1012,13 @@ release that resolves cleanly, so this is a pin, not an ignore.
   `compute_drift` over that directory's metadata with Linux x86_64 markers)
   gives the same answer on the old and the new files: 117 installed
   distributions for 117 pins, `pins_checked` 117, nothing unpinned, nothing
-  not applicable, no drift. Hashing both install trees (16,482 files each),
+  not applicable, no drift. The control, the new lock with its greenlet pin
+  deleted, reports `unpinned` 1, `greenlet`, so the replay sees an unpinned
+  dist when there is one. Hashing both install trees (16,482 files each),
   the only package content that differs is 13 files under `opentelemetry/`
-  plus the five `dist-info` directories.
+  plus the five `dist-info` directories; the 23 console scripts under `bin/`
+  and the RECORD lines naming them differ only in the shebang's interpreter
+  path, which follows the install directory.
 - **What 1.45.2 changes, read from the installed wheels.** In the API,
   `opentelemetry/trace/propagation/tracecontext.py` alone: values longer
   than 512 characters are rejected before the regular expression runs, and
@@ -1060,8 +1064,10 @@ release that resolves cleanly, so this is a pin, not an ignore.
   jobs, tools, pipelines, scripts and notebooks finds no `traceparent`,
   `TraceContextTextMapPropagator` or mlflow distributed-tracing call (a
   control pattern matches). Outside OpenTelemetry itself, the one installed
-  caller of `extract()` is `mlflow.tracing.distributed`, used by mlflow's
-  own gateway server module. The pin does not depend on this.
+  caller of `extract()` is `mlflow.tracing.distributed`'s
+  `set_tracing_context_from_http_request_headers`, used by mlflow's own
+  `mlflow/gateway/tracing_utils.py` (mlflow's provider autologgers import
+  only its header-writing helper). The pin does not depend on this.
 - **Proof** (pip-audit 2.9.0 in a private venv). CI's literal command,
   `pip-audit -r requirements-dev.txt --strict`, through the symlink-forcing
   driver: on the old files, `Found 1 known vulnerability in 1 package`
@@ -1071,5 +1077,7 @@ release that resolves cleanly, so this is a pin, not an ignore.
   requirements-dev.lock --no-deps --disable-pip --strict`: the same single
   finding on the old locks from the PyPI service and from `-s osv`, and no
   finding on the new ones from either, over 134 packages, none twice.
+  `uv pip check` reports every installed package compatible in Python 3.11
+  venvs built from the old and from the new `requirements-dev.txt`.
 - **Licences.** Unchanged: all five moved wheels are Apache-2.0, as before,
   and no distribution enters or leaves the lock.
