@@ -177,6 +177,8 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
         "  # The active deployment's digest a release may pin, and the PlanReport's",
         "  # two halves: public to the step summary, full to the workspace (M1-PR7).",
         "  print_active_deployment_digest",
+        "  # The digest restore_unverified_frontend an adopted blue's release needs (B3).",
+        "  predict_activation_rollback",
         "  publish_plan_report",
         "  echo \"${GRN}[deploy] plan phase complete: stopped before the lease; no governed resource was changed (its one write, under GitHub Actions only, is the create-only plan report in the deployer's plan-reports folder).${RST}\"",
         "  exit 0",
@@ -308,6 +310,9 @@ def _harness(
         'predict_phase_budgets() { echo "budgets-predicted"; }\n'
         # The plan's deployment digest and its report publish (M1-PR7) have their own tests.
         'print_active_deployment_digest() { echo "deployment-digest-printed"; }\n'
+        # The pre-lease activation prediction (B3) has its own tests
+        # (tests/unit/test_activation_prediction_deploy_contract.py).
+        'predict_activation_rollback() { echo "activation-predicted"; }\n'
         'BUNDLE_PLAN_REPORT_JSON=""\nBUNDLE_PLAN_PUBLIC_JSON=""\n'
         + function("publish_plan_report")
         + function("run_json_to_file")
@@ -340,6 +345,12 @@ def test_the_plan_phase_exits_read_only_and_never_takes_the_lease(tmp_path: Path
     assert "plan phase complete: stopped before the lease; no governed resource was changed" in result.stdout
     assert "[mip-plan-gate] pre-lease plan gate passed (read-only)" in result.stdout
     assert result.stdout.index("budgets-predicted") < result.stdout.index("plan phase complete")
+    # B3: the plan predicts the activation's rollback proof after the digest, before its report.
+    assert (
+        result.stdout.index("deployment-digest-printed")
+        < result.stdout.index("activation-predicted")
+        < result.stdout.index("plan phase complete")
+    )
     assert called == [
         "bundle_env.called",
         MONITOR_CALLED,

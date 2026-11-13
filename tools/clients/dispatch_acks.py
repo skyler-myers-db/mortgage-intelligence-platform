@@ -96,6 +96,11 @@ OPERATION_ACKS: dict[str, OperationAck] = {
     "accepted_exposure_plan": OperationAck(
         "MIP_ACK_ACCEPTED_EXPOSURE_PLAN", frozenset({"plan", "release", "adopt", "unadopt"})
     ),
+    # The core release reads it (its pre-lease prediction, step 0a, the
+    # pre-activation proof and the tier-b restore); --phase plan prints it
+    # (tools/databricks/activation_prediction.py). no_rollback_for has no
+    # carrier on purpose: it would drop blue's only rollback in one field.
+    "restore_unverified_frontend": OperationAck("MIP_ACK_RESTORE_UNVERIFIED_FRONTEND", frozenset({"release"})),
     "data_ledger_supersede": OperationAck("MIP_ACK_DATA_LEDGER_SUPERSEDE", frozenset({"data"})),
     "data_ledger_rerun": OperationAck("MIP_ACK_DATA_LEDGER_RERUN", frozenset({"data"})),
     # The metastore owner's attestation of the App's metastore privileges (spike

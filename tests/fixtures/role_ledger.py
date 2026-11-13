@@ -79,6 +79,7 @@ WORKSPACE_MODULES = frozenset(
     {
         "tools.branding.lender_mark",
         "tools.clients",
+        "tools.databricks.activation_prediction",
         "tools.databricks.active_deployment_pin",
         "tools.databricks.app_deploy_payload",
         "tools.databricks.app_release_prune",

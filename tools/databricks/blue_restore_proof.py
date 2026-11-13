@@ -38,9 +38,11 @@ signed blue, ``prepare_activation`` requires blue's tier-b restore payload:
   over the payload's own digest); without it, activation refuses
   (``unverified_frontend_unacked``, printing both digests) unless the
   ``no_rollback_for`` ack is given, and nothing is recorded. The ack covers
-  this blue, this payload and the commit of the run that gives it: the
-  activation gate and the same run's tier-b restore ask for one digest, and a
-  later run (another commit) needs its own, which the refusal prints.
+  this blue's immutable copy, this payload and the commit of the run that
+  gives it: the activation gate and the same run's tier-b restore ask for one
+  digest, a re-pin keeps it, and a later run (another commit) needs its own,
+  which the refusal prints. tools/databricks/activation_prediction.py
+  predicts it read-only before the lease.
 
 No record, or a retired tombstone, has no blue to protect. Blue's tier must
 be the profile's (``MIP_AGENTIC_TIER``; tools/databricks/blue_tier_gate.py): a
@@ -159,7 +161,16 @@ def no_rollback_plan(
 def unverified_frontend_plan(
     *, app_name: str, record: Mapping[str, Any], run_git_sha: str
 ) -> dict[str, str]:
-    """The canonical plan a ``restore_unverified_frontend`` ack covers: this blue and payload, this run."""
+    """The canonical plan a ``restore_unverified_frontend`` ack covers: this blue's copy and payload, this run.
+
+    ``restore_to`` is the sha256 of blue's immutable copy (``restore_source_path``,
+    which tier b deploys), never of its deployment id: a re-pin onto a start's
+    deployment (the quiesce window's, step 0a's, the dead-man's) keeps the copy,
+    the commit and the env-name set, so the ack the plan printed before the lease
+    still covers the record the window left (B3). A supersede adopts another
+    deployment into another copy (``adopted-<id12>-<digest12>``), so no ack crosses
+    one, and the payload digest binds the copy's path and every env value.
+    """
 
     try:
         commit = release_contract.check_commit(run_git_sha)
@@ -167,7 +178,7 @@ def unverified_frontend_plan(
         raise RestoreProofRefused("run_commit_invalid", f"the run's commit is invalid: {exc}") from exc
     return {
         "app_name": app_name,
-        "restore_to": sha256_text(str(record["deployment_id"])),
+        "restore_to": sha256_text(str(record["restore_source_path"])),
         "restore_payload_sha256": str(record["restore_payload_sha256"]),
         "run_git_sha": commit,
     }

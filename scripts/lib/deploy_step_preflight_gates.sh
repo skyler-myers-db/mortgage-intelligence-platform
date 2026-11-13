@@ -133,14 +133,14 @@ fi
 # <<< app runtime closure: check <<<
 
 # >>> client live checks >>>
-# The first Databricks call, once interpreter, requirements digest and closure
-# are proven. Read-only (tools/clients/live_checks.py: two SCIM Me GETs, the
-# metastore assignment): host, workspace id, metastore and principal must be the
-# profile's, else exit 2 naming the check, never a value; no call in a dry run.
-# Both adopt phases (M2-PR6) accept an unbound App, half-bound states included.
+# The first Databricks call, once interpreter, requirements digest and closure are proven.
+# Read-only (tools/clients/live_checks.py: two SCIM Me GETs, the metastore assignment): host,
+# workspace id, metastore and principal must be the profile's, else exit 2 naming the check,
+# never a value; no call in a dry run. Both adopt phases (M2-PR6) accept an unbound App, half-bound states included.
 _LIVE_CHECK_ARGS=(); [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]] || _LIVE_CHECK_ARGS=(--phase "$DEPLOY_PHASE")
 echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${_LIVE_CHECK_ARGS[*]:+ ${_LIVE_CHECK_ARGS[*]}}${RST}"
 if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks "${_LIVE_CHECK_ARGS[@]}"; then
+  measure_blue_env_names_before_adoption  # --phase plan, core tier: blue's env names first (B3)
   echo "${RED}[deploy] the client live checks refused this workspace or principal; nothing was changed.${RST}" >&2
   exit 2
 fi
