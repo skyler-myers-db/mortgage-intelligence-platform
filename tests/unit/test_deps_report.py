@@ -246,7 +246,7 @@ def test_a_floating_major_tag_tracks_its_major_and_a_digest_is_never_looked_up()
     assert rows[("actions/upload-artifact", "v7")]["status"] == "current"
     assert rows[("actions/checkout", "v6")]["status"] == "major"
     assert rows[("postgres-image", "16.15-bookworm")]["status"] == "pinned (digest)"
-    assert rows[("databricks/setup-cli", "v1.7.0")]["status"] == "no release"
+    assert rows[("databricks/setup-cli", "v1.10.0")]["status"] == "no release"
 
 
 # -------------------------------------------------------------------- sanitizer
