@@ -998,8 +998,13 @@ release that resolves cleanly, so this is a pin, not an ignore.
   python tools/requirements_digest.py --write
   ```
 
-  Run first on the unchanged tree, as a control, the three compiles
-  reproduce all three committed files byte for byte. After the floor change,
+  As a control, each file's own header command (the first one without the
+  `--upgrade-package` flags), run on the unchanged tree, reproduces all three
+  committed files byte for byte. The flagged first command on the unchanged
+  tree does not reproduce it: PyPI's latest releases are 1.45.2 and 0.66b2
+  and the old floors admit them, so it writes the same five-line change as
+  the floor change does (the floors make the move binding). After the floor
+  change,
   `uv.lock` differs in exactly five version lines and no provenance line;
   `requirements-dev.lock` is byte-identical (it pins none of the five);
   `requirements-deploy.hashes.txt` differs in the same five blocks (a
@@ -1023,8 +1028,21 @@ release that resolves cleanly, so this is a pin, not an ignore.
   `opentelemetry/trace/propagation/tracecontext.py` alone: values longer
   than 512 characters are rejected before the regular expression runs, and
   the overlapping optional-suffix and trailing-whitespace groups are now
-  alternatives. The SDK also carries a metrics change (a per-view
-  `aggregation_cardinality_limit`, six files under `sdk/metrics`). The rest
+  alternatives. The SDK also carries a metrics change (six files under
+  `sdk/metrics`): it now enforces a default cardinality limit of 2,000
+  attribute sets on every metric stream, with no View or configuration
+  needed, folds the excess into one `otel.metric.overflow=true` point, and
+  takes the limit per view (`aggregation_cardinality_limit`) and per reader
+  (`cardinality_limits`). A default `MeterProvider` with an
+  `InMemoryMetricReader` and 2,005 distinct attribute sets on one counter
+  reports 2,005 points on 1.45.1 and 2,001 on 1.45.2, one of them the
+  overflow point with value 5. Nothing here reaches it: no first-party code
+  builds a `MeterProvider`, and the one installed builder outside
+  OpenTelemetry, mlflow's `tracing/processor/otel_metrics_mixin.py`, does so
+  only when `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` or
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, which nothing in the repository
+  sets (`git grep -P` outside `docs/` finds neither; the
+  `OTEL_EXPORTER_OTLP_` prefix control matches). The rest
   is five version files and the version strings in
   `instrumentation/bootstrap_gen.py`. The wiring in
   `backend/services/observability.py` (`opentelemetry._logs`,
