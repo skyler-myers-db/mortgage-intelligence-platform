@@ -3,6 +3,13 @@
   python -m tools.databricks.app_deployment_lease freeze --app-name N --until <epoch>
   python -m tools.databricks.app_deployment_lease thaw --app-name N --marker-id ID
 
+A client's proof-signing key exists only as its GitHub Environment's secret,
+so for a client install the same ``freeze`` and ``thaw`` below run in CI:
+deploy-dev.yml's ``freeze`` and ``thaw`` phases
+(tools/clients/publisher_freeze.py), which read the key in-process and add an
+exact ``freeze_thaw`` ack to the thaw. The marker, its schema and every reader
+are the same either way.
+
 Cutover step 1 freezes peer-session piecewise deploys. A message to the peers
 is not a control, so the freeze is a marker the emergency recipe's publisher
 (``app_release_source publish``) reads and obeys. Markers live in the lease
@@ -183,6 +190,12 @@ def _digest(document: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def freeze_document_sha256(document: dict[str, Any]) -> str:
+    """The sha256 a thaw binds to (``freeze_sha256``): the signed freeze document, canonical."""
+
+    return _digest(document)
+
+
 def _read_json(workspace: Any, path: str) -> object | None:
     try:
         raw = workspace.workspace.download(path).read()
@@ -265,6 +278,41 @@ def judge_markers(workspace: Any, *, now: float | None = None) -> list[Marker]:
         )
         markers.append(Marker(name, marker_id, app_name, frozen, reason))
     return markers
+
+
+def frozen_documents(
+    workspace: Any, *, app_name: str, now: float | None = None
+) -> list[tuple[str, dict[str, Any]]]:
+    """``app_name``'s markers that verify and read frozen: (marker id, signed freeze document).
+
+    A marker that reads frozen only because it does not verify is left out: no
+    thaw can name it (``thaw`` signs only over a verified marker), and
+    ``judge_markers`` still reports it frozen.
+    """
+
+    registry = _registry()
+    if registry is None:
+        raise FreezeRefused("freeze_unsigned", "the deploy's verify key registry is not configured")
+    app = _app(app_name)
+    found: list[tuple[str, dict[str, Any]]] = []
+    for marker in judge_markers(workspace, now=now):
+        if not marker.frozen or marker.app_name != app:
+            continue
+        try:
+            document = _verified(
+                _read_json(workspace, f"{LEASE_ROOT}/{marker.name}"),
+                keys=_FREEZE_KEYS,
+                registry=registry,
+            )
+        except Exception:  # noqa: BLE001 - frozen because unverifiable: nothing a thaw can name
+            continue
+        if (document["kind"], document["marker_id"], document["app_name"]) == (
+            "freeze",
+            marker.marker_id,
+            app,
+        ):
+            found.append((marker.marker_id, document))
+    return found
 
 
 def _assert_bare_root(workspace: Any, *, lease: Any, holder: str, object_id: str) -> None:
