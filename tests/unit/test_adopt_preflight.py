@@ -687,6 +687,11 @@ def test_the_runbook_makes_the_preflight_a_step_7_precondition_and_quotes_what_t
 ) -> None:
     runbook = _flat(RUNBOOK)
     step = runbook[runbook.index("## Step 6c.") : runbook.index("## Step 7.")]
+    # The CI-signed freeze (#352) is step 6b; this preflight follows it, right before step 7.
+    assert runbook.index("## Step 6. Plan #1") < runbook.index("## Step 6b. Freeze") < runbook.index("## Step 6c.")
+    assert runbook.count("## Step 6b.") == 1 and runbook.count("## Step 6c.") == 1 and "Owner preflight" not in (
+        runbook[runbook.index("## Step 6b.") : runbook.index("## Step 6c.")]
+    )
     assert COMMAND in (REPO / RUNBOOK).read_text(encoding="utf-8").splitlines()
     assert (REPO / "tools" / "databricks" / "adopt_preflight.py").read_text(encoding="utf-8").count(COMMAND) == 1
 
@@ -718,6 +723,7 @@ def test_the_runbook_makes_the_preflight_a_step_7_precondition_and_quotes_what_t
     assert "step 3b is done, step 6c's preflight is clear" in blockers
     glance = runbook[runbook.index("## Steps at a glance") : runbook.index("## Step 1. Freeze and snapshot")]
     assert "| 6c | Owner preflight" in glance and "step 6's two answers, step 3b and step 6c (it starts the 14-day sequence)" in glance
+    assert glance.index("| 6 | Plan #1") < glance.index("| 6b | Freeze") < glance.index("| 6c | Owner preflight") < glance.index("| 7 |")
     step_7 = runbook[runbook.index("## Step 7. Unity Catalog ownership handover") : runbook.index("## Step 8.")]
     preconditions = step_7[: step_7.index("**The rollback-scope check (read-only).**")]
     assert "- Step 6c's preflight ends `verdict: clear`, and prints the profile ack plan #1 printed." in preconditions

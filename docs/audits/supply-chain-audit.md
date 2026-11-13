@@ -223,12 +223,19 @@ a batch lands, check each of these:
   dated holds and waivers, and the workflow tool pins for the current
   `main`; a batch starts from it. The holds themselves live in
   `tools/dependency_holds.json` (see the W5e addendum below).
-- **react-router `UNSAFE_DataRouterContext`.** `UnsavedChangesGuard` reads
-  this unstable export to detect a data router. It is pinned by
+- **react-router `UNSAFE_DataRouterContext`.** Three readers depend on this
+  unstable export: `UnsavedChangesGuard` reads it to detect a data router,
+  `hooks/useRoutePending` subscribes to its router's location, and
+  `hooks/useLiveSearchParams` reads that location at event time so a Lead
+  Queue column write builds on a write still committing. The last one also
+  relies on a behaviour: with no loader on the route, `navigate()` moves
+  `router.state.location` before it returns, and React commits it later in a
+  transition. All of it is pinned by
   `frontend/src/lib/dependencyContracts.test.ts`, together with
   `createBrowserRouter`, `useBlocker` and `react-router/dom`'s
-  `RouterProvider`. A red test there means the guard needs a new detection
-  path before the bump can land.
+  `RouterProvider`. A red test there means the reader it names needs a new
+  path before the bump can land; a red timing test means a quick second
+  column write can drop the first again.
 - **React Compiler compatibility.** A React, compiler or
   `@vitejs/plugin-react` bump can change what the compiler memoizes, and a
   bailout is silent. Run the whole vitest suite (`npm --prefix frontend run

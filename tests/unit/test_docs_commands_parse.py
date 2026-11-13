@@ -21,7 +21,8 @@ is checked against the real thing it names, offline:
 * ``gh workflow run <workflow> ...``: the workflow's ``workflow_dispatch``
   inputs, choices and booleans, and for ``deploy-dev.yml`` the dispatch
   preflight's own rules (the break-glass, the profile ack on a mutating
-  phase, ``operation_acks`` through ``dispatch_acks.operation_exports``, the
+  phase and on the two marker phases, ``freeze`` and ``thaw``,
+  ``operation_acks`` through ``dispatch_acks.operation_exports``, the
   release-only expected deployment).
 * ``gh variable set`` and ``gh secret set``: an environment-scoped write of a
   profile field of the right class, a secret never on the command line.
@@ -402,7 +403,9 @@ def _check_gh_workflow_run(argv: list[str]) -> None:
     if workflow == "deploy-dev.yml":
         assert fields.get("acknowledge_single_maintainer_break_glass") == "true", "or the run ends in refuse-unacknowledged"
         phase = fields.get("phase", inputs["phase"]["default"])
-        if phase in dispatch_acks.MUTATING_PHASES:
+        # The preflight's own rule (Verdict.mutating): the deploy.sh phases that mutate, and the
+        # two marker phases, whose step writes the freeze marker (wave 7c).
+        if phase in dispatch_acks.MUTATING_PHASES | dispatch_acks.MARKER_PHASES:
             assert fields.get("owner_attestation"), f"phase {phase} needs the profile ack (owner_attestation)"
         dispatch_acks.operation_exports(fields.get("operation_acks", ""), phase)
         if fields.get("expected_active_deployment_sha256"):
@@ -595,6 +598,17 @@ def test_the_parse_check_refuses_a_flag_the_tool_lacks(private_dir: Path, monkey
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f operation_acks=zyrplax=<sha256> -f acknowledge_single_maintainer_break_glass=true",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f owner_attestation=<profile-ack> -f expected_active_deployment_sha256=<sha256> -f acknowledge_single_maintainer_break_glass=true",
         "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f acknowledge_single_maintainer_break_glass=true",
+        # The marker phases (wave 7c): each needs the profile ack; freeze_thaw rides a thaw only,
+        # and no deploy.sh ack rides either.
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=freeze -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=thaw -f operation_acks=freeze_thaw=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=freeze -f owner_attestation=<profile-ack> -f operation_acks=freeze_thaw=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks=freeze_thaw=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f operation_acks=freeze_thaw=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=thaw -f owner_attestation=<profile-ack> -f operation_acks=metastore_app_grants=<sha256> -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=thaw -f owner_attestation=<profile-ack> -f operation_acks=freeze_thaw=yes -f acknowledge_single_maintainer_break_glass=true",
+        "gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=unfreeze -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true",
+        "./scripts/deploy.sh -t client --phase freeze --dry-run",
         "gh secret set MIP_CLIENT --env <client>-validate",
         "databricks apps deploy <app-name> -p <owner-profile>",
         # The experiment rename (cutover step 3b): the declared name or the legacy shape, by id, as the owner.

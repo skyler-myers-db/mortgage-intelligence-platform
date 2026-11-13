@@ -265,7 +265,7 @@ def test_the_sequence_waits_for_the_rename_and_says_what_a_rollback_leaves() -> 
     assert "Step 1's snapshot (2026-11-12) predicted" in blockers and "with no bundle plan run" in blockers
     assert "That is the install's own state, not a code gap" in blockers
     assert "rollback-scope check is clean, step 3b is done" in blockers
-    walk = _section(runbook, "**10B walked with", "Two smaller gaps are noted")
+    walk = _section(runbook, "**10B walked with", "One smaller gap is noted")
     assert "a legacy object whose live name is not the bundle's (`renamed`: the MLflow experiment, until step 3b)" in walk
     state = _section(runbook, "## The state this runbook starts from", "## Blockers on main")
     assert "**Step 1's read-only snapshot is taken** (an agent, 2026-11-12)." in state

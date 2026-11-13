@@ -130,7 +130,7 @@ def test_the_runbooks_step_6_lists_every_verdict_env_names_prints_and_only_holds
     assert measured == "no_deployment" and "parity" not in message and measured not in ap._CUTOVER_STOP
 
 
-def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_names_the_two_follow_ups() -> None:
+def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_names_the_follow_up() -> None:
     runbook = _flat("docs/clients/first-client-cutover.md")
     blockers = runbook[runbook.index("## Blockers on main") : runbook.index("## Decisions taken")]
     assert "**What still blocks the cutover: no known code gap.**" in blockers
@@ -140,8 +140,13 @@ def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_names_th
     assert "**No known code gap is left on 10B's path:**" in blockers
     assert "**12 walked with #343 to #348 and B3 (#349) all on `main`**" in blockers
     assert "**No known code gap is left on step 12's path.**" in blockers
-    assert "**Two follow-ups stop nothing:** an owner break-glass re-pin over an open quiesce window, and a CI-signed freeze marker" in blockers
-    assert "Two smaller gaps are noted at their steps, and neither stops the cutover" in blockers
+    # Premise change (wave 7c): the CI-signed freeze marker is built, so one follow-up is left.
+    assert "**One follow-up stops nothing:** an owner break-glass re-pin over an open quiesce window" in blockers
+    assert "The CI-signed freeze and thaw marker is on `main` (wave 7c): steps 6b and 13." in blockers
+    assert "One smaller gap is noted at its step, and it does not stop the cutover" in blockers
+    assert "so CI signs it (`phase=freeze`, step 6b) and its thaw (`phase=thaw`, the end of step 13)" in blockers
+    for stale in ("a CI-run freeze is a follow-up", "a freeze and thaw marker that CI signs", "and a CI-signed freeze marker ("):
+        assert stale not in runbook, stale
     assert "No step from 6 on has run live." in blockers
     # Nothing still calls B3 open, in the runbook or beside it.
     onboarding = _flat("docs/clients/onboarding.md")

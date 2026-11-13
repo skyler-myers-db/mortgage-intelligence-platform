@@ -34,14 +34,15 @@ function hideValue(view: LeadTableView, hidden: LeadTableHiddenColumns): string 
 export function LeadQueueHideSlot({
   view,
   hidden,
-  onChange,
+  onPick,
 }: {
   view: LeadTableView;
   hidden: LeadTableHiddenColumns;
-  onChange: (next: LeadTableHideToken[]) => void;
+  /** One HIDE pick: the token toggled, or null for "No columns" (LeadTableHideControl). */
+  onPick: (pick: LeadTableHideToken | null) => void;
 }) {
   const control = useLazyModule(HIDE_CONTROL, true).module;
-  if (control) return <control.LeadTableHideControl view={view} hidden={hidden} onChange={onChange} />;
+  if (control) return <control.LeadTableHideControl view={view} hidden={hidden} onPick={onPick} />;
   return (
     <span className="filter-root" aria-hidden="true" data-testid="lead-table-hide-placeholder">
       <span className={hidden.size > 0 ? 'filter is-active' : 'filter'}>
