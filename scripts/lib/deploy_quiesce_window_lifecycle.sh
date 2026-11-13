@@ -684,20 +684,18 @@ compensate_quiesce_window_state() {
 # ---------------------------------------------------------------------------
 
 # Step 0a, under this run's lease and before the signed-blue proof: an earlier
-# window whose runner died and whose dead-man restarted blue is re-pinned with
-# the window's own proofs (repin --from-deadman). The marker is a pointer,
-# never proof: the tool re-proves the start against the signed journal and the
-# App, re-signs the record under this lease and closes the journal. The live
-# bindings it may record are the record's or exactly this run's bundle payload.
-# An owner's raw start over an open window (status --recovery: owner_start) is
+# window whose runner died is recovered first. Its dead-man's restart of blue
+# is re-pinned with the window's own proofs (repin --from-deadman): the marker
+# is a pointer, never proof, so the tool re-proves the start against the signed
+# journal and the App, re-signs the record under this lease and closes the
+# journal (the bindings it may record are the record's or exactly this run's
+# bundle payload). An owner's raw start (status --recovery: owner_start) is
 # re-pinned the same way by repin --from-owner-start, only with its exact
 # owner_start_repin digest ack (MIP_ACK_OWNER_START_REPIN; the tool recomputes
-# it). It runs BEFORE step 0a arms the fail-closed stop and quiesces treatment,
-# so a refusal exits 2 with the App as it was left, the journal open and the
-# lease released: a transient failure is retried by the next run, and a re-pin
-# already signed is resumed. A WR1 window restarted on the dead runner's
-# bindings re-pins only from that same commit, so re-run that commit first.
-# Any other open journal was refused by the pre-lease plan before the lease.
+# it). Both run BEFORE step 0a arms the fail-closed stop and quiesces
+# treatment, so a refusal exits 2 with the App as it was left, the journal open
+# and the lease released, and a re-pin already signed is resumed. A WR1 window
+# re-pins only from the dead run's own commit: re-run that commit first.
 recover_deadman_quiesce_window() {
   local env_file payload source_flag=--from-deadman
   local -a applied_bindings=()
@@ -713,11 +711,16 @@ recover_deadman_quiesce_window() {
   # shellcheck disable=SC1090
   . "$env_file"
   rm -f "$env_file"
-  # window_starting too: a runner that died between its start intent and the
-  # start leaves it, and its dead-man restarts that window as well.
-  case "${MIP_QUIESCE_WINDOW_JOURNAL_STATE}:${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}" in
-    window_open:deadman_restarted|window_starting:deadman_restarted) ;;
-    *) [[ "${MIP_QUIESCE_WINDOW_RECOVERY:-}" == "owner_start" ]] || return 0; source_flag=--from-owner-start ;;
+  # window_starting too: a runner that died after its start intent leaves it.
+  # What passed the pre-lease plan and then moved still refuses HERE, never
+  # after the arm: a restart the App no longer serves keeps the dead-man's
+  # tool, and an ack whose candidate is gone still reaches the owner-start's.
+  case "${MIP_QUIESCE_WINDOW_JOURNAL_STATE}:${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}:${MIP_QUIESCE_WINDOW_RECOVERY:-}:${MIP_ACK_OWNER_START_REPIN:+acked}" in
+    absent:*|closed:*) return 0 ;;
+    window_open:deadman_restarted:*|window_starting:deadman_restarted:*) ;;
+    *:owner_start:*|*:acked) source_flag=--from-owner-start ;;
+    window_open:deadman_superseded:*|window_starting:deadman_superseded:*) ;;
+    *) return 0 ;; # any other open journal was refused by the pre-lease plan
   esac
   payload="$(mktemp -t mip-quiesce-window-recover-bindings.XXXXXX.json)"
   chmod 600 "$payload"

@@ -327,8 +327,9 @@ def test_the_next_run_re_pins_an_owner_start_under_its_own_lease(
         ("closed", "deadman_restarted"),
         ("window_open", "absent"),
         ("window_open", "deadman_left_stopped"),
-        ("window_open", "deadman_superseded"),
+        ("window_open", "deadman_skipped"),
         ("window_started", "deadman_restarted"),
+        ("window_started", "deadman_superseded"),
         ("window_refused", "deadman_restarted"),
     ),
 )
@@ -346,17 +347,97 @@ def test_an_open_window_with_no_owner_start_candidate_is_left_alone(
     assert not _has(calls, "rollback repin")
 
 
-def test_a_dead_man_restart_keeps_its_own_flag_whatever_the_recovery_reads(tmp_path: Path) -> None:
+@pytest.mark.parametrize("ack", ("", "a" * 64), ids=("no-ack", "a-stray-ack"))
+def test_a_dead_man_restart_keeps_its_own_flag_whatever_the_recovery_reads(tmp_path: Path, ack: str) -> None:
     result, calls = _run(
         tmp_path,
         "recover_deadman_quiesce_window\necho recovered\n",
         JOURNAL="window_open",
         DEADMAN_STATE="deadman_restarted",
         RECOVERY="deadman",
+        MIP_ACK_OWNER_START_REPIN=ack,
     )
     assert result.returncode == 0, result.stderr
     repin = [call for call in calls if "rollback repin" in call]
     assert len(repin) == 1 and "repin --from-deadman" in repin[0] and "--from-owner-start" not in repin[0]
+
+
+# What passed the pre-lease plan and then moved, before step 0a read it again: the run must
+# refuse HERE, before the fail-closed arm. Returning 0 would run step 0a over an open journal,
+# and its exit would stop whatever the App serves.
+
+
+@pytest.mark.parametrize("journal", ("window_open", "window_starting"))
+@pytest.mark.parametrize("recovery", ("none", ""))
+def test_a_dead_man_restart_the_app_no_longer_serves_still_reaches_the_dead_mans_tool(
+    tmp_path: Path, journal: str, recovery: str
+) -> None:
+    # On main this state passed the pre-lease plan and was refused under every lease by
+    # repin --from-deadman. The plan refuses it before the lease now (deadman_superseded);
+    # one that turns superseded between that plan and step 0a keeps the same tool, which
+    # refuses it ("the App no longer serves the dead-man's start"), never a silent pass.
+    env = {"JOURNAL": journal, "DEADMAN_STATE": "deadman_superseded", "RECOVERY": recovery}
+    result, calls = _run(tmp_path, "recover_deadman_quiesce_window\necho recovered\n", **env)
+    assert result.returncode == 0, result.stderr
+    repin = [call for call in calls if "rollback repin" in call]
+    assert len(repin) == 1 and "repin --from-deadman" in repin[0] and "--from-owner-start" not in repin[0]
+
+    refused, calls = _run(tmp_path, "recover_deadman_quiesce_window\necho recovered\n", **env, REPIN_RC="2")
+    assert refused.returncode == 2 and "recovered" not in refused.stdout
+    assert "nothing else ran and the App is left as it was, the journal open" in refused.stderr
+    assert not any(_has(calls, stop) for stop in ("stop_app_fail_closed", "apps stop", "quiesce_window start"))
+
+
+@pytest.mark.parametrize(
+    ("journal", "marker"),
+    (
+        ("window_open", "absent"),
+        ("window_open", "deadman_skipped"),
+        ("window_open", "deadman_superseded"),
+        ("window_starting", "absent"),
+        ("window_started", "absent"),
+        ("window_proven", "absent"),
+        ("window_refused", "absent"),
+    ),
+)
+@pytest.mark.parametrize("repin_rc", ("1", "2"))
+def test_an_ack_whose_candidate_is_gone_is_refused_by_its_own_tool_before_the_arm(
+    tmp_path: Path, journal: str, marker: str, repin_rc: str
+) -> None:
+    # The release was dispatched to re-pin an owner start (the ack is in its environment),
+    # and the candidate the pre-lease plan matched is no longer one (the App went down, a
+    # second start landed). The owner-start tool classifies again and refuses with its code;
+    # the real step-0a branch under the real EXIT trap then exits 2 with nothing stopped.
+    result, calls = _run(
+        tmp_path,
+        "APP_FAIL_CLOSED_ARMED=0; APP_UPGRADE_STATE=unverified_existing; LAKEBASE_RUNTIME_ACCESS_PROVEN=0\n"
+        "TREATMENT_RUNTIME_QUIESCED=0\n"
+        "trap stop_app_after_failed_deploy EXIT\n" + _step_0a_signed_blue_branch() + "echo past-step-0a\n",
+        JOURNAL=journal,
+        DEADMAN_STATE=marker,
+        RECOVERY="none",
+        MIP_ACK_OWNER_START_REPIN="a" * 64,
+        REPIN_RC=repin_rc,
+    )
+    assert result.returncode == 2 and "past-step-0a" not in result.stdout
+    repin = [call for call in calls if "rollback repin" in call]
+    assert len(repin) == 1 and " --from-owner-start " in repin[0] and "--from-deadman" not in repin[0]
+    assert "a" * 64 not in repin[0], "the ack is the tool's own environment read, never an argument"
+    assert not any(_has(calls, stop) for stop in ("stop_app_fail_closed", "apps stop", "legacy-stop", "legacy-restore"))
+    assert not _has(calls, "converge_campaign_treatment_access"), "nothing ran after the refusal"
+
+
+@pytest.mark.parametrize("journal", ("absent", "closed"))
+def test_a_stray_ack_with_no_open_window_changes_nothing(tmp_path: Path, journal: str) -> None:
+    result, calls = _run(
+        tmp_path,
+        "recover_deadman_quiesce_window\necho recovered\n",
+        JOURNAL=journal,
+        RECOVERY="none",
+        MIP_ACK_OWNER_START_REPIN="a" * 64,
+    )
+    assert result.returncode == 0 and "recovered" in result.stdout
+    assert not _has(calls, "rollback repin")
 
 
 @pytest.mark.parametrize("repin_rc", ("1", "2"))
