@@ -502,6 +502,11 @@ def _default_source_moved(estate: Estate) -> None:
     estate.apps.default_source = OTHER_SOURCE
 
 
+def _default_source_unread(estate: Estate) -> None:
+    # A GET without a default source: the start's own source still has to be blue's.
+    estate.apps.default_source = ""
+
+
 @pytest.mark.parametrize(
     ("behaviour", "after"),
     (
@@ -509,8 +514,9 @@ def _default_source_moved(estate: Estate) -> None:
         (StartBehaviour(state="FAILED"), None),
         (StartBehaviour(source=OTHER_SOURCE), None),
         (StartBehaviour(), _default_source_moved),
+        (StartBehaviour(source=OTHER_SOURCE), _default_source_unread),
     ),
-    ids=("not-newest", "not-succeeded", "another-source", "default-source-moved"),
+    ids=("not-newest", "not-succeeded", "another-source", "default-source-moved", "another-source-default-unread"),
 )
 def test_a_new_deployment_that_is_not_the_current_start_of_blues_folder_is_refused(
     behaviour: StartBehaviour, after: Any
