@@ -246,6 +246,8 @@ def _drive(
     gha: bool = False,
     publish_rc: int = 0,
     writes_report: bool = True,
+    phase: str = "adopt",
+    run_id: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     repo = tmp_path / "repo"
     repo.mkdir(parents=True, exist_ok=True)
@@ -262,18 +264,19 @@ def _drive(
         "BUNDLE_PLAN_REPORT_JSON=''\nBUNDLE_PLAN_PUBLIC_JSON=''\nBUNDLE_PLAN_REPORT_AFTER_EDIT=0\n"
         + function("publish_plan_report")
         + function(name)
-        + f"{name} adopt\n"
+        + f"{name} {phase}\n"
     )
     env = {
         "MIP_ADOPT_PLAN_ACK": ack,
         "_GRANTS_APP_NAME": "synthetic-app",
         "MIP_APP_DEPLOYMENT_LEASE_ID": "lease-1",
         "SOURCE_GIT_SHA": "0" * 40,
-        "DEPLOY_PHASE": "adopt",
+        "DEPLOY_PHASE": phase,
         "CLIENT_DEPLOYER": "00000000-0000-4000-8000-00000000d0e1",
         "CLIENT_KEY": "client-one",
         "GITHUB_ACTIONS": "true" if gha else "",
-        "GITHUB_RUN_ID": "4242" if gha else "",
+        # The run id alone (run_id, without gha) is not GitHub Actions: the publish guard needs both.
+        "GITHUB_RUN_ID": ("4242" if gha else "") if run_id is None else run_id,
         "GITHUB_RUN_ATTEMPT": "2",
     }
     result = drive(repo, shell, dry_run=dry_run, env=env, epilogue="echo reached-the-lease\n")
@@ -346,14 +349,19 @@ def _publish_argv(report: str) -> list[str]:
     ]  # fmt: skip
 
 
+# Both phases publish: unadopt is 10B's recovery after an exit 3, and its report names what it unbound.
+@pytest.mark.parametrize("phase", ("adopt", "unadopt"))
 @pytest.mark.parametrize(("ack", "tool_rc", "rc"), (("", 2, 2), (ACK, 2, 2), ("", 0, 0)), ids=("refused", "refused-acked", "no-ack"))
-def test_a_run_that_ends_at_the_plan_publishes_its_report_once(tmp_path: Path, ack: str, tool_rc: int, rc: int) -> None:
-    result, recorded = _drive(tmp_path, "run_adopt_phase_plan", ack=ack, tool_rc=tool_rc, gha=True)
+def test_a_run_that_ends_at_the_plan_publishes_its_report_once(
+    tmp_path: Path, ack: str, tool_rc: int, rc: int, phase: str
+) -> None:
+    result, recorded = _drive(tmp_path, "run_adopt_phase_plan", ack=ack, tool_rc=tool_rc, gha=True, phase=phase)
 
     assert result.returncode == rc, result.stdout + result.stderr
     (published,) = _published(tmp_path)
     report = _argv(recorded)[_argv(recorded).index("--report-out") + 1]
-    assert published == {"argv": _publish_argv(report), "full": '{"phase": "adopt"}'}
+    assert _argv(recorded)[:3] == ["plan", "--phase", phase]
+    assert published == {"argv": _publish_argv(report), "full": f'{{"phase": "{phase}"}}'}
     assert "reached-the-lease" not in result.stdout
     if tool_rc == 0:
         assert result.stdout.index("plan_report_publish publish") < result.stdout.index("adopt-live-planned"), (
@@ -368,17 +376,22 @@ def test_an_acked_plan_that_passes_leaves_the_publish_to_the_apply(tmp_path: Pat
     assert _published(tmp_path) == []
 
 
+@pytest.mark.parametrize("phase", ("adopt", "unadopt"))
 @pytest.mark.parametrize(("tool_rc", "rc"), ((0, 0), (2, 2), (3, 3)))
 @pytest.mark.parametrize("publish_rc", (0, 2))
 def test_the_apply_publishes_its_report_and_a_failed_publish_never_changes_the_verdict(
-    tmp_path: Path, tool_rc: int, rc: int, publish_rc: int
+    tmp_path: Path, tool_rc: int, rc: int, publish_rc: int, phase: str
 ) -> None:
-    result, recorded = _drive(tmp_path, "run_adopt_phase_apply", ack=ACK, tool_rc=tool_rc, gha=True, publish_rc=publish_rc)
+    result, recorded = _drive(
+        tmp_path, "run_adopt_phase_apply", ack=ACK, tool_rc=tool_rc, gha=True, publish_rc=publish_rc, phase=phase
+    )
 
     assert result.returncode == rc, result.stdout + result.stderr
     (published,) = _published(tmp_path)
+    assert _argv(recorded)[:3] == ["apply", "--phase", phase]
     assert published["argv"] == _publish_argv(_argv(recorded)[_argv(recorded).index("--report-out") + 1])
-    failed = "the private adopt report could not be written to the deployer's plan-reports folder"
+    assert published["full"] == f'{{"phase": "{phase}"}}'
+    failed = f"the private {phase} report could not be written to the deployer's plan-reports folder"
     assert (failed in result.stderr) == (publish_rc != 0)
 
 
@@ -392,10 +405,13 @@ def test_a_failed_publish_of_a_plan_that_ended_the_run_refuses(tmp_path: Path) -
 @pytest.mark.parametrize("name", ("run_adopt_phase_plan", "run_adopt_phase_apply"))
 def test_outside_github_actions_or_without_a_report_nothing_is_published(tmp_path: Path, name: str) -> None:
     local, _recorded = _drive(tmp_path / "local", name, ack=ACK, tool_rc=2)
+    # A run id without GITHUB_ACTIONS=true is not a GitHub Actions run: the sink stays CI-only.
+    run_id_only, _recorded = _drive(tmp_path / "run-id-only", name, ack=ACK, tool_rc=2, run_id="4242")
     empty, _recorded = _drive(tmp_path / "empty", name, ack=ACK, tool_rc=2, gha=True, writes_report=False)
 
-    assert local.returncode == empty.returncode == 2
-    assert _published(tmp_path / "local") == [] and _published(tmp_path / "empty") == []
+    assert local.returncode == run_id_only.returncode == empty.returncode == 2
+    assert _published(tmp_path / "local") == [] and _published(tmp_path / "run-id-only") == []
+    assert _published(tmp_path / "empty") == []
     assert "no adopt report to publish: the tool wrote none" in empty.stdout
 
 
