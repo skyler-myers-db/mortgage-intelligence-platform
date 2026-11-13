@@ -275,6 +275,10 @@ class FakeBundleCli:
     acknowledged: str | None = None
     authorities: list[Authority] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Rewrites the plan text from the ``malform_from``-th plan call on (1-based),
+    # as a CLI whose JSON the parser does not know would print it.
+    malform: Callable[[str], str] | None = None
+    malform_from: int = 1
 
     def _key(self, key: str) -> str:
         matches = [resource for resource in declared() if resource.split(".", 1)[1] == key]
@@ -316,7 +320,10 @@ class FakeBundleCli:
         document = self.estate.state()
         lineage = str((document or {}).get("lineage") or "")
         serial = int((document or {}).get("serial") or 0)
-        return parse_plan(fx.dumps(fx.document(entries, lineage=lineage, serial=serial)))
+        text = fx.dumps(fx.document(entries, lineage=lineage, serial=serial))
+        if self.malform is not None and self.calls.count(("plan",)) >= self.malform_from:
+            text = self.malform(text)
+        return parse_plan(text)
 
     def _edit(self, resource: str, live_id: str | None) -> None:
         document = copy.deepcopy(self.estate.state()) or {"state_version": 2, "lineage": "deployer-lineage", "serial": 0, "state": {}}

@@ -40,6 +40,16 @@ freeze) is M2-PR7's; this tool only binds. Exit codes: 0 done (or planned),
 report names what the state may still bind: run ``--phase unadopt``, whose
 live checks, like adopt's, accept that half-bound state).
 
+A plan the parser refuses (``PlanShapeError``) prints only ``malformed_plan``,
+the symbolic resource and the field class: the repository's run logs are
+public, and the parser's message can name a change path that carries a remote
+map key. The message and the document's value-free skeleton go to the private
+report (``malformed_plan``), as the CLI's own output does on a failed call
+(``cli_errors``). Before the binds that ends the run, exit 2; after them it is
+``bind_failed`` with the undo. Under GitHub Actions the deploy publishes the
+report create-only to the deployer's plan-reports folder
+(scripts/lib/deploy_plan_report_lifecycle.sh).
+
 Every bundle_env call (each bind and each of the undo's unbinds included)
 re-resolves that title match: the space list, its permissions and the
 deploying identity. A direct CAN_MANAGE holder that changes mid-run makes the
@@ -70,11 +80,15 @@ if str(REPO) not in sys.path:
 from tools.databricks import adopt_legacy_map as legacy_map  # noqa: E402
 from tools.databricks import bundle_env_adopt, bundle_plan_gate  # noqa: E402
 from tools.databricks.bundle_plan_adopt import POSITION, AdoptExpectation  # noqa: E402
-from tools.databricks.bundle_plan_shape import BundlePlan, parse_plan  # noqa: E402
+from tools.databricks.bundle_plan_shape import BundlePlan, PlanShapeError, parse_plan  # noqa: E402
 from tools.databricks.bundle_state import STATE_FILE, bound_id, read_state, state_path  # noqa: E402
 
 APP_KEY = "mip_app"
 _PREFIX = "[mip-adopt]"
+MALFORMED_REMEDY = (
+    f"{bundle_plan_gate.REMEDIES['malformed_plan']}; the parser's message and the plan's "
+    "value-free skeleton are in the private report (malformed_plan)"
+)
 # Never inherited by the bundle CLI: the deploy's signing authorities.
 _PRIVATE_ENV = ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY")
 
@@ -87,12 +101,19 @@ class AdoptRefused(RuntimeError):
     """An apply refused; ``code`` is a reviewed refusal code, ``result`` what it got to."""
 
     def __init__(
-        self, code: str, message: str, *, inverse_proven: bool = True, result: ApplyResult | None = None
+        self,
+        code: str,
+        message: str,
+        *,
+        inverse_proven: bool = True,
+        result: ApplyResult | None = None,
+        malformed: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.inverse_proven = inverse_proven
         self.result = result
+        self.malformed = malformed  # a post-bind PlanShapeError's private record
 
 
 @dataclass(frozen=True)
@@ -320,7 +341,12 @@ def apply(
         proven = _inverse(attempted, cli, authority, workspace, inputs, lease)
         code = exc.code if isinstance(exc, AdoptRefused) else "bind_failed"
         message = str(exc) if isinstance(exc, AdoptRefused) else f"{type(exc).__name__} during the binds"
-        raise AdoptRefused(code, message, inverse_proven=proven, result=result) from exc
+        malformed = None
+        if isinstance(exc, PlanShapeError):
+            # Public: the field class only; the message and skeleton are private.
+            message += f" (malformed_plan {exc.public})"
+            malformed = exc.private()
+        raise AdoptRefused(code, message, inverse_proven=proven, result=result, malformed=malformed) from exc
     return result
 
 
@@ -423,6 +449,8 @@ def main(
             if partial.gate is not None:
                 report["post_bind_gate"] = partial.gate.full()
                 print(f"{_PREFIX} post-bind plan gate: {json.dumps(partial.gate.public_summary(), sort_keys=True)}")
+        if refusal.malformed is not None:
+            report["malformed_plan"] = refusal.malformed
         print(f"{_PREFIX} REFUSED {refusal.code}: {refusal}", file=sys.stderr)
         if not refusal.inverse_proven:
             again = " again" if args.phase == "unadopt" else ""
@@ -438,6 +466,11 @@ def main(
         print(f"{_PREFIX} client profile refused:", file=sys.stderr)
         for line in refusal.lines:
             print(f"  - {line}", file=sys.stderr)
+        return 2
+    except PlanShapeError as exc:
+        # Before any edit (the plan, or apply's recompute): nothing changed.
+        report["malformed_plan"] = exc.private()
+        print(f"{_PREFIX} REFUSED malformed_plan {exc.public}: {MALFORMED_REMEDY}", file=sys.stderr)
         return 2
     except (BundleCliError, BundleStateError, ValueError) as exc:
         print(f"{_PREFIX} REFUSED: {exc if not isinstance(exc, ValueError) else type(exc).__name__}", file=sys.stderr)

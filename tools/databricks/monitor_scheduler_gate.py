@@ -155,7 +155,8 @@ def check(plan_text: str, *, workspace_factory: Callable[[], Any]) -> list[str]:
     try:
         plan = parse_plan(plan_text)
     except PlanShapeError as exc:
-        return [f"the bundle plan could not be read ({exc})"]
+        # Public: the field class only; the parser's message can name a change path.
+        return [f"the bundle plan could not be read (malformed_plan {exc.public})"]
     reasons = [f"the plan enables it: {reason}" for reason in planned_refusals(plan)]
     try:
         reasons += live_refusals(workspace_factory(), bound_id=_bound_id(plan_text))
