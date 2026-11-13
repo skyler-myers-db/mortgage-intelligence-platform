@@ -131,6 +131,7 @@ capture_core_last_good_app() {
   # shellcheck disable=SC1090
   . "$APP_ROLLBACK_BINDING_ENV"
   set +a
+  mask_deployment_ids
 }
 
 if [[ "$DRY_RUN" -eq 1 ]]; then

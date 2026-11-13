@@ -10,6 +10,8 @@ classifies every failure: always a refusal, never a pass.
 
 from __future__ import annotations
 
+import contextlib
+import io
 from typing import Any
 
 import pytest
@@ -141,6 +143,46 @@ def test_an_active_deployment_other_than_the_record_is_left_to_the_step_0a_resto
         "not the record's deployment-blue, so step 0a restores the record's deployment "
         "over it before any other mutation",
     )
+
+
+def _log_of_the_notes(monkeypatch: pytest.MonkeyPatch, estate: dict[str, Any]) -> list[str]:
+    """The verdict's masks and its notes as the probe prints them, on one stream."""
+
+    log = io.StringIO()
+    with contextlib.redirect_stderr(log), contextlib.redirect_stdout(log):
+        verdict = _verdict(monkeypatch, _Script(signed=signed_contract(estate["record"])), estate=estate)
+        assert verdict.refusals == ()
+        for note in verdict.notes:  # deploy_prestop_probes.main
+            print(f"[mip-prestop] {note}")
+    return log.getvalue().splitlines()
+
+
+@pytest.mark.parametrize("active", ["deployment-blue", "deployment-emergency"])
+def test_the_deployments_a_note_names_are_runner_masks_before_the_note_is_printed(
+    monkeypatch: pytest.MonkeyPatch, active: str
+) -> None:
+    # The agentic tier's notes name the active deployment and the record's, and the probe
+    # prints them on a job log that is public, before the lease and every other mask.
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    estate = clean_estate()
+    estate["app"]["active_deployment"] = active
+
+    lines = _log_of_the_notes(monkeypatch, estate)
+
+    for deployment in {active, "deployment-blue"}:
+        named = [line for line in lines if deployment in line]
+        assert named[0] == f"::add-mask::{deployment}", lines
+        assert named[-1].startswith("[mip-prestop] signed last-good record verified"), lines
+
+
+def test_the_notes_register_no_mask_outside_github_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    estate = clean_estate()
+    estate["app"]["active_deployment"] = "deployment-emergency"
+
+    lines = _log_of_the_notes(monkeypatch, estate)
+
+    assert len(lines) == 1 and lines[0].startswith("[mip-prestop] signed last-good record verified")
 
 
 def test_a_pending_deployment_is_drift(monkeypatch: pytest.MonkeyPatch) -> None:

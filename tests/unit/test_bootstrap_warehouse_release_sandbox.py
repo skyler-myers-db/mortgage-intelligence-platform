@@ -20,7 +20,17 @@ client's workspace. The run must:
   rebind included, gets that one, and the bootstrap id is never used again;
 * register that warehouse as a runner mask in the very parse that reads it
   from the summary, before any command is handed it: a first install's
-  preflight found no bundle warehouse to mask, and the log is public.
+  preflight found no bundle warehouse to mask, and the log is public;
+* register the new App's resource id and its service principal's application
+  and SCIM ids as runner masks where step 4 resolves them, and the captured
+  deployment's id where the capture hands it over, each before any command is
+  handed one: the platform mints them, so no client profile holds them
+  (tests/unit/test_runtime_id_runner_masks.py drives each place on one stream);
+* keep what the CLI renders when ``apps start`` and ``apps deploy`` return off
+  the log altogether (the App with its service principal's name and OAuth
+  client ids; the created deployment with its id, source path and creator),
+  and register the created deployment's id as a runner mask right there, before
+  the capture names it (tests/unit/test_cli_result_private.py drives the helper).
 """
 
 from __future__ import annotations
@@ -31,13 +41,18 @@ import pytest
 
 from tests.fixtures.client_profiles import core_tier_profile
 from tests.fixtures.release_sandbox import Release, core_client_ids, first_install_estate, release
-from tests.fixtures.release_sandbox_python import LEASE_ID
+from tests.fixtures.release_sandbox_cli import DEPLOY_RESULT_ONLY, START_RESULT_ONLY
+from tests.fixtures.release_sandbox_python import APP, CAPTURED_DEPLOYMENT, LEASE_ID
 from tests.fixtures.release_sandbox_python import WAREHOUSE as BUNDLE_WAREHOUSE
 
 BOOT = "b0b1b2b3b4b5b6b7"
 GENIE = "tools.databricks.provision_genie_space"
 TREATMENT = "tools.databricks.ensure_campaign_treatment_table"
 APPLY = ["tools.databricks.bundle_env", "deploy"]
+# The App the first install creates: its resource id and its service principal's two ids.
+APP_IDS = (APP["id"], APP["service_principal_client_id"], APP["service_principal_id"])
+# mask_runtime_ids (scripts/deploy.sh): the values go in on stdin, never in the call.
+MASK = "emit_mask(sys.stdin.read())"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -141,3 +156,84 @@ def test_the_bundles_own_warehouse_is_masked_at_the_switch_before_any_command_is
     assert printed and printed[0] > applied, "its first print is a command echo after the switch"
     echoes = [ANSI.sub("", out[index]) for index in printed]
     assert all(line.startswith("$ ") and f"warehouse-id {BUNDLE_WAREHOUSE}" in line for line in echoes), echoes
+
+
+def _carriers(run: Release, value: str) -> list[int]:
+    """The index of every interpreter call handed ``value`` on its command line."""
+
+    return [index for index, call in enumerate(run.python_calls) if value in " ".join(call["argv"])]
+
+
+def _is_mask(call: dict[str, object]) -> bool:
+    argv = call["argv"]
+    return isinstance(argv, list) and argv[:1] == ["-c"] and MASK in argv[1]
+
+
+def test_the_new_apps_ids_are_masked_where_step_4_resolves_them_before_any_command_is_handed_one(
+    fresh: Release,
+) -> None:
+    calls = fresh.python_calls
+    # The last of step 4's three parses of the created App; the mask is the very next interpreter call.
+    (parse,) = [index for index, call in enumerate(calls) if '.get("service_principal_id")' in " ".join(call["argv"])]
+    mask = parse + 1
+    assert _is_mask(calls[mask]), calls[mask]["argv"]
+    assert not any(value in " ".join(calls[mask]["argv"]) for value in APP_IDS), "stdin, never the command line"
+    for value in APP_IDS:
+        carriers = _carriers(fresh, value)
+        assert carriers and carriers[0] > mask, (value, carriers[:1], mask)
+        # stderr: the runner reads the command there. Once, at the first resolve.
+        assert [line for line in fresh.result.stderr.splitlines() if value in line] == [f"::add-mask::{value}"]
+    out = fresh.result.stdout.splitlines()
+    bound = next(index for index, line in enumerate(out) if "bundle_env deployment bind" in line)
+    printed = [index for index, line in enumerate(out) if any(value in line for value in APP_IDS)]
+    assert len(printed) >= 20 and printed[0] > bound, "every print follows the resolve, and there are many"
+    first = ANSI.sub("", out[printed[0]])
+    assert first.startswith("$ ") and f"--app-application-id {APP_IDS[1]}" in first, first
+
+
+def test_the_captured_deployment_id_is_masked_before_the_prune_is_handed_it(fresh: Release) -> None:
+    calls = fresh.python_calls
+    (capture,) = [index for index, call in enumerate(calls) if call["argv"][1:3] == ["tools.databricks.app_core_rollback", "capture"]]
+    assert _is_mask(calls[capture + 1]), calls[capture + 1]["argv"]
+    (prune,) = _carriers(fresh, CAPTURED_DEPLOYMENT)
+    assert prune > capture + 1 and calls[prune]["argv"][1] == "tools.databricks.app_release_prune"
+    # stderr: twice, and nothing else. Once from the result the activation's CLI call returned
+    # (the CLI stand-in prints the created deployment as the real CLI does), once at the capture.
+    assert [line for line in fresh.result.stderr.splitlines() if CAPTURED_DEPLOYMENT in line] == [
+        f"::add-mask::{CAPTURED_DEPLOYMENT}"
+    ] * 2
+    printed = [ANSI.sub("", line) for line in fresh.result.stdout.splitlines() if CAPTURED_DEPLOYMENT in line]
+    assert len(printed) == 1 and printed[0].startswith("$ ") and "--rollback-deployment-id" in printed[0], printed
+
+
+def test_what_the_cli_renders_for_the_start_and_the_activation_never_reaches_the_log(fresh: Release) -> None:
+    # The real CLI prints the App when ``apps start`` returns and the created deployment when
+    # ``apps deploy`` does; the stand-in prints both, with values no read hands the shell.
+    assert [call["argv"][:2] for call in fresh.cli_calls if call["argv"][:2] in (["apps", "start"], ["apps", "deploy"])] == [
+        ["apps", "start"],
+        ["apps", "deploy"],
+    ]
+    rendered = [*START_RESULT_ONLY.values(), DEPLOY_RESULT_ONLY["creator"], DEPLOY_RESULT_ONLY["deployment_artifacts"]["source_code_path"]]
+    for value in rendered:
+        assert value not in fresh.transcript, value
+    assert f'"deployment_id": "{CAPTURED_DEPLOYMENT}"' not in fresh.transcript, "no rendered deployment"
+    out = [ANSI.sub("", line) for line in fresh.result.stdout.splitlines()]
+    assert "$ start_stopped_app_before_activation" in out
+    assert [line for line in out if "databricks apps deploy" in line] == [
+        next(line for line in out if line.startswith("$ keep_cli_result_private databricks apps deploy mip-app --json @"))
+    ]
+    # The created deployment's id is a runner mask in the interpreter call right after the
+    # last one before the activation (the static-source converge), ahead of the capture.
+    calls = fresh.python_calls
+    (converge,) = [index for index, call in enumerate(calls) if call["argv"][1:2] == ["tools.databricks.converge_static_app_source"]]
+    result_mask = calls[converge + 1]["argv"]
+    assert result_mask[0] == "-c" and "emit_mask(" in result_mask[1] and '"deployment_id"' in result_mask[1], result_mask
+    assert CAPTURED_DEPLOYMENT not in " ".join(result_mask), "the result goes in on stdin, never the command line"
+    (capture,) = [index for index, call in enumerate(calls) if call["argv"][1:3] == ["tools.databricks.app_core_rollback", "capture"]]
+    assert converge + 1 < capture
+
+
+def test_nothing_to_mask_starts_no_interpreter(fresh: Release) -> None:
+    # A first install's journal read names no App: the helper registers nothing and runs nothing.
+    masks = [index for index, call in enumerate(fresh.python_calls) if _is_mask(call)]
+    assert len(masks) == 2, masks

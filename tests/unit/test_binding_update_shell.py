@@ -89,7 +89,7 @@ def test_the_step_text_records_every_send_and_applies_a_description_only_differe
     diff = at("tools.databricks.app_resource_bindings diff", no_window)
     fixup = at("tools.databricks.app_description_fixup", diff)
     otherwise = at("\n  else\n", fixup)
-    update = at('run databricks apps update "$_GRANTS_APP_NAME"', otherwise)
+    update = at('run keep_cli_result_private databricks apps update "$_GRANTS_APP_NAME"', otherwise)
     owed = at("APP_ROLE_REGRANT_OWED=1", update)
     migrate = at("databricks bundle run mip_lakebase_migrate", owed)
     close = at("\nclose_quiesce_window\n", migrate)

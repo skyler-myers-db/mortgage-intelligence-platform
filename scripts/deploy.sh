@@ -461,6 +461,75 @@ raise SystemExit(0 if left and right and left == right else 1)
 PYEOF
 }
 
+# The run helpers echo every command line, and a governed release's job log
+# is public. An identifier the release resolves at run time (the App's
+# resource id, its service principal's application and SCIM ids, a deployment
+# id) is in no client profile, so the profile's mask step never registered it.
+# Register each as a GitHub runner mask the moment the shell holds it, before
+# any command is handed it, through the redact module's emit_mask (the one
+# mask rule; a library the inline program imports, never a tool run here). The
+# values go in on stdin, never on a command line; an empty one registers
+# nothing. Outside GitHub Actions, or with nothing to register, this starts
+# nothing. It fails closed: when a mask cannot be registered it returns
+# nonzero and nothing uses the value.
+mask_runtime_ids() {
+  local joined
+  printf -v joined '%s' "$@"
+  [[ "${GITHUB_ACTIONS:-}" == "true" && -n "$joined" ]] || return 0
+  printf '%s\n' "$@" | "$PYTHON" -c '
+import sys
+
+from tools.clients.redact import emit_mask
+
+emit_mask(sys.stdin.read())
+'
+}
+
+# The deployment ids a sourced rollback binding or quiesce window env file
+# carries, each a runner mask before the release hands one to a command.
+mask_deployment_ids() {
+  mask_runtime_ids "${MIP_APP_ROLLBACK_DEPLOYMENT_ID:-}" \
+    "${MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID:-}" \
+    "${MIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID:-}" \
+    "${MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID:-}"
+}
+
+# The apps CLI renders what a mutation returned as JSON on its stdout: the
+# created deployment (its id, source path and creator) or the whole App (its
+# service principal's name and OAuth client ids, its deployments, its URL).
+# The shell holds none of those values when the CLI prints them, so no mask
+# could come first. Run the command with that result in a private file
+# instead, never on the job log, and register the deployment ids it names as
+# runner masks before the release goes on (the capture hands the shell the
+# same id later, and a tool may name it before then). The command's stderr
+# and exit status stay its own. Like mask_runtime_ids it fails closed, and
+# outside GitHub Actions it starts no interpreter.
+keep_cli_result_private() {
+  local result rc=0
+  result="$(mktemp -t mip-cli-result.XXXXXX)" || return 1
+  chmod 600 "$result"
+  "$@" > "$result" || rc=$?
+  if [[ "$rc" -eq 0 && "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    "$PYTHON" -c '
+import json
+import sys
+
+from tools.clients.redact import emit_mask
+
+try:
+    result = json.load(sys.stdin)
+except ValueError:
+    result = None
+if isinstance(result, dict):
+    for holder in (result, result.get("active_deployment"), result.get("pending_deployment")):
+        if isinstance(holder, dict):
+            emit_mask(str(holder.get("deployment_id") or ""))
+' < "$result" || rc=$?
+  fi
+  rm -f "$result"
+  return "$rc"
+}
+
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 APP_DEPLOY_PAYLOAD=""
 APP_LAST_DEPLOY_PAYLOAD=""
