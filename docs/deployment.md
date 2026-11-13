@@ -5587,8 +5587,8 @@ before any command is handed it (`mask_runtime_ids` in the shell and
   read source a window env file too; they hand no deployment id on and
   register none.
 
-**What the apps CLI prints is kept off the log.** `databricks apps deploy`
-renders the created deployment as JSON on its stdout when it returns (its id,
+**What the apps CLI prints is kept off the log.** `apps deploy` renders the
+created deployment as JSON on its stdout when it returns (its id,
 its source path, its creator), and `apps start` and `apps update` render the
 whole App (its service principal's name and OAuth client ids, its
 deployments, its URL), before the shell holds any of it, so no mask could
