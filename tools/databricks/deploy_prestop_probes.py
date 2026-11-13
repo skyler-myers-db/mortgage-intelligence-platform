@@ -92,6 +92,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.clients.redact import emit_mask
 from tools.databricks.agent_runtime_access import _field, _text
 from tools.databricks.prestop_accepted_exposure import PrestopExposure, load_prestop_exposure
 from tools.databricks.prestop_genie_grants import (
@@ -322,8 +323,10 @@ def audited_principals(
         app = None
         notes.append(f"App {app_name!r} does not exist yet; its future SP joins 'users'")
     if app is not None:
-        app_client_id = _text(_field(app, "service_principal_client_id"))
-        app_scim_id = _text(_field(app, "service_principal_id"))
+        # A plan's and a release's first read of the App's service principal: runner
+        # masks at once (a refusal below names the application id on a public log).
+        app_client_id = emit_mask(_text(_field(app, "service_principal_client_id")))
+        app_scim_id = emit_mask(_text(_field(app, "service_principal_id")))
         if app_client_id and app_scim_id:
             resolved[f"App SP {app_client_id}"] = app_scim_id
         else:

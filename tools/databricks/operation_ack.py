@@ -8,7 +8,10 @@ export (``MIP_ACK_<PURPOSE>``, read by scripts/deploy.sh from its own
 environment and passed on as a flag, for the purposes in ``ACK_ENV``; the
 core release reads ``restore_unverified_frontend``'s since M2-PR7b) or the
 flag of the command that needs it (``override_freeze``, ``tier_transition``),
-never a ``.env.local`` line. A refusal names exactly that route (``REMEDY``).
+never a ``.env.local`` line. ``freeze_thaw`` has no shell route at all: only
+deploy-dev.yml's thaw phase reads it, from the dispatch input
+``operation_acks`` (tools/clients/publisher_freeze.py). A refusal names
+exactly that route (``REMEDY``).
 The tool recomputes the plan immediately before it mutates and refuses on any
 difference, with nothing changed.
 
@@ -17,9 +20,10 @@ purpose can never satisfy another: the same plan acknowledged for
 ``adopt_live`` and for ``supersede`` has two different digests. The purposes
 are the plan's named attestation reasons: ``adopt_live``, ``supersede``,
 ``unadopt`` (the tombstone; the plan lists it among the operation reasons),
-``restore_unverified_frontend``, ``no_rollback_for``, ``override_freeze`` and
+``restore_unverified_frontend``, ``no_rollback_for``, ``override_freeze``,
 ``tier_transition`` (M2-PR7b: a release whose tier is not its signed blue's;
-tools/databricks/blue_tier_gate.py).
+tools/databricks/blue_tier_gate.py) and ``freeze_thaw`` (the CI thaw of one
+signed freeze marker: the App, the marker id and the marker's sha256).
 
 A digest is not a signature: anyone holding the plan can compute it. It
 proves the operator reviewed this exact plan, not who the operator is; the
@@ -42,6 +46,7 @@ PURPOSES = (
     "no_rollback_for",
     "override_freeze",
     "tier_transition",
+    "freeze_thaw",
 )
 # The one-run shell export scripts/deploy.sh reads, for the purposes it reads one for.
 ACK_ENV = {
@@ -72,6 +77,11 @@ REMEDY = {
     # agentic release over a core blue, is wired by M4-PR1 (blue_tier_gate.py).
     "tier_transition": (
         "pass --tier-transition-ack <its sha256> to the one blue proof that refused"
+    ),
+    # CI only: no shell holds the key a thaw is signed with (publisher_freeze.py).
+    "freeze_thaw": (
+        "dispatch deploy-dev.yml with phase=thaw and the dispatch input operation_acks "
+        "freeze_thaw=<its sha256>"
     ),
 }
 _DOMAIN = "mip-operation-ack-v1"

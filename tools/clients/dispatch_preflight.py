@@ -1,10 +1,14 @@
-"""The deploy job's dispatch preflight, before scripts/deploy.sh (M1-PR7, plan §4.5).
+"""The deploy job's dispatch preflight, before scripts/deploy.sh or the marker step (M1-PR7, plan §4.5).
 
 deploy-dev.yml runs this after the resolve-client-profile action and the
 OIDC proof, with the vars and secrets objects the collect step wrote
 (tools/clients/workflow_contexts.py) and the dispatch inputs under
 ``MIP_DISPATCH_*``. It resolves the client
-profile again (registering its masks first) and decides, for ``--phase``:
+profile again (registering its masks first) and decides, for ``--phase``
+("mutating" below is the four scripts/deploy.sh phases that mutate and the two
+marker phases, ``freeze`` and ``thaw``, whose step writes the freeze marker
+the emergency publisher obeys, tools/clients/publisher_freeze.py: one rule for
+all six):
 
 1. **workflow**: a ``workflow_dispatch`` of this repository's
    ``.github/workflows/deploy-dev.yml`` on ``refs/heads/main``;
@@ -72,7 +76,9 @@ class Verdict:
 
     @property
     def mutating(self) -> bool:
-        return self.phase in acks.MUTATING_PHASES
+        """The deploy.sh phases that mutate, and the two marker phases: each writes to the workspace."""
+
+        return self.phase in acks.MUTATING_PHASES | acks.MARKER_PHASES
 
     def refuse(self, code: str, reason: str) -> None:
         self.refusals.append(f"{code}: {reason}")

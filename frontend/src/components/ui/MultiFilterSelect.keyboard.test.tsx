@@ -9,6 +9,10 @@
  * topmost-layer stack, so one Escape also reached whatever was open beneath
  * it. It had no typeahead either. The Portfolio Builder keyboard contract is
  * pinned in routes/portfolio-builder.state-picker.test.tsx.
+ *
+ * onChange also names the PICK (the option toggled, or null for the "all"
+ * row), by mouse and by keyboard: an owner whose `selected` trails its own
+ * state applies the pick to its live value (routes/lead-queue.columns.ts).
  */
 
 import { act, useState } from 'react';
@@ -29,6 +33,7 @@ const OPTIONS = [
 type Code = (typeof OPTIONS)[number]['value'];
 
 const changes = vi.fn<(next: Code[]) => void>();
+const picks = vi.fn<(picked: Code | null) => void>();
 
 function Harness() {
   const [value, setValue] = useState<Code[]>([]);
@@ -38,8 +43,9 @@ function Harness() {
       allLabel="All states"
       selected={value}
       options={OPTIONS}
-      onChange={(next) => {
+      onChange={(next, picked) => {
         changes(next);
+        picks(picked);
         setValue(next);
       }}
     />
@@ -68,6 +74,7 @@ function press(key: string): void {
 
 beforeEach(() => {
   changes.mockClear();
+  picks.mockClear();
   genieLayer.mockReset();
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -178,5 +185,45 @@ describe('MultiFilterSelect — presence exit and delegated options', () => {
     expect(changes).toHaveBeenLastCalledWith(['TX']);
     expect(activeOption()?.textContent).toBe('Texas');
     expect(listbox()).not.toBeNull();
+  });
+});
+
+describe('MultiFilterSelect — onChange names the pick', () => {
+  const clickOption = (label: string) => {
+    const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find((item) => item.textContent === label);
+    act(() => {
+      option!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  };
+
+  it('is the option toggled, on and off, and null for the "all" row', () => {
+    press('ArrowDown');
+    clickOption('Texas');
+    expect(picks).toHaveBeenLastCalledWith('TX');
+    expect(changes).toHaveBeenLastCalledWith(['TX']);
+    clickOption('Colorado');
+    expect(picks).toHaveBeenLastCalledWith('CO');
+    expect(changes).toHaveBeenLastCalledWith(['TX', 'CO']);
+    clickOption('Texas');
+    expect(picks).toHaveBeenLastCalledWith('TX');
+    expect(changes).toHaveBeenLastCalledWith(['CO']);
+    clickOption('All states');
+    expect(picks).toHaveBeenLastCalledWith(null);
+    expect(changes).toHaveBeenLastCalledWith([]);
+    expect(picks).toHaveBeenCalledTimes(4);
+  });
+
+  it('is the active option on Space and Enter', () => {
+    press('ArrowDown');
+    press('ArrowDown');
+    press(' ');
+    expect(picks).toHaveBeenLastCalledWith('AZ');
+    press('ArrowDown');
+    press('Enter');
+    expect(picks).toHaveBeenLastCalledWith('CA');
+    press('Home');
+    press(' ');
+    expect(picks).toHaveBeenLastCalledWith(null);
+    expect(changes).toHaveBeenLastCalledWith([]);
   });
 });

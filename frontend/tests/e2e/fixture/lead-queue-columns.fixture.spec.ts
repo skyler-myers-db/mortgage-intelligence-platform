@@ -4,7 +4,8 @@
  *  (a) HIDE Segments + Rate in Review: the colgroup, the header and every
  *      visible row lose both cells in the same order; ?hide=segments,rate;
  *      ZERO /api/leads reads and no audited read after the toggle; Copy link
- *      carries hide; a reload restores it;
+ *      carries hide; a reload restores it; and HIDE picks made before the
+ *      first one commits (two in one task) all land, in the URL and the table;
  *  (b) Console open, Review with Location + Segments + Rate hidden: the
  *      scroller has no horizontal overflow, Approval stays pinned and fully
  *      visible, and the header keeps 83px;
@@ -56,6 +57,38 @@ async function headerAndCells(page: Page) {
     return { header, cols, rows };
   }, ROWS);
 }
+
+/**
+ * Waits until the header shows none of `labels` (a cell that is the label or
+ * starts with it), then answers the layout, read once. `?hide=` in the
+ * address bar does not prove the columns have left the screen: the data
+ * router pushes history at once and commits the location to React inside a
+ * transition (app.tsx, HARNESS CONTRACT), so the table trails the URL by one
+ * route render, longer on a loaded runner. CI run 43307890049 read the header
+ * inside that gap (URL `hide=segments,rate`, header still with Rate). The
+ * colgroup, the header and the rows move in one commit, so the parity checks
+ * read ONE snapshot taken after it.
+ */
+async function layoutWithoutHeaders(page: Page, labels: readonly string[]) {
+  await expect
+    .poll(async () => (await headerAndCells(page)).header.filter((cell) => labels.some((label) => cell.startsWith(label))))
+    .toEqual([]);
+  return headerAndCells(page);
+}
+
+/** Clicks HIDE options in ONE task, so React commits nothing between the picks. */
+async function pickHideOptionsInOneTask(page: Page, labels: readonly string[]): Promise<void> {
+  await page.getByRole('listbox', { name: 'HIDE' }).evaluate((listbox, names) => {
+    const options = [...listbox.querySelectorAll<HTMLElement>('[role="option"]')];
+    for (const name of names) {
+      const option = options.find((item) => (item.textContent ?? '').trim() === name);
+      if (!option) throw new Error(`no HIDE option "${name}"`);
+      option.click();
+    }
+  }, labels);
+}
+
+const hideParam = (page: Page) => new URL(page.url()).searchParams.get('hide');
 
 const SAVED_VIEWS_CHUNK = 'lead-queue.savedViews';
 
@@ -122,7 +155,7 @@ for (const theme of FIXTURE_THEMES) {
       await menu.getByRole('option', { name: 'Rate Δ (bps)' }).click();
       await page.keyboard.press('Escape');
       await expect.poll(() => new URL(page.url()).searchParams.get('hide')).toBe('segments,rate');
-      const layout = await headerAndCells(page);
+      const layout = await layoutWithoutHeaders(page, ['Segments', 'Rate']);
       expect(layout.header).not.toContain('Segments');
       expect(layout.header.some((label) => label.startsWith('Rate'))).toBe(false);
       expect(layout.cols).toHaveLength(layout.header.length);
@@ -158,6 +191,50 @@ for (const theme of FIXTURE_THEMES) {
     });
   });
 }
+
+test('(a) HIDE picks made before the first one commits all land, in the URL and in the table', async ({ app, page, mockApi }) => {
+  await app.gotoRoute('/lead-queue?state=TX');
+  await expect(page.locator(ROWS).first()).toBeVisible();
+  const reads = leadReads(mockApi).length;
+  const t0 = markNaturalLoad(mockApi);
+  const menu = await app.openFilterMenu('HIDE');
+  await expect(menu.getByRole('option', { name: 'Segments' })).toBeVisible();
+  const pill = page.locator('button[aria-label^="HIDE:"]');
+
+  // Two picks in one task: the second is made against the render that has not
+  // seen the first. Built from that render, `hide` kept only the second.
+  await pickHideOptionsInOneTask(page, ['Segments', 'Rate Δ (bps)']);
+  await expect.poll(() => hideParam(page)).toBe('segments,rate');
+  await expect(pill).toHaveAttribute('aria-label', 'HIDE: 2 columns');
+  let layout = await layoutWithoutHeaders(page, ['Segments', 'Rate']);
+  expect(layout.cols).toHaveLength(layout.header.length);
+  expect(layout.cols).not.toContain('lead-table__col-segments');
+  expect(layout.cols).not.toContain('lead-table__col-rate');
+  expect(layout.rows.length).toBeGreaterThan(0);
+  for (const cells of layout.rows) expect(cells, 'row / header parity').toBe(layout.header.length);
+  await expect(menu.getByRole('option', { name: 'Segments' })).toHaveAttribute('aria-selected', 'true');
+  await expect(menu.getByRole('option', { name: 'Rate Δ (bps)' })).toHaveAttribute('aria-selected', 'true');
+
+  // An un-hide and a hide in one task apply to the set the URL holds.
+  await pickHideOptionsInOneTask(page, ['Segments', 'Equity']);
+  await expect.poll(() => hideParam(page)).toBe('equity,rate');
+  await expect(pill).toHaveAttribute('aria-label', 'HIDE: 2 columns');
+  layout = await layoutWithoutHeaders(page, ['Equity', 'Rate']);
+  expect(layout.header).toContain('Segments');
+  for (const cells of layout.rows) expect(cells, 'row / header parity').toBe(layout.header.length);
+
+  // "No columns" clears whatever the URL holds, and a pick after it starts from nothing.
+  await pickHideOptionsInOneTask(page, ['Location', 'No columns', 'Status']);
+  await expect.poll(() => hideParam(page)).toBe('status');
+  await expect(pill).toHaveAttribute('aria-label', 'HIDE: Status');
+  layout = await layoutWithoutHeaders(page, ['Status']);
+  expect(layout.header).toEqual(expect.arrayContaining(['Location', 'Segments', 'Equity', 'Primary offer', 'Score', 'Signal', 'Approval']));
+  expect(layout.header.some((label) => label.startsWith('Rate'))).toBe(true);
+
+  expect(new URL(page.url()).searchParams.get('state'), 'the filter is kept').toBe('TX');
+  expect(leadReads(mockApi), 'hiding a column reads nothing').toHaveLength(reads);
+  expectNoAuditedReadSince(mockApi, t0, 'HIDE');
+});
 
 const DEFAULT_VIEW: SavedView = {
   view_id: '5a1e0000-0000-4000-8000-0000000000dd',
