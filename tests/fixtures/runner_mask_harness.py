@@ -27,9 +27,9 @@ WRAPPERS = (
 
 
 def mask_helpers() -> str:
-    """The two shipped helpers, as the entrypoint defines them."""
+    """The shipped mask helpers, as the entrypoint defines them."""
 
-    return function("mask_runtime_ids") + function("mask_deployment_ids")
+    return function("mask_runtime_ids") + function("mask_deployment_ids") + function("mask_app_url")
 
 
 def redact_module(repo: Path) -> None:

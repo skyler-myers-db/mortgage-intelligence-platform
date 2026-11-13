@@ -87,6 +87,12 @@ deploy_app_snapshot() {
 
   if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
     DEPLOYED_APP_URL="$(databricks apps get "$APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("url",""))')"
+    # A first install's first sight of its URL: a runner mask before the
+    # line below and every --base-url echo print it (mask_app_url).
+    if ! mask_app_url "$DEPLOYED_APP_URL"; then
+      echo "${RED}[deploy] the deployed App's URL could not be registered as a runner mask; refusing to print it or hand it to a command.${RST}" >&2
+      exit 1
+    fi
     if [[ -n "$DEPLOYED_APP_URL" ]]; then
       export MIP_APP_URL="$DEPLOYED_APP_URL"
       echo "  app url:    ${MIP_APP_URL}"
