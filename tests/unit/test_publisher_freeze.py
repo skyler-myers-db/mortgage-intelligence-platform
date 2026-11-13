@@ -879,6 +879,9 @@ def test_the_phase_lists_and_the_ack_lists_name_the_marker_phases() -> None:
     readme = _flat(".github/workflows/README.md")
     assert "or `freeze` or `thaw`, which run no `scripts/deploy.sh`" in readme
     assert "no secret is bound to the step" in readme
+    front = _flat("README.md")
+    assert "Two more phases, `freeze` and `thaw`, run no `scripts/deploy.sh`" in front
+    assert "(the freeze marker and its thaw, above, are the workflow's only writes outside it)" in front
     onboarding = _flat("docs/clients/onboarding.md")
     assert "| Freezing the emergency recipe: `phase=freeze`, `phase=thaw` | Built, CI only (wave 7c); not run live yet." in onboarding
     assert "A client onboarded from nothing never does, and for it nothing changes." in onboarding
