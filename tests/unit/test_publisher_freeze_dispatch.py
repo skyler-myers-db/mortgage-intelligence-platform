@@ -9,6 +9,9 @@ the profile ack and the protections ack, and exports the thaw's
 marker step's own header, which the public log prints, binds no secret. The
 step itself needs a workspace, so only its header is rendered here:
 tests/unit/test_publisher_freeze.py runs the tool against the in-memory one.
+
+The last test holds the tool to the role ledger (attack G15): a CI step never
+needs account authority, so the ledger classes it and checks its imports.
 """
 
 from __future__ import annotations
@@ -17,6 +20,8 @@ import hashlib
 from pathlib import Path
 
 from tests.fixtures import client_portability as cp
+from tests.fixtures import portability_checks as checks
+from tests.fixtures import role_ledger as roles
 from tests.fixtures.dispatch_replay import github_file, replay
 from tools.clients import dispatch_acks
 from tools.clients import profile as views
@@ -81,3 +86,17 @@ def test_a_thaw_dispatch_runs_the_marker_step_in_place_of_deploy_sh_and_binds_no
     for _step, line in deploy.shown():
         assert not [value for value in private if value in line], line[:120]
     assert not (replayed.checkout / ".env.local").exists(), "the last step removes the profile files"
+
+
+def test_the_role_ledger_classes_the_tool_as_workspace_and_it_reaches_no_account_api() -> None:
+    """The workflow's own step, so no deploy file names it: the ledger's workspace table still reviews it."""
+
+    tool = "tools.clients.publisher_freeze"
+    assert tool in roles.WORKSPACE_MODULES and roles.module_role(tool) == roles.WORKSPACE
+    assert roles.module_files(tool) and not roles.account_api_reach(tool)
+    assert roles.module_role(tool, account_identity=True) == roles.UNCLASSIFIED, "never under the account identity"
+    assert tool not in checks.core_deploy_tools(), "scripts/deploy.sh is unchanged and names no marker tool"
+    assert tool not in roles.OUTSIDE_PROOF_MODULES | roles.HUMAN_ONLY_MODULES, "one class each"
+    # Positive controls: a tool that builds an account client is found, and an unreviewed one is unclassified.
+    assert roles.account_api_reach("tools.clients.live_checks")
+    assert roles.module_role("tools.clients.publisher_thaw") == roles.UNCLASSIFIED
