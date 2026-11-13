@@ -74,6 +74,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from tools.clients.redact import emit_mask
 from tools.databricks.app_deployment_rollback import verified_signed_last_good_contract
 from tools.databricks.app_deployment_state import latest_succeeded
 from tools.databricks.app_rollback_bootstrap_gate import assert_rollback_record_absent
@@ -254,6 +255,10 @@ def _signed_verdict(workspace: Any, *, app_name: str, scope: str) -> RollbackRec
         active = ACTIVE_DEPLOYMENT(workspace, app_name=app_name)
     except Exception as exc:  # noqa: BLE001 - ensure reads it the same way and refuses
         return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_DRIFT, str(exc)),), (), contract)
+    # The notes below name both deployments, and the probe prints them on a job
+    # log that is public, before the lease: each is a runner mask first.
+    emit_mask(str(active or ""))
+    emit_mask(str(contract.deployment_id or ""))
     if active != contract.deployment_id:
         return RollbackRecordVerdict(
             (),

@@ -237,8 +237,11 @@ _ACCOUNTS_SEGMENT = re.compile(r"(?:^|/)accounts(?:/|$)")
 # (scripts/lib/deploy_identity_lifecycle.sh); a module is read from the front
 # of a command, so no other label needs reading.
 ACCOUNT_IDENTITY_LABEL = "(bounded account-SCIM identity)"
-# Shell wrappers that only add the deployer's own authority or a retry.
-WRAPPERS = frozenset({"run_with_proof_signing_authority", "run_job_with_retry"})
+# Shell wrappers that only add the deployer's own authority or a retry, or
+# keep the command's rendered result off the public log
+# (keep_cli_result_private in scripts/deploy.sh, #350: it runs its arguments
+# as given). The command a wrapper runs is classed as if it ran alone.
+WRAPPERS = frozenset({"run_with_proof_signing_authority", "run_job_with_retry", "keep_cli_result_private"})
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # The deploy interpreter: a python, or the proof sandbox's recording wrapper.
 _PYTHON = re.compile(r"(?:deploy-)?python(?:[0-9]+(?:\.[0-9]+)*)?")

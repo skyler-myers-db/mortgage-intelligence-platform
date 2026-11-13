@@ -391,7 +391,7 @@ PYEOF
     fi
   else
     assert_expected_app_identity "$_GRANTS_APP_NAME"
-    run databricks apps update "$_GRANTS_APP_NAME" \
+    run keep_cli_result_private databricks apps update "$_GRANTS_APP_NAME" \
       --json "@$APP_RESOURCE_BINDING_PAYLOAD"
     # A WR1 window or an ungoverned run. Spike S2: this send, an identical
     # array included, grants CREATE ON DATABASE to the App's Lakebase role
@@ -418,6 +418,13 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   APP_OBJECT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("id") or "").strip())' 2>/dev/null || true)"
   APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
   APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
+  # >>> app identity: mask after resolve >>>
+  # The three parses discard stderr, where a mask is written, so the ids are
+  # registered here, before the refusals below and before any command is
+  # handed one. On a first install this is their first resolution: the
+  # platform mints the App's service principal, and no client profile holds it.
+  mask_runtime_ids "$APP_OBJECT_ID" "$APP_SP_CLIENT_ID" "$APP_SP_SCIM_ID"
+  # <<< app identity: mask after resolve <<<
   if [[ -z "$APP_OBJECT_ID" || -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
     echo "${RED}[deploy] could not resolve the immutable identity triplet for app '$_GRANTS_APP_NAME' after stopped identity bootstrap.${RST}" >&2
     exit 4

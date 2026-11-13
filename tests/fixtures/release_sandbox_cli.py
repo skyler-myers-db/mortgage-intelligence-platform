@@ -10,6 +10,13 @@ appended to ``DATABRICKS_STUB_LOG`` with the bundle variables it inherited,
 so a test can read what ``databricks bundle run mip_lakebase_migrate`` would
 have rendered. SQL statements are recorded in ``SANDBOX_STATE`` and answered
 SUCCEEDED; the treatment table's property read returns its reviewed values.
+
+``apps start`` and ``apps deploy`` print what the real CLI prints on stdout
+when the mutation returns (``cmdio.Render`` of the App and of the created
+deployment, JSON in the default text mode): the App with its service
+principal's name and OAuth client ids, and the deployment with its id, its
+source path and its creator. No read hands the shell those values first, so
+a test can prove that neither result reaches the job log.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tests.fixtures.release_sandbox_python import APP, WATCHED, _save, _state
+from tests.fixtures.release_sandbox_python import APP, CAPTURED_DEPLOYMENT, WATCHED, _save, _state
 
 TREATMENT_PROPERTIES = [
     ["delta.appendOnly", "true"],
@@ -30,6 +37,16 @@ TREATMENT_PROPERTIES = [
 
 
 BUNDLE_FILES = "/Workspace/sandbox/files"
+# What only a mutation's rendered result carries (no ``apps get`` parse reads these).
+START_RESULT_ONLY = {
+    "service_principal_name": "app-sp-name-sandbox",
+    "oauth2_app_client_id": "oauth2-client-sandbox",
+    "oauth2_app_integration_id": "oauth2-integration-sandbox",
+}
+DEPLOY_RESULT_ONLY = {
+    "creator": "deployment-creator-sandbox",
+    "deployment_artifacts": {"source_code_path": "/Workspace/sandbox/deployment-artifacts-sandbox"},
+}
 
 
 def _app(state: dict[str, Any]) -> dict[str, Any]:
@@ -77,11 +94,14 @@ def main() -> int:
     if args == ["apps", "start", APP["name"]]:
         state["app_started"] = True
         _save(state)
+        print(json.dumps({**_app(state), **START_RESULT_ONLY}))
         return 0
     if args[:3] == ["apps", "deploy", APP["name"]] and args[3] == "--json":
         payload = json.loads(Path(args[4].removeprefix("@")).read_text(encoding="utf-8"))
         state.setdefault("deploys", []).append(payload)
         _save(state)
+        created = {"deployment_id": CAPTURED_DEPLOYMENT, "mode": "SNAPSHOT", "status": {"state": "SUCCEEDED"}}
+        print(json.dumps({**created, **DEPLOY_RESULT_ONLY}))
         return 0
     if args == ["bundle", "summary", "-t", "client", "-o", "json"]:
         print(json.dumps(_bundle_summary()))
