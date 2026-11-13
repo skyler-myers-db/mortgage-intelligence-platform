@@ -18,9 +18,8 @@ import pytest
 
 from tests.fixtures import bundle_plan_fixtures as fx
 from tests.fixtures import bundle_plans as shapes
-from tools.databricks import adopt_legacy_map
+from tools.databricks import adopt_legacy_map, monitor_scheduler_gate
 from tools.databricks import bundle_plan_gate as gate
-from tools.databricks import monitor_scheduler_gate
 from tools.databricks.bundle_plan_adopt import POSITION, AdoptExpectation
 from tools.databricks.bundle_plan_instance_ack import instance_update_digest
 from tools.databricks.bundle_plan_lookups import KIND_LOOKUPS
