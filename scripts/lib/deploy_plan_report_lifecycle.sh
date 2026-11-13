@@ -64,3 +64,57 @@ check_expected_active_deployment() {
     exit 2
   fi
 }
+
+# The core release's pre-activation rollback proof, predicted read-only before
+# the lease (B3, tools/databricks/activation_prediction.py): the plan prints
+# the restore_unverified_frontend digest an adopted blue's activation needs,
+# and a release (or a run with no --phase) refuses here, with nothing changed,
+# what the proof at step 10b would refuse after the apply and the window. Its
+# payload flags are rebuild_core_blue_restore_payload's, byte for byte. No
+# signing authority: the verify key alone checks the record. MIP_ACK_NO_ROLLBACK_FOR
+# (shell only) defers its verdicts to the proof; its value is never passed.
+predict_activation_rollback() {
+  local -a args=()
+  ! tier_is_agentic || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  would predict read-only, before the lease: blue's restore payload and the restore_unverified_frontend ack its activation needs"
+    return 0
+  fi
+  args=(
+    --phase "${DEPLOY_PHASE:-complete}"
+    --app-name "$_GRANTS_APP_NAME"
+    --scope "$APP_ROLLBACK_SECRET_SCOPE"
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+    --lakebase-database "$LAKEBASE_DATABASE"
+    --agentic-tier "$CLIENT_AGENTIC_TIER"
+    --install-class "$CLIENT_INSTALL_CLASS"
+    --app-env "$APP_RUNTIME_ENV"
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+    --schema "${MIP_DEFAULT_SCHEMA:-gold}"
+    --source-git-sha "$SOURCE_GIT_SHA"
+  )
+  [[ -z "${MIP_ACK_RESTORE_UNVERIFIED_FRONTEND:-}" ]] || \
+    args+=(--restore-unverified-frontend-ack "$MIP_ACK_RESTORE_UNVERIFIED_FRONTEND")
+  [[ -z "${MIP_ACK_NO_ROLLBACK_FOR:-}" || "${DEPLOY_PHASE:-}" == "plan" ]] || args+=(--no-rollback-ack-given)
+  [[ "${DEPLOY_PHASE:-}" != "plan" || -z "${GITHUB_STEP_SUMMARY:-}" ]] || \
+    args+=(--step-summary "$GITHUB_STEP_SUMMARY")
+  if ! run "$PYTHON" -m tools.databricks.activation_prediction predict "${args[@]}"; then
+    publish_plan_report
+    echo "${RED}[deploy] the pre-activation rollback proof would refuse (see above); refusing before the lease. Nothing was changed.${RST}" >&2
+    exit 2
+  fi
+}
+
+# A plan before an adoption (the cutover's plans #1 and #2) ends at the client
+# live checks, before any step above runs. Before that exit it measures, names
+# only, whether this profile rebuilds the live App's newest deployment's
+# env-name set, which step 12's tier-b restore payload needs (the cutover's
+# step-7 precondition). The tool proves the workspace and the deployer itself
+# first and prints names and a verdict, never a value; the plan exits 2 anyway.
+measure_blue_env_names_before_adoption() {
+  local -a args=()
+  [[ "${DEPLOY_PHASE:-}" == "plan" ]] || return 0
+  ! tier_is_agentic || return 0
+  [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] || args=(--step-summary "$GITHUB_STEP_SUMMARY")
+  run "$PYTHON" -m tools.databricks.activation_prediction env-names "${args[@]}" || true
+}

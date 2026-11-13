@@ -37,6 +37,8 @@ REPO = Path(__file__).resolve().parents[2]
 AUTOMATION_STEP = REPO / "scripts" / "lib" / "deploy_step_automation_identities.sh"
 # Its pre-lease estate inventory check (M4-PR1) lives in a function library.
 ESTATE_LIFECYCLE = REPO / "scripts" / "lib" / "deploy_estate_inventory_lifecycle.sh"
+# The pre-lease activation prediction (B3) a run with no --phase calls; the agentic tier skips it.
+PLAN_REPORT_LIFECYCLE = REPO / "scripts" / "lib" / "deploy_plan_report_lifecycle.sh"
 DEPLOYMENT_DOC = REPO / "docs" / "deployment.md"
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 
@@ -1329,6 +1331,7 @@ DATABRICKS_ACCOUNT_HOST=https://accounts.cloud.databricks.com
 DATABRICKS_ACCOUNT_ID=account
 DATABRICKS_ACCOUNT_CLIENT_ID=account-client DATABRICKS_ACCOUNT_CLIENT_SECRET=s6
 source {shlex.quote(str(ESTATE_LIFECYCLE))}
+source {shlex.quote(str(PLAN_REPORT_LIFECYCLE))}
 source {shlex.quote(str(AUTOMATION_STEP))}
 """,
         encoding="utf-8",

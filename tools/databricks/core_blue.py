@@ -296,6 +296,68 @@ def _environ(changes: Mapping[str, str | None]) -> Iterator[None]:
                 os.environ[name] = value
 
 
+def rebuild_for_env_names(
+    names: frozenset[str] | set[str],
+    *,
+    git_sha: str,
+    source_code_path: str,
+    install_class: str,
+    app_env: str,
+    catalog: str,
+    schema: str,
+    lakebase_instance: str,
+    lakebase_database: str | None = None,
+    lease: str | None = None,
+    build: Callable[..., dict[str, object]] | None = None,
+) -> tuple[dict[str, object] | None, str]:
+    """(the core payload rebuilt for a deployment whose env-name set is ``names``, or None, why).
+
+    The one name comparison ``blue_restore_payload`` and the pre-lease
+    prediction (tools/databricks/activation_prediction.py) share. The builder
+    reads the shell and .env.local, with ``MIP_GIT_SHA`` set to ``git_sha`` and
+    the lease name set to ``lease`` (unset when ``None``) for the call only.
+    The core payload carries no agentic name and the two switches as "0"; a
+    blue the emergency recipe built carries neither switch, which reads as off
+    too, nor a profile-optional name the profile set only after it was built:
+    those are left out unless ``names`` holds them. Names only in the reason.
+    """
+
+    if build is None:
+        from tools.databricks.app_deploy_payload import build_payload
+
+        build = build_payload
+    database = {} if lakebase_database is None else {"lakebase_database": lakebase_database}
+    try:
+        with _environ({"MIP_GIT_SHA": git_sha, LEASE_ENV: lease}):
+            payload = build(
+                source_code_path=source_code_path,
+                install_class=install_class,
+                app_env=app_env,
+                catalog=catalog,
+                schema=schema,
+                lakebase_instance=lakebase_instance,
+                campaign_treatment_runtime_enabled=False,
+                **database,
+                agentic_tier="off",
+            )
+    except ValueError as exc:  # a lender or tier refusal names no value
+        return None, f"the payload builder refused ({type(exc).__name__}: {exc})"
+    droppable = {*CORE_OFF_SWITCHES, *OPTIONAL_PAYLOAD_ENV_NAMES}
+    env_vars = [
+        item
+        for item in cast(list[dict[str, object]], payload["env_vars"])
+        if item["name"] not in droppable or item["name"] in names
+    ]
+    built = {str(item["name"]) for item in env_vars}
+    if built != set(names):
+        extra, missing = sorted(built - set(names)), sorted(set(names) - built)
+        return None, (
+            "the rebuilt payload's env-name set is not blue's (adds "
+            f"{', '.join(extra) or 'none'}; lacks {', '.join(missing) or 'none'})"
+        )
+    return {**payload, "env_vars": env_vars}, "the rebuilt payload's env-name set is blue's"
+
+
 def blue_restore_payload(
     record: Mapping[str, Any] | None,
     *,
@@ -320,52 +382,28 @@ def blue_restore_payload(
         return None, "no v7 core blue needs a restore payload built"
     if record.get("restore_payload") is not None:
         return None, "blue's restore payload is already recorded"
-    if build is None:
-        from tools.databricks.app_deploy_payload import build_payload
-
-        build = build_payload
     names = set(record["env_names"])
-    # The builder reads the shell and .env.local: blue's own commit, and no
-    # lease name unless blue's deployment carried one.
-    lease = os.environ.get(LEASE_ENV) if LEASE_ENV in names else None
-    database = {} if lakebase_database is None else {"lakebase_database": lakebase_database}
-    try:
-        with _environ({"MIP_GIT_SHA": str(record["git_sha"]), LEASE_ENV: lease}):
-            payload = build(
-                source_code_path=str(record["restore_source_path"]),
-                install_class=install_class,
-                app_env=app_env,
-                catalog=catalog,
-                schema=schema,
-                lakebase_instance=lakebase_instance,
-                campaign_treatment_runtime_enabled=False,
-                **database,
-                agentic_tier="off",
-            )
-    except ValueError as exc:  # a lender or tier refusal names no value
-        return None, f"the payload builder refused ({type(exc).__name__}: {exc})"
-    # The core payload: no agentic name, the two switches "0". A blue the
-    # emergency recipe built carries neither switch, which reads as off too,
-    # nor a profile-optional name the profile set only after it was built.
-    droppable = {*CORE_OFF_SWITCHES, *OPTIONAL_PAYLOAD_ENV_NAMES}
-    env_vars = [
-        item
-        for item in cast(list[dict[str, object]], payload["env_vars"])
-        if item["name"] not in droppable or item["name"] in names
-    ]
-    payload = {**payload, "env_vars": env_vars}
-    built = {str(item["name"]) for item in env_vars}
-    if built != names:
-        extra, missing = sorted(built - names), sorted(names - built)
-        return None, (
-            "the rebuilt payload's env-name set is not blue's (adds "
-            f"{', '.join(extra) or 'none'}; lacks {', '.join(missing) or 'none'})"
-        )
+    # Blue's own commit, and no lease name unless blue's deployment carried one.
+    payload, why = rebuild_for_env_names(
+        names,
+        git_sha=str(record["git_sha"]),
+        source_code_path=str(record["restore_source_path"]),
+        install_class=install_class,
+        app_env=app_env,
+        catalog=catalog,
+        schema=schema,
+        lakebase_instance=lakebase_instance,
+        lakebase_database=lakebase_database,
+        lease=os.environ.get(LEASE_ENV) if LEASE_ENV in names else None,
+        build=build,
+    )
+    if payload is None:
+        return None, why
     try:
         _validated_payload(
             payload, require_immutable_source=False, expected_lakebase_instance=lakebase_instance
         )
-        assert_core_off_switches(env_vars)
+        assert_core_off_switches(cast(list[dict[str, object]], payload["env_vars"]))
     except (RuntimeError, V7RecordError) as exc:
         return None, f"the rebuilt payload refuses: {exc}"
     return payload, "blue's restore payload was rebuilt with blue's exact env-name set"
