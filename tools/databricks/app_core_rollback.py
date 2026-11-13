@@ -6,6 +6,7 @@
   python -m tools.databricks.app_core_rollback restore-payload ...  # blue's, before activation
   python -m tools.databricks.app_core_rollback repin --to ID ...    # the window's start (M0-PR8)
   python -m tools.databricks.app_core_rollback repin --from-deadman # the dead-man's (M0-PR9)
+  python -m tools.databricks.app_core_rollback repin --from-owner-start  # the owner's break-glass
 
 scripts/deploy.sh runs these in the core tier (``MIP_AGENTIC_TIER=off``)
 where the agentic tier runs ``app_deployment_rollback``: ``ensure`` and
@@ -43,6 +44,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from tools.databricks.app_deployment_deadman_repin import DeadmanRepinRefused  # noqa: E402
+from tools.databricks.app_deployment_owner_start_repin import OwnerStartRepinRefused  # noqa: E402
 from tools.databricks.app_rollback_record_v7 import V7RecordError  # noqa: E402
 from tools.databricks.app_start_deployment import StartProofError  # noqa: E402
 from tools.databricks.blue_restore_proof import RestoreProofRefused  # noqa: E402
@@ -84,6 +86,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--to", dest="repin_to", default="")
     parser.add_argument("--expected-tree-sha256", default="")
     parser.add_argument("--from-deadman", action="store_true")
+    # The owner's break-glass start over an open window: the same journal
+    # reads, plus the exact owner_start_repin ack (MIP_ACK_OWNER_START_REPIN).
+    parser.add_argument("--from-owner-start", action="store_true")
     # restore-payload
     parser.add_argument("--out", type=Path)
     parser.add_argument("--install-class", default="")
@@ -185,6 +190,22 @@ def _repin(
             tier_transition_ack=args.tier_transition_ack or None, **proofs,
         )  # fmt: skip
 
+    if args.from_owner_start:
+        if args.from_deadman or args.repin_to or args.expected_rollback_deployment_id or args.expected_tree_sha256:
+            raise CoreBlueRefused("usage", "--from-owner-start reads the start, blue and tree from the journal")
+        from tools.databricks.app_deployment_owner_start_repin import repin_from_owner_start
+        from tools.databricks.quiesce_window_recovery import ACK_ENV
+
+        return repin_from_owner_start(
+            workspace,
+            app_name=args.app_name,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
+            repin=repin,
+            assert_lease_held=lease,
+            acknowledgement=os.environ.get(ACK_ENV, ""),
+            applied_app_resources=applied,
+        )
     if args.from_deadman:
         if args.repin_to or args.expected_rollback_deployment_id or args.expected_tree_sha256:
             raise CoreBlueRefused("usage", "--from-deadman reads the start, blue and tree from the journal")
@@ -319,6 +340,9 @@ def main(
         return 2
     except DeadmanRepinRefused as exc:
         print(f"{_PREFIX} REFUSED deadman_unproven: {exc}", file=sys.stderr)
+        return 2
+    except OwnerStartRepinRefused as exc:
+        print(f"{_PREFIX} REFUSED {exc.code}: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
         print(f"{_PREFIX} FAILED: {args.action} could not complete ({type(exc).__name__})", file=sys.stderr)

@@ -17,9 +17,11 @@ purpose can never satisfy another: the same plan acknowledged for
 ``adopt_live`` and for ``supersede`` has two different digests. The purposes
 are the plan's named attestation reasons: ``adopt_live``, ``supersede``,
 ``unadopt`` (the tombstone; the plan lists it among the operation reasons),
-``restore_unverified_frontend``, ``no_rollback_for``, ``override_freeze`` and
+``restore_unverified_frontend``, ``no_rollback_for``, ``override_freeze``,
 ``tier_transition`` (M2-PR7b: a release whose tier is not its signed blue's;
-tools/databricks/blue_tier_gate.py).
+tools/databricks/blue_tier_gate.py) and ``owner_start_repin`` (an owner's
+break-glass start over an open quiesce window, re-pinned by the next release:
+tools/databricks/quiesce_window_recovery.py).
 
 A digest is not a signature: anyone holding the plan can compute it. It
 proves the operator reviewed this exact plan, not who the operator is; the
@@ -42,6 +44,7 @@ PURPOSES = (
     "no_rollback_for",
     "override_freeze",
     "tier_transition",
+    "owner_start_repin",
 )
 # The one-run shell export scripts/deploy.sh reads, for the purposes it reads one for.
 ACK_ENV = {
@@ -52,6 +55,7 @@ ACK_ENV = {
         "unadopt",
         "no_rollback_for",
         "restore_unverified_frontend",
+        "owner_start_repin",
     )
 }
 # How each purpose's ack is handed in: that export, else the flag of the one
@@ -66,6 +70,12 @@ REMEDY = {
         "export MIP_ACK_RESTORE_UNVERIFIED_FRONTEND=<its sha256> for this run only (never in "
         ".env.local); under deploy-dev.yml, the dispatch input operation_acks "
         "restore_unverified_frontend=<its sha256>"
+    ),
+    # The release's own tools read it (quiesce_window plan, repin --from-owner-start).
+    "owner_start_repin": (
+        "dispatch the release with the deploy-dev.yml input operation_acks "
+        "owner_start_repin=<its sha256>; a local run exports "
+        "MIP_ACK_OWNER_START_REPIN=<its sha256> for that run only (never in .env.local)"
     ),
     "override_freeze": "pass --override-freeze-ack <its sha256> to this one publish",
     # No release reads it from the shell yet: the one release it can serve, an

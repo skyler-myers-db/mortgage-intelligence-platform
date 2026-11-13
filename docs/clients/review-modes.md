@@ -53,8 +53,9 @@ review.
   the `profile` ack (`owner_attestation`) on every mutating phase, and the
   operation acks a tool printed (`adopt_plan`, `adopt_live`, `supersede`,
   `unadopt`, `quiesce_window`, `database_instance_update`, `genie_pin`,
-  `accepted_exposure_plan`, `restore_unverified_frontend`, which a
-  plan prints and only a release reads, `data_ledger_supersede`, `data_ledger_rerun`,
+  `accepted_exposure_plan`, `restore_unverified_frontend` and
+  `owner_start_repin`, which a plan prints and only a release reads,
+  `data_ledger_supersede`, `data_ledger_rerun`,
   `metastore_app_grants`, and the selector `supersedes_deployment`, a digest of the superseded
   record's deployment id and never a switch), each admitted only in the
   phases that read it. `no_rollback_for` has no dispatch carrier: it would

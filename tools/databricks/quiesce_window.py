@@ -7,6 +7,7 @@
   python -m tools.databricks.quiesce_window await ...               # wait, require, prove
   python -m tools.databricks.quiesce_window close --repinned ID ... # after the re-pin
   python -m tools.databricks.quiesce_window status --out-env F      # for the EXIT trap
+  python -m tools.databricks.quiesce_window status --recovery --out-env F  # the next run, step 0a
   python -m tools.databricks.quiesce_window plan-wr5|await-wr5 ...  # WR5, read-only (M2-PR8)
   python -m tools.databricks.quiesce_window status --unverified     # the workflow's record
   python -m tools.databricks.quiesce_window cancel-deadman --run-id N # after the close
@@ -19,13 +20,15 @@ in ``MIP_ACK_QUIESCE_WINDOW``), admits it against the job budget
 lease that blue is still the App's last deployment, arms the dead-man
 (``quiesce_window_deadman``: publish this release, one ``jobs submit``, then
 wait until that run is RUNNING and wrote its armed marker),
-admits and re-checks blue again after that arm, journals ``window_open`` and
-only then stops the App, identity-pinned.
-``cancel-deadman`` cancels that run once the journal is closed. ``start`` journals
-``window_starting`` with the App's deployment ids (the baseline), starts,
-finds the one new id the start created (it shows about 100 s later, spike S7)
-and records it (a rerun finds it against the journaled baseline, never a
-second start).
+admits and re-checks blue again after that arm, journals ``window_open`` with
+the App's deployment ids (the baseline) and only then stops the App,
+identity-pinned.
+``cancel-deadman`` cancels that run once the journal is closed. ``start``
+refuses (``window_start_baseline_moved``, before any write, start or stop)
+unless the App is still the stopped App the window left, then journals
+``window_starting``, starts, finds the one new id the start created (it shows
+about 100 s later, spike S7) and records it (a rerun finds it against the
+journaled baseline, never a second start).
 ``await`` waits for exactly that
 deployment to be terminal, requires SUCCEEDED and proves blue's restore
 source, the folder's unchanged full-tree digest, the snapshot's equal digest
@@ -34,7 +37,9 @@ failed proof or anything else that raises, stops the App again and journals
 ``window_refused`` for the dead-man. ``app_deployment_rollback repin --to <id>``
 (``app_core_rollback repin`` for a v7 core blue, whose env names and tree are
 the record's own) then re-signs the record and checks health against the
-re-pinned id, and ``close`` closes the journal.
+re-pinned id, and ``close`` closes the journal. ``status --recovery`` also
+classifies an open window for the next run (the dead-man's restart or an
+owner's break-glass start: tools/databricks/quiesce_window_recovery.py).
 
 ``plan-wr5`` and ``await-wr5`` plan the Lakebase ownership handover's WR5
 window and prove its start, both read-only (tools/databricks/quiesce_window_wr5.py);
@@ -59,6 +64,7 @@ from typing import Any, NoReturn
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks import quiesce_window_deadman as deadman
 from tools.databricks import quiesce_window_journal as journal
+from tools.databricks import quiesce_window_recovery as recovery
 from tools.databricks.app_release_contract import ReleaseContractError
 from tools.databricks.app_rollback_record_contract import V7_RECORD_VERSION, _load_record, _text
 from tools.databricks.app_start_deployment import (
@@ -67,6 +73,7 @@ from tools.databricks.app_start_deployment import (
     env_names,
     last_deployment_is,
     prove_start_deployment,
+    require_unmoved_baseline,
     resume_start,
     start_app,
     tree_digest,
@@ -205,12 +212,18 @@ def _journal_open(
     assert_lease_held: Callable[[], None],
 ) -> dict[str, Any]:
     blue_id = str(canonical["blue_deployment_id"])
+    # The baseline an owner's break-glass start is later told apart by
+    # (quiesce_window_recovery): listed after the last blue re-check.
+    baseline = deployment_ids(workspace, app_name=app_name)
+    if blue_id not in baseline:
+        raise RuntimeError("blue is not among the App's listed deployments; the window is refused")
     return journal.write(
         workspace,
         app_name=app_name,
         expected=current,
         changes={
             "state": "window_open",
+            "start_baseline_ids": sorted(baseline),
             "window_sha256": plan["window_sha256"],
             "reasons": list(canonical["reasons"]),
             "blue_deployment_id": blue_id,
@@ -270,7 +283,10 @@ def start_window(
     ``window_starting`` is written before ``apps start``, with the App's
     deployment ids, so a start whose id was never journaled is not mistaken
     for "never started": a rerun finds it as the one id outside that
-    baseline and never starts a second time. Within
+    baseline and never starts a second time. Before that write the App must
+    still be the stopped App the window left (``require_unmoved_baseline``): an
+    owner start in flight or landed refuses here with nothing written,
+    started or stopped. Within
     ``DEADMAN_GUARD_S`` of the job deadline (the start and re-pin budgets
     and a slack) the dead-man owns the start (M0-PR9): the run journals no
     intent and leaves the window open for it, so the two never both start
@@ -287,7 +303,11 @@ def start_window(
     if not resumed and deadline is not None and clock() >= deadline - DEADMAN_GUARD_S:
         raise RuntimeError("the job deadline is too close: the dead-man owns this window's start")
     if not resumed:
-        baseline = deployment_ids(workspace, app_name=app_name)
+        baseline = require_unmoved_baseline(
+            workspace,
+            app_name=app_name,
+            journaled=frozenset((current or {}).get("start_baseline_ids") or ()),
+        )
         current = journal.write(
             workspace,
             app_name=app_name,
@@ -568,6 +588,8 @@ def _parser() -> argparse.ArgumentParser:
     # The deploy workflow's always() record (M0-PR9): the raw journal state for
     # a human, without the key registry; never an input to a decision.
     sub.choices["status"].add_argument("--unverified", action="store_true")
+    # The next run's step 0a: also classify an open window (read-only), with --out-env.
+    sub.choices["status"].add_argument("--recovery", action="store_true")
     # plan: the rebase step 0a takes; applicable: the operator's request, which
     # it resolves against the first-install journal (MIP_QUIESCE_WINDOW_REBASE).
     for mode in (plan, sub.choices["applicable"]):
@@ -608,6 +630,8 @@ def _print_plan(summary: dict[str, Any], *, refused: bool) -> None:
             f"{_PREFIX} an earlier window's dead-man restarted blue: this run re-pins it under "
             "the lease (repin --from-deadman, the window's own proofs) before step 0a"
         )
+    for line in recovery.plan_lines(summary):
+        print(f"{_PREFIX} {line}")
     if summary["reasons"]:
         print(f"{_PREFIX} window sha256 {summary['window_sha256']}: acknowledge with {ACK_ENV}")
     for code in summary["refusals"]:
@@ -714,7 +738,10 @@ def main(
             rebase_unverified_app=args.rebase_unverified_app == "1",
         )
         result = window_plan(
-            facts, position=args.position, acknowledgement=os.environ.get(ACK_ENV, "").strip()
+            facts,
+            position=args.position,
+            acknowledgement=os.environ.get(ACK_ENV, "").strip(),
+            owner_start_acknowledgement=os.environ.get(recovery.ACK_ENV, "").strip(),
         )
         # A forecast is the plan phase's: it holds no lease and opens no window
         # (open takes a pre-apply plan only), and the release re-decides.
@@ -737,6 +764,8 @@ def main(
         )
         print(f"{_PREFIX} assert-serving: the App serves the signed record's deployment")
         return 0
+    if args.command == "status" and args.recovery and (args.unverified or args.out_env is None):
+        raise SystemExit(f"{_PREFIX} status --recovery is the verified read, with --out-env")
     if args.command == "status" and args.unverified:
         if args.out_env is not None:
             raise SystemExit(f"{_PREFIX} an unverified status is a record, never an env file")
@@ -830,8 +859,14 @@ def main(
         marker_state, marker_start = deadman.deadman_status(
             workspace, app_name=app_name, current=current
         )
+        found = recovery.classify(workspace, app_name=app_name, current=current) if args.recovery else None
+        if found is not None and found.journal_state not in {"absent", "closed"}:
+            marker_state = found.deadman_state  # refined: a restart the App no longer serves
         values["MIP_QUIESCE_WINDOW_DEADMAN_STATE"] = marker_state
         values["MIP_QUIESCE_WINDOW_DEADMAN_START_DEPLOYMENT_ID"] = marker_start
+        if found is not None:
+            values["MIP_QUIESCE_WINDOW_RECOVERY"] = found.kind
+            print(f"{_PREFIX} {recovery.status_line(found)}")
         # Codes and booleans only: the deploy workflow's always() step records it.
         print(
             f"{_PREFIX} status: journal {values['MIP_QUIESCE_WINDOW_JOURNAL_STATE']}, blue "

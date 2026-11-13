@@ -266,6 +266,120 @@ def test_anything_but_an_open_window_the_dead_man_restarted_is_left_alone(
     assert not _has(calls, "app_deployment_rollback repin")
 
 
+# --- the next run: repin --from-owner-start, the owner's break-glass (wave 7c) --------
+
+
+def test_the_recovery_reads_the_verified_status_with_the_classification(tmp_path: Path) -> None:
+    result, calls = _run(tmp_path, "recover_deadman_quiesce_window\necho recovered\n", JOURNAL="closed")
+    assert result.returncode == 0 and "recovered" in result.stdout
+    status = [call for call in calls if "quiesce_window status" in call]
+    assert len(status) == 1 and status[0].startswith("-m tools.databricks.quiesce_window status --recovery --app-name mip-app --out-env ")
+    assert "--unverified" not in status[0]
+
+
+@pytest.mark.parametrize(
+    ("journal", "marker"),
+    (
+        ("window_open", "absent"),
+        ("window_open", "deadman_skipped"),
+        ("window_open", "deadman_superseded"),
+        ("window_starting", "absent"),
+        ("window_started", "absent"),
+        ("window_proven", "absent"),
+        ("window_refused", "absent"),
+    ),
+)
+@pytest.mark.parametrize("tier", ("on", "off"))
+def test_the_next_run_re_pins_an_owner_start_under_its_own_lease(
+    tmp_path: Path, journal: str, marker: str, tier: str
+) -> None:
+    result, calls = _run(
+        tmp_path,
+        "recover_deadman_quiesce_window\necho recovered\n",
+        JOURNAL=journal,
+        DEADMAN_STATE=marker,
+        RECOVERY="owner_start",
+        CLIENT_AGENTIC_TIER=tier,
+    )
+    assert result.returncode == 0 and "recovered" in result.stdout, result.stderr
+    repin = [call for call in calls if "rollback repin" in call]
+    assert len(repin) == 1 and " --from-owner-start " in repin[0] and "--from-deadman" not in repin[0]
+    core = "app_core_rollback repin --lakebase-instance instance --agentic-tier off --from-owner-start"
+    assert (core in repin[0]) is (tier == "off"), "a v7 core blue is re-pinned by the core tool"
+    assert ("app_deployment_rollback repin --from-owner-start" in repin[0]) is (tier == "on")
+    for flag in (
+        "--deployment-lease-id lease",
+        "--deployment-source-git-sha sha",
+        "--token-env MIP_BEARER_TOKEN",
+        "--app-resource-payload",
+    ):
+        assert flag in repin[0], flag
+    assert "--to " not in repin[0] and "--expected-rollback-deployment-id" not in repin[0]
+    assert "owner_start_repin" not in repin[0], "the ack is the tool's own environment read, never an argument"
+    assert not any(_has(calls, stop) for stop in ("quiesce_window start", "stop_app_fail_closed", "apps stop", "apps start"))
+
+
+@pytest.mark.parametrize("recovery", ("none", "deadman", ""))
+@pytest.mark.parametrize(
+    ("journal", "marker"),
+    (
+        ("absent", "absent"),
+        ("closed", "deadman_restarted"),
+        ("window_open", "absent"),
+        ("window_open", "deadman_left_stopped"),
+        ("window_open", "deadman_superseded"),
+        ("window_started", "deadman_restarted"),
+        ("window_refused", "deadman_restarted"),
+    ),
+)
+def test_an_open_window_with_no_owner_start_candidate_is_left_alone(
+    tmp_path: Path, journal: str, marker: str, recovery: str
+) -> None:
+    result, calls = _run(
+        tmp_path,
+        "recover_deadman_quiesce_window\necho recovered\n",
+        JOURNAL=journal,
+        DEADMAN_STATE=marker,
+        RECOVERY=recovery,
+    )
+    assert result.returncode == 0 and "recovered" in result.stdout
+    assert not _has(calls, "rollback repin")
+
+
+def test_a_dead_man_restart_keeps_its_own_flag_whatever_the_recovery_reads(tmp_path: Path) -> None:
+    result, calls = _run(
+        tmp_path,
+        "recover_deadman_quiesce_window\necho recovered\n",
+        JOURNAL="window_open",
+        DEADMAN_STATE="deadman_restarted",
+        RECOVERY="deadman",
+    )
+    assert result.returncode == 0, result.stderr
+    repin = [call for call in calls if "rollback repin" in call]
+    assert len(repin) == 1 and "repin --from-deadman" in repin[0] and "--from-owner-start" not in repin[0]
+
+
+@pytest.mark.parametrize("repin_rc", ("1", "2"))
+def test_a_refused_owner_start_re_pin_leaves_the_app_as_the_owner_left_it(tmp_path: Path, repin_rc: str) -> None:
+    # The real step-0a branch under the real EXIT trap: an unacked or unproven owner start
+    # exits 2 before the fail-closed arm, so nothing stops the App the owner started.
+    result, calls = _run(
+        tmp_path,
+        "APP_FAIL_CLOSED_ARMED=0; APP_UPGRADE_STATE=unverified_existing; LAKEBASE_RUNTIME_ACCESS_PROVEN=0\n"
+        "TREATMENT_RUNTIME_QUIESCED=0\n"
+        "trap stop_app_after_failed_deploy EXIT\n" + _step_0a_signed_blue_branch() + "echo past-step-0a\n",
+        JOURNAL="window_refused",
+        RECOVERY="owner_start",
+        REPIN_RC=repin_rc,
+    )
+    assert result.returncode == 2 and "past-step-0a" not in result.stdout
+    assert _has(calls, "repin --from-owner-start") == 1
+    assert "owner_start_repin ack (MIP_ACK_OWNER_START_REPIN) does not name this plan" in result.stderr
+    assert "not provably the window's blue" in result.stderr
+    assert not any(_has(calls, stop) for stop in ("stop_app_fail_closed", "apps stop", "legacy-stop", "legacy-restore"))
+    assert not _has(calls, "converge_campaign_treatment_access"), "nothing ran after the refusal"
+
+
 def test_a_restart_the_re_pin_cannot_prove_exits_before_any_step(tmp_path: Path) -> None:
     result, calls = _run(
         tmp_path,

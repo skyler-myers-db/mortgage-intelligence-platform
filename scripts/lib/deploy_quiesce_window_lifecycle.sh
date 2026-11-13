@@ -680,30 +680,30 @@ compensate_quiesce_window_state() {
 }
 
 # ---------------------------------------------------------------------------
-# The next run after a dead-man restart (M0-PR9)
+# The next run after a dead-man restart (M0-PR9) or an owner's break-glass start
 # ---------------------------------------------------------------------------
 
-# Step 0a, under this run's lease and before the signed-blue proof: an
-# earlier window whose runner died and whose dead-man restarted blue is
-# re-pinned with the window's own proofs (repin --from-deadman). The dead-man's
-# marker is a pointer, never proof: the tool re-proves the start deployment
-# against the signed journal and the App, re-signs the record under this lease
-# and closes the journal. The live bindings it may record are the record's or
-# exactly this run's bundle payload. It runs BEFORE step 0a arms the
-# fail-closed stop and quiesces treatment, so a refusal exits 2 with the App
-# exactly as the dead-man left it, the journal open and the lease released
-# (as the pre-lease window_journal_open refusal leaves it): a transient
-# failure is retried by the next run, and a re-pin already signed is resumed
-# (only the journal close is left). A WR1 window restarted on the dead
-# runner's bindings re-pins only from that same commit (its bundle payload is
-# exactly those bindings), so re-run that commit first. Any other open journal
-# was refused by the pre-lease plan before the lease.
+# Step 0a, under this run's lease and before the signed-blue proof: an earlier
+# window whose runner died and whose dead-man restarted blue is re-pinned with
+# the window's own proofs (repin --from-deadman). The marker is a pointer,
+# never proof: the tool re-proves the start against the signed journal and the
+# App, re-signs the record under this lease and closes the journal. The live
+# bindings it may record are the record's or exactly this run's bundle payload.
+# An owner's raw start over an open window (status --recovery: owner_start) is
+# re-pinned the same way by repin --from-owner-start, only with its exact
+# owner_start_repin digest ack (MIP_ACK_OWNER_START_REPIN; the tool recomputes
+# it). It runs BEFORE step 0a arms the fail-closed stop and quiesces treatment,
+# so a refusal exits 2 with the App as it was left, the journal open and the
+# lease released: a transient failure is retried by the next run, and a re-pin
+# already signed is resumed. A WR1 window restarted on the dead runner's
+# bindings re-pins only from that same commit, so re-run that commit first.
+# Any other open journal was refused by the pre-lease plan before the lease.
 recover_deadman_quiesce_window() {
-  local env_file payload
+  local env_file payload source_flag=--from-deadman
   local -a applied_bindings=()
   env_file="$(mktemp -t mip-quiesce-window-recover.XXXXXX.env)"
   chmod 600 "$env_file"
-  if ! "$PYTHON" -m tools.databricks.quiesce_window status \
+  if ! "$PYTHON" -m tools.databricks.quiesce_window status --recovery \
     --app-name "$_GRANTS_APP_NAME" \
     --out-env "$env_file"; then
     rm -f "$env_file"
@@ -717,19 +717,19 @@ recover_deadman_quiesce_window() {
   # start leaves it, and its dead-man restarts that window as well.
   case "${MIP_QUIESCE_WINDOW_JOURNAL_STATE}:${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}" in
     window_open:deadman_restarted|window_starting:deadman_restarted) ;;
-    *) return 0 ;;
+    *) [[ "${MIP_QUIESCE_WINDOW_RECOVERY:-}" == "owner_start" ]] || return 0; source_flag=--from-owner-start ;;
   esac
   payload="$(mktemp -t mip-quiesce-window-recover-bindings.XXXXXX.json)"
   chmod 600 "$payload"
   if collect_quiesce_window_binding_payload "$payload"; then
     applied_bindings=(--app-resource-payload "$payload")
   fi
-  step "re-pin the deployment an earlier window's dead-man started (repin --from-deadman, the window's proofs)"
+  step "re-pin the deployment an earlier window's dead-man or the owner started (repin ${source_flag}, the window's proofs)"
   local -a repin=("$PYTHON" -m tools.databricks.app_deployment_rollback repin)
   if [[ "${CLIENT_AGENTIC_TIER:-}" == "off" ]]; then
     repin=("$PYTHON" -m tools.databricks.app_core_rollback repin --lakebase-instance "$MIP_LAKEBASE_INSTANCE" --agentic-tier off)
   fi
-  if ! run_with_account_identity run_with_proof_signing_authority "${repin[@]}" --from-deadman \
+  if ! run_with_account_identity run_with_proof_signing_authority "${repin[@]}" "$source_flag" \
     --app-name "$_GRANTS_APP_NAME" \
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --base-url "${MIP_APP_URL:?App URL is required for the re-pin health proof}" \
@@ -738,7 +738,7 @@ recover_deadman_quiesce_window() {
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     "${applied_bindings[@]}"; then
     rm -f "$payload"
-    echo "${RED}[deploy] the dead-man's restart is not provably the window's blue; nothing else ran and the App is left as the dead-man left it, the journal open. Re-run (a WR1 window re-pins from the dead window's own commit); an App no longer serving the dead-man's start needs the owner break-glass.${RST}" >&2
+    echo "${RED}[deploy] the restart (repin ${source_flag}) is not provably the window's blue, or its owner_start_repin ack (MIP_ACK_OWNER_START_REPIN) does not name this plan; nothing else ran and the App is left as it was, the journal open. Re-run (a WR1 window re-pins from the dead window's own commit); an App no longer serving the dead-man's start is the owner break-glass case (docs/deployment.md).${RST}" >&2
     exit 2
   fi
   rm -f "$payload"

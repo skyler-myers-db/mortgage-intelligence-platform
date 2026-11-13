@@ -6,9 +6,12 @@ deploy runs with their own authorities: the bundle plan gate's report (WR4),
 the binding payload diffed against the live App (WR1), the App, verifier and
 jobs-reader role ``--check`` and the jobs reader's grants (WR2) and the
 Lakebase migration plan (WR3). The two full-tree digests are downloaded only
-when a reason exists. An open window's dead-man marker is read too (M0-PR9):
-a restart it records lets the pre-lease plan through to the recovery under
-the lease, which re-proves it (``repin --from-deadman``).
+when a reason exists. An open window is classified too
+(tools/databricks/quiesce_window_recovery.py, read-only): a dead-man restart
+the App serves lets the pre-lease plan through to the recovery under the
+lease, which re-proves it (``repin --from-deadman``, M0-PR9), and an owner's
+break-glass start is named with the ``owner_start_repin`` digest a release
+must carry (``repin --from-owner-start``).
 
 A v7 core record (M2-PR7b: an adopted blue, or a core release's own capture)
 is read too, its env-name set from the record itself. Spike S7 recorded how a
@@ -40,8 +43,8 @@ from tools.databricks.app_start_deployment import (
     last_deployment_is,
     tree_digest,
 )
-from tools.databricks.quiesce_window_deadman import deadman_status
 from tools.databricks.quiesce_window_plan import WindowFacts
+from tools.databricks.quiesce_window_recovery import classify
 
 NOT_FOUND_RECORD = "no server-owned last-good App rollback contract exists"
 MIGRATION_DECISIONS = frozenset({"noop", "apply", "refuse"})
@@ -144,12 +147,6 @@ def collect_facts(
         raise ValueError("the bundle plan gate report did not pass")
     current = journal.read(workspace, app_name=app_name)
     journal_state = journal.state_of(current)
-    # An open window whose dead-man restarted blue is the recovery's (M0-PR9).
-    deadman_state = (
-        deadman_status(workspace, app_name=app_name, current=current)[0]
-        if journal_state in {"window_open", "window_starting"}
-        else "absent"
-    )
     if rebase_unverified_app:
         return WindowFacts(applicable=False, not_applicable_reason="rebase")
     app = app_or_none(workspace, app_name=app_name)
@@ -191,12 +188,18 @@ def collect_facts(
         binding_state = "diff" if lines else "equal"
         if description_fixup_owed(expected=binding_payload, live=live):
             description_state = "differs"
+    # An open window: the dead-man's restart the App serves, or an owner's
+    # break-glass start, is the recovery's under the lease (never proof here).
+    recovery = classify(workspace, app_name=app_name, current=current, app=app)
     blue_id = record["deployment_id"]
     blue = workspace.apps.get_deployment(app_name, blue_id)
     facts = WindowFacts(
         applicable=True,
         journal_state=journal_state,
-        deadman_state=deadman_state,
+        deadman_state=recovery.deadman_state,
+        owner_start_state=recovery.owner_start,
+        owner_start_sha256=recovery.sha256,
+        owner_start_creator=recovery.creator_class,
         binding_state=binding_state,
         binding_lines=lines,
         description_state=description_state,
