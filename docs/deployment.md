@@ -5565,17 +5565,57 @@ variable, and a public one found in a secret.
 **Ids the release resolves at run time** are in no profile, so that first
 step cannot register them: the App's resource id, its service principal's
 application and SCIM ids (the platform mints the App's service principal) and
-each deployment id. `scripts/deploy.sh` echoes every command it runs, so it
-registers each of these as a runner mask at the place it first holds one,
-before any command is handed it (`mask_runtime_ids`, through
-`tools/clients/redact.py`): the step-4 resolve after the bundle apply (a first
-install's first sight of its App), the App inventory a routine release reads
-before it, the signed first-install journal, the EXIT trap's fallback read,
-and every rollback binding or quiesce window env file it sources
-(`mask_deployment_ids`). The data phase reads the App's service principal
-through `tools/databricks/data_phase_app_identity.py`, which registers it
-before printing it. A mask that cannot be registered stops the step, and the
-value is handed to no command.
+each deployment id. `scripts/deploy.sh` echoes every command it runs, so each
+of these is registered as a runner mask at the place the run first holds one,
+before any command is handed it (`mask_runtime_ids` in the shell and
+`emit_mask` in a tool: one rule, `tools/clients/redact.py`):
+
+- **before the lease, in a plan and in a release of an installed App:** the
+  pre-stop probes' read of the App registers its service principal's two ids
+  before a refusal can name one, and the agentic tier's rollback-record note
+  registers the active deployment and the record's before it names them
+  (`tools/databricks/deploy_prestop_probes.py`,
+  `tools/databricks/prestop_rollback_record.py`). The window plan's probe file
+  hands the shell the application id for the App role check, and the shell
+  registers it right after it sources that file;
+- **after the lease:** the App inventory a routine release reads, the step-4
+  resolve after the bundle apply (a first install's first sight of its App),
+  the signed first-install journal, and the EXIT trap's two fallback reads;
+- **deployment ids** (`mask_deployment_ids`): every rollback binding env file
+  the release sources, and every quiesce window env file whose deployment id
+  it hands to a command. The dead-man recovery and a failed open's run-id
+  read source a window env file too; they hand no deployment id on and
+  register none.
+
+**What the apps CLI prints is kept off the log.** `databricks apps deploy`
+renders the created deployment as JSON on its stdout when it returns (its id,
+its source path, its creator), and `apps start` and `apps update` render the
+whole App (its service principal's name and OAuth client ids, its
+deployments, its URL), before the shell holds any of it, so no mask could
+come first. `keep_cli_result_private` runs those three with the result in a
+private file, registers the deployment ids it names and removes the file; the
+first install's `apps create` already wrote its result to a private file.
+
+The data phase reads the App's service principal through
+`tools/databricks/data_phase_app_identity.py`, which registers it before
+printing it. A mask that cannot be registered stops the step, and the value
+is handed to no command; the EXIT trap's reads drop the value and refuse
+instead, since a trap has no step to stop.
+
+Not covered, and so still printed in clear:
+
+- ids a tool prints in its own messages, other than the two pre-stop reads
+  above;
+- the agentic tier's other sourced env files (the agentic env, the cutover
+  journals, the agent evaluation and the verifier capture carry endpoint,
+  Supervisor and credential ids);
+- the App's URL, which the release prints where it resolves it (`app url:`,
+  the closing summary) and in each `--base-url` it echoes;
+- the job id and the run id in the run URL `databricks bundle run` prints for
+  each job it runs. The host and the workspace id in that URL are profile
+  values the first step registered;
+- the lease id and the release id, which are the release's own and name no
+  platform object.
 
 **The dispatch preflight** (`tools/clients/dispatch_preflight.py`) prints codes,
 counts, digests, field names and tracked paths only, and appends them to the
