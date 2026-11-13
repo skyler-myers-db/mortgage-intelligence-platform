@@ -140,10 +140,10 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "certifi==2026.10.23" in requirements_in
     assert "graphql-core==3.2.12" in requirements_in
     assert "pillow==13.0.0" in requirements_in
-    assert "opentelemetry-api>=1.45.1,<2" in requirements_in
-    assert "opentelemetry-sdk>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-api>=1.45.2,<2" in requirements_in
+    assert "opentelemetry-sdk>=1.45.2,<2" in requirements_in
     assert "opentelemetry-exporter-otlp>=1.45.1,<2" in requirements_in
-    assert "opentelemetry-instrumentation-logging>=0.66b1,<1" in requirements_in
+    assert "opentelemetry-instrumentation-logging>=0.66b2,<1" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
@@ -160,10 +160,10 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "pyasn1==0.6.5",
         "pg8000==1.31.5",
         "psycopg==3.3.4",
-        "opentelemetry-api==1.45.1",
-        "opentelemetry-sdk==1.45.1",
+        "opentelemetry-api==1.45.2",
+        "opentelemetry-sdk==1.45.2",
         "opentelemetry-exporter-otlp==1.45.1",
-        "opentelemetry-instrumentation-logging==0.66b1",
+        "opentelemetry-instrumentation-logging==0.66b2",
         "certifi==2026.10.23",
         "graphql-core==3.2.12",
         "pillow==13.0.0",
