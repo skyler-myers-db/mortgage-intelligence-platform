@@ -3695,12 +3695,15 @@ before the lease, where it used to pass and then refuse under every lease.
 One that stops serving it between that plan and step 0a still reaches
 `repin --from-deadman` there, which refuses it before the fail-closed arm.
 Any other open journal still refuses before the lease
-(`window_journal_open`): a contract window the dead-man left stopped, a start
-it could not prove, or a dead-man that has not reached its deadline. That is
-the owner break-glass case: a raw `apps start` with the owner's U2M profile
-("Owner break-glass: a raw `apps start`", under the emergency recipe), which
-one release then re-pins with the owner's exact `owner_start_repin` digest
-ack ("The release that re-pins an owner start").
+(`window_journal_open`). A start the dead-man could not prove, or a dead-man
+that has not reached its deadline, is the owner break-glass case: a raw `apps
+start` with the owner's U2M profile ("Owner break-glass: a raw `apps start`",
+under the emergency recipe), which one release then re-pins with the owner's
+exact `owner_start_repin` digest ack ("The release that re-pins an owner
+start"). A contract window the dead-man left stopped is never one: blue's code
+would serve the migrated schema, so the owner never breaks glass on it and
+escalates instead, and an owner start over it is never re-pinned
+(`owner_start_contract_window`).
 
 **The workflow.** `deploy-dev.yml`'s deploy job (M1-PR7) first records
 `MIP_JOB_DEADLINE_EPOCH` from its phase's own timeout, and a step after the

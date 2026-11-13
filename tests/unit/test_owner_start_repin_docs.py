@@ -150,6 +150,19 @@ def test_the_plan_that_prints_the_digest_prints_no_active_deployment_digest_or_f
                 assert "expected_active_deployment_sha256" not in line, doc
 
 
+def test_the_dead_man_section_never_names_a_contract_window_a_break_glass_case() -> None:
+    # "Never break glass on a contract window", and the classifier refuses one
+    # (owner_start_contract_window): the dead-man section's list must agree.
+    deployment = _flat(_read("docs/deployment.md"))
+    start = deployment.index("Any other open journal still refuses before the lease")
+    paragraph = deployment[start : deployment.index("**The workflow.**", start)]
+    case = paragraph[: paragraph.index(" is the owner break-glass case")]
+    assert "contract window" not in case, "the break-glass case lists no contract window"
+    assert "A contract window the dead-man left stopped is never one" in paragraph
+    assert "escalates instead" in paragraph and "(`owner_start_contract_window`)" in paragraph
+    assert "**Never break glass on a contract window**" in _break_glass()
+
+
 def test_no_documented_shell_block_exports_the_ack() -> None:
     """A local run's export is prose: a bash block's only environment is the owner's CLI profile."""
 
