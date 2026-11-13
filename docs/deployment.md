@@ -2443,7 +2443,9 @@ when that lands among the binds the undo is unproven (exit 3, half-bound).
 The adopt tools capture bundle_env's output, so a job log names only the call
 that failed (`bundle plan failed (exit 2)`, `bind_failed`, or `bindings_differ`
 with `the bundle summary failed`); bundle_env's own line is in the run's
-private report (`cli_errors`), and adopt-live's summary keeps none.
+private report (`cli_errors`), which under GitHub Actions the deploy publishes
+create-only to the deployer's plan-reports folder ("Adopting an existing
+install"), and adopt-live's summary keeps none.
 The recovery is `--phase unadopt` with a fresh ack: the step-0 pin check
 prints the new plan's sha256. A refusal at adopt-live's summary leaves the
 binds in place, so the adopt plan is another plan: a re-run needs a fresh
@@ -3150,9 +3152,21 @@ space, the pre-lease plan binds the placeholder (`bundle_env plan
 the governed title); the pre-apply plan always resolves the governed space.
 
 The plan JSON shape is derived from the Databricks CLI v1.10.0 source (cited in
-`tools/databricks/bundle_plan_shape.py`), not from a live capture, which is
-still owed at the first governed plan phase. Any field, action or key the
-parser does not know refuses as `malformed_plan`.
+`tools/databricks/bundle_plan_shape.py`) and measured live on that version on
+throwaway bundle roots: spike S9 parsed 14 documents for the experiment key
+(create, skip, update, recreate) and spike S10 the whole bundle's fresh-root
+plan (18 creates over the 8 kinds, with `depends_on` and `vars`);
+tests/fixtures/bundle_plans/ rebuilds both synthetically. No governed run has
+parsed one yet. Plans #1 and #2 of an adoption stop at the client live checks
+and run no bundle validate and no bundle plan, so for an adopted install the
+first governed parse is the adopt phase's pre-bind plan
+(`install_state_adopt plan`, the first-client cutover's 10B-1), and for a new
+client the first plan phase that passes the live checks. Any field, action or
+key the parser does not know refuses as `malformed_plan`. Its public line
+names only the resource and a field class (`malformed_plan jobs.<key>
+(changes)`); the parser's message, which can name a change path and so a
+remote map key, and the document's value-free skeleton
+(`tools/databricks/bundle_plan_skeleton.py`) go to the full report only.
 
 `./scripts/deploy.sh -t client --phase plan` runs only the read-only steps
 through the pre-lease gate, predicts each phase's budget, and exits before the
@@ -3820,6 +3834,26 @@ edit and then:
 After an exit 3 from either phase, run `--phase unadopt` (again): its plan
 unbinds whatever legacy keys the state still binds, and its live checks accept
 that half-bound state.
+
+**The private report.** `install_state_adopt` writes its full report mode
+0600 (`--report-out`): the bind plan, the post-bind gate's full report, the
+CLI's own output on a failed bundle call (`cli_errors`), and for a plan the
+parser refuses (`PlanShapeError`) the parser's message and the document's
+value-free skeleton (`malformed_plan`). The public line of that refusal names
+only the resource and a field class, `[mip-adopt] REFUSED malformed_plan
+<kind>.<key> (<field class>)`: the message can name a change path, and in a
+post-bind plan a change path can carry a remote map key. Before the binds
+(the plan, or the apply's recompute) it ends the run, exit 2, nothing changed;
+after them it is `bind_failed: PlanShapeError during the binds (malformed_plan
+...)` with the undo, exit 2 or 3. Under GitHub Actions the deploy publishes
+that report as the plan phase publishes its PlanReport
+(`scripts/lib/deploy_plan_report_lifecycle.sh`): create-only to
+`<deployer root>/plan-reports/<run id>-<attempt>.json` in the client
+workspace, one per run (the plan's when the run ends at the plan, before
+adopt-live's plan can refuse; the apply's when it reaches the apply), with no
+public half. A failed write before the lease refuses the run (exit 2, nothing
+changed); after the apply it is only a warning, and the report stays on the
+runner. A workspace admin reads it there after the run.
 
 `bundle_env deployment` admits a non-App bind or unbind only as one of the
 edits an adopt plan names, never with `--force-lock`
