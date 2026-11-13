@@ -184,7 +184,7 @@ def test_deploy_script_rejects_duplicate_target_before_preflight(
 
 
 def test_live_workflows_pin_cli_with_safe_partial_app_deploy_support() -> None:
-    setup_action = "databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c"
+    setup_action = "databricks/setup-cli@8821c27b1fe57472264eeb6e50c1f31d69552f28"
 
     for workflow_path, expected in ((DEPLOY_DEV, 1), (NIGHTLY, 0)):
         # M1-PR8: nightly runs no Databricks CLI; its validator session uses the SDK.

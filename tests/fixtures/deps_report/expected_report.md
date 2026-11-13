@@ -64,7 +64,7 @@ pip-audit over uv.lock and requirements-dev.lock:
 | `actions/checkout` | `v6` | `7.0.1` | `major` | `tests/fixtures/deps_report/synthetic_ci.yml:16`, `tests/fixtures/deps_report/synthetic_ci.yml:35` |
 | `actions/upload-artifact` | `v7` | `7.0.2` | `current` | `tests/fixtures/deps_report/synthetic_ci.yml:36` |
 | `bandit` | `1.7.9` | `1.9.4` | `minor` | `tests/fixtures/deps_report/synthetic_ci.yml:23` |
-| `databricks/setup-cli` | `v1.7.0` |  | `no release` | `tests/fixtures/deps_report/synthetic_ci.yml:17` |
+| `databricks/setup-cli` | `v1.10.0` |  | `no release` | `tests/fixtures/deps_report/synthetic_ci.yml:17` |
 | `gitleaks` | `8.28.0` | `8.30.1` | `minor` | `tests/fixtures/deps_report/synthetic_ci.yml:21` |
 | `gitleaks` | `8.30.1` | `8.30.1` | `current` | `tests/fixtures/deps_report/synthetic_ci.yml:19` |
 | `pip-audit` | `2.9.0` | `2.10.1` | `minor` | `tests/fixtures/deps_report/synthetic_ci.yml:23` |

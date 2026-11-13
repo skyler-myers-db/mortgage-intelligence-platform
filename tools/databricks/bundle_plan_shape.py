@@ -39,8 +39,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+# The one Databricks CLI version the governed path was reviewed on: this
+# parser, the plan gate and every cutover spike. deploy-dev.yml's setup-cli pin
+# must install exactly it (tests/unit/test_governed_cli_version.py).
+REVIEWED_CLI_VERSION = "1.10.0"
 PLAN_VERSION = 2
-ACTIONS = frozenset({"skip", "resize", "update", "update_id", "create", "recreate", "delete"})
+ACTIONS =frozenset({"skip", "resize", "update", "update_id", "create", "recreate", "delete"})
 CHILD_NODES = frozenset({"permissions", "grants"})
 _TOP_FIELDS = frozenset({"plan_version", "cli_version", "lineage", "serial", "plan"})
 _ENTRY_FIELDS = frozenset(

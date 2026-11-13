@@ -5512,6 +5512,13 @@ key.
 - `deploy` runs in the client's environment (`environment: ${{ inputs.client
   }}`), in a non-cancelling lane per client (`mip-client-<client>`), with
   `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
+  It installs Databricks CLI 1.10.0, the version the plan gate and the
+  cutover spikes were reviewed on (`REVIEWED_CLI_VERSION` in
+  tools/databricks/bundle_plan_shape.py): `databricks/setup-cli` is pinned to
+  its `v1.10.0` tag's commit with no `with:`, so the action installs the
+  version its own `VERSION` file names. `databricks.yml`'s `>= 1.7.0` is only
+  a floor; tests/unit/test_governed_cli_version.py fails if the pin, its tag
+  comment and that constant drift apart.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, and its first step turns that into
   `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout
