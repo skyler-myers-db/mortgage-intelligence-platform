@@ -3872,24 +3872,38 @@ deployer's reads, the CLI's plan, the pre-stop probes or adopt-live (the
 cutover runbook's step 6b).
 
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
-of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
-pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
-unsupported kind fails its bind, and the run undoes the binds before it.
+of every other declared kind (App, Lakebase instance and catalog, warehouse,
+jobs, pipeline, dashboards) on CLI v1.10.0 is unconfirmed: an unsupported
+kind fails its bind, and the run undoes the binds before it.
 
-The post-bind plan for the adopted MLflow experiment is unmeasured too. After
-the owner's rename (the cutover runbook's step 3b) its name equals the
-declared one, so the release has no experiment rename left to apply. The CLI
-v1.10.0 binary's own lifecycle rules for experiments (read offline from the
-installed binary, 2026-11-13) ignore `tags` as a local and as a remote
+The adopted MLflow experiment's bind and post-bind plan are measured, on
+throwaway objects (spike S9, CLI v1.10.0, 2026-11-13): a one-resource bundle
+that declares the experiment as `databricks.yml` does (direct engine,
+production mode, the target's `mip_client` tag preset, a `name` and nothing
+else). After the owner's rename (the cutover runbook's step 3b) its name
+equals the declared one, so the release has no experiment rename left to
+apply. The CLI v1.10.0 binary's own lifecycle rules for experiments (read
+offline from the installed binary) ignore `tags` as a local and as a remote
 change, apply a `name` change in place, and recreate only on
 `artifact_location` (a backend default: skipped when the state and the
-configuration hold none and the remote has one) or `trace_location`. The
-declaration sets neither, so the predicted action is `skip`. What is owed is
-the measurement itself: that a plan right after a `bundle deployment bind`
-shows `skip`, not `recreate`, for an experiment whose declaration has no
-`artifact_location`. What the bind writes as the state's old value is not
-established. A recreate refuses at the post-bind gate, and the run undoes
-the binds.
+configuration hold none and the remote has one) or `trace_location`; the
+declaration sets neither (tests/unit/test_bundle_experiment_path.py). The
+spike measured what those rules predict: `bundle deployment bind` exits 0,
+and a plan right after it shows `skip`, not `recreate`, for an experiment
+whose declaration has no `artifact_location`. Its two changes are both
+skipped: `tags` (reason `terraform_compat`) and `artifact_location` (reason
+`backend_default`). The experiment stayed byte-identical. The bind writes
+the bundle's declared values into the state, never the remote ones, and no
+`artifact_location`. A live name in the same folder under the
+development-mode prefix plans an in-place `update` of the name, never a
+recreate; a declared `artifact_location` plans `recreate` (reason
+`immutable`). An unbind exits 0 and the next plan is `create`; a re-bind
+returns to `skip`. An adopted experiment never receives the `mip_client` tag
+and keeps the `dev` tag its development-mode deploy gave it: the CLI never
+converges an experiment's tags, and nothing in this repository reads either
+tag. Not measured: any CLI version but v1.10.0 (v1.7.0 among them), the CI
+deployer as the caller, the full governed plan, and any apply. A recreate
+refuses at the post-bind gate, and the run undoes the binds.
 
 **Dashboards (attack O9).** Spike S4 measured a dashboard `parent_path` move
 on throwaway resources (CLI v1.10.0, direct engine): `parent_path` is

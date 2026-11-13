@@ -228,12 +228,18 @@ def test_the_runbook_renames_to_the_declared_name_and_rolls_back_to_the_refused_
         "**If the proof fails, stop: do not go on to step 7.**",
         "`same_id` false, or a `name` that is not exactly",
         "a create call at an existing name returns that experiment's id with exit 0",
-        "a rename onto a name another experiment holds was not measured",
+        # Spike S9 measured a rename onto another experiment's name: refused, both unchanged.
+        "a rename onto a name another experiment holds is refused with exit 1 (spike S9",
+        "so no exit code alone proves it",
+        "another experiment (spike S9: HTTP 409, `ALREADY_EXISTS`, reason `NAME_CONFLICT`, both experiments unchanged)",
+        "The read still comes first, so a taken name is found without a mutating call.",
         "Roll back only to abandon the cutover",
         "After step 12 the bundle manages the experiment under the governed name: do not rename it back then.",
         "This step never deletes the legacy folder",
     ):
         assert words in flat, words
+    for unmeasured in ("another experiment holds was not measured", "another experiment holding it was not measured"):
+        assert unmeasured not in flat, unmeasured
     same_id = next(line for line in proof if "same_id" in line)
     assert same_id.startswith(f"databricks experiments get-by-name {declared} ") and f'== "{_ID}"' in same_id
 
@@ -317,16 +323,27 @@ def test_the_runbook_says_what_the_snapshot_found_at_steps_1_and_3_and_the_deplo
     assert "so there the remedy is the profile's name, never another name for the live object" in adopting
     for name, _ in HISTORY:
         assert f"`{name}`" in adopting, name
-    # The owed measurement is the post-bind action, not the tags (the CLI's own lifecycle rules).
+    # The post-bind action, not the tags, was the unknown (the CLI's own lifecycle rules), and
+    # spike S9 measured it on throwaway objects with CLI v1.10.0.
     owed = adopting[adopting.index("**Owed live confirmations.**") : adopting.index("**Dashboards (attack O9).**")]
     for words in (
         "ignore `tags` as a local and as a remote change",
         "apply a `name` change in place",
         "recreate only on `artifact_location`",
         "shows `skip`, not `recreate`, for an experiment whose declaration has no `artifact_location`",
-        "What the bind writes as the state's old value is not established.",
+        "The adopted MLflow experiment's bind and post-bind plan are measured, on throwaway objects "
+        "(spike S9, CLI v1.10.0, 2026-11-13)",
+        "Its two changes are both skipped: `tags` (reason `terraform_compat`) and `artifact_location` "
+        "(reason `backend_default`).",
+        "The bind writes the bundle's declared values into the state, never the remote ones",
+        "a declared `artifact_location` plans `recreate` (reason `immutable`)",
+        "An adopted experiment never receives the `mip_client` tag and keeps the `dev` tag",
+        "nothing in this repository reads either tag",
+        "Not measured: any CLI version but v1.10.0 (v1.7.0 among them)",
     ):
         assert words in owed, words
+    for stale in ("is unmeasured", "is not established", "pipeline, dashboards, experiment)"):
+        assert stale not in owed, stale
     bundle = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
     experiment = bundle["resources"]["experiments"]["mip_lead_scoring"]
     assert set(experiment) == {"name"}, "the declaration sets no artifact_location and no trace_location"

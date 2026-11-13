@@ -508,19 +508,22 @@ preflight lists no `renamed` for `experiments.mip_lead_scoring`.
 
 **If the proof fails, stop: do not go on to step 7.** `same_id` false, or a
 `name` that is not exactly `/Shared/mip-lead-scoring`, means the governed
-name answers with another experiment, or the rename did not take: a create
-call at an existing name returns that experiment's id with exit 0, and a
-rename onto a name another experiment holds was not measured (spike S8), so
-the rename's exit 0 alone proves nothing. Permission counts that differ mean
-the legacy folder carried grants of its own, so the move changed who can
-reach the experiment: rename back (Rollback, below) and review those grants
-with their owners before renaming again.
+name answers with another experiment, or the rename did not take. Only these
+reads show which experiment the governed name answers with: a rename onto a
+name another experiment holds is refused with exit 1 (spike S9, Refusals
+below), but a create call at an existing name returns that experiment's id
+with exit 0 (spike S8), so no exit code alone proves it. Permission counts
+that differ mean the legacy folder carried grants of its own, so the move
+changed who can reach the experiment: rename back (Rollback, below) and
+review those grants with their owners before renaming again.
 
 **Refusals:** exit 1 with `ALREADY_EXISTS` (`Node named 'mip-lead-scoring'
 already exists`): something took the name since the read. Nothing changed;
-review what holds it. (Measured with a folder holding the name; another
-experiment holding it was not measured, which is why the read comes first.) A
-permission error: run it as the legacy owner, who created the experiment.
+review what holds it. Both holders are measured: a folder (spike S8), and
+another experiment (spike S9: HTTP 409, `ALREADY_EXISTS`, reason
+`NAME_CONFLICT`, both experiments unchanged). The read still comes first, so
+a taken name is found without a mutating call. A permission error: run it as
+the legacy owner, who created the experiment.
 
 **Rollback:** the rename back, to the name the first read printed:
 
