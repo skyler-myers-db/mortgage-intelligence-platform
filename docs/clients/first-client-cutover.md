@@ -48,16 +48,33 @@ journals the tools write name resources: keep them in `<private-dir>`.
 - **Code on `main`:** waves 1-6 of the plan are merged, PR #334 (spike S7:
   start proofs and the stopped-App blue) and PR #337 (spike S2: binding
   updates and the `MIP_SALESFORCE_BINDINGS` switch) included. Steps 10 to 12
-  need both. The gaps below remain.
+  need both. Wave 7 (#343 to #349) closed the code gaps listed below; no known
+  one remains.
 
 ## Blockers on main (code follow-ups, not runbook steps)
 
-Read against `main` (which holds #334 and #337), these gaps stop the governed path, and
-two metastore reads gate it (S0(b) and S0(b′)). Each gap is a code change; nothing in this
-runbook works around one. B2, B3, B4 (all three parts), B5 and B6 are fixed on `main` (their
-rows stay for the record), and B1 is fixed: its adopt-phase part (#344) no longer
-stops this cutover, and its first-install part (#348: the profile's
+**What still blocks the cutover: no known code gap.** Read against `main`
+(which holds #334 and #337), the gaps in the table below stopped the governed
+path, and each was a code change; nothing in this runbook works around one.
+All of them are fixed on `main` now, and their rows stay for the record: B1
+(#344 and #348), B2, B4(a), B4(b) and B6 (#345), B3 (#349), B4(c) (#347), B5
+(#343) and S0(b) (#346). B1's adopt-phase part (#344) no longer stops this
+cutover, and its first-install part (#348: the profile's
 `MIP_BOOTSTRAP_WAREHOUSE_ID`) no longer stops a new client's first install.
+What is left is no code change:
+
+- **Plan #1 measures two things (step 6):** that the metastore summary returns
+  its owner to the CI deployer (S0(b)), and that this profile rebuilds blue's
+  env-name set (`env-name parity holds`, B3). If either fails, stop before
+  step 7: that failure is then a code follow-up.
+- **The owner gives two things:** the metastore owner's attestation of the
+  App's metastore privileges (S0(b′)) for every adopt, plan, unadopt and
+  release run, and a clean rollback-scope check (step 7).
+- **Two follow-ups stop nothing:** an owner break-glass re-pin over an open
+  quiesce window, and a CI-signed freeze marker (the end of this section).
+
+No step from 6 on has run live. A refusal that the two walks below did not
+predict is a new blocker: stop where it appears.
 **Do not start step 7 until plan #1 (step 6) has answered S0(b) and reports
 blue's env-name parity holding, step 7's read-only
 rollback-scope check is clean, and the owner can take
@@ -69,7 +86,7 @@ while 10B or 12 cannot run leaves the install half handed over.
 |---|---|---|---|
 | B1 (fixed: #344 and #348) | a new client's plan and first install; step 10B | Before adoption, or before a new client's first bundle apply, the deployer's bundle state binds no SQL warehouse, and `DATABRICKS_WAREHOUSE_ID` is no client profile field, so `deploy-dev.yml` carries none. **Adopt phases (#344):** `--phase adopt` and `--phase unadopt` run no SQL, so the preflight reads no warehouse for them, leaves `DATABRICKS_WAREHOUSE_ID` unset and prints `sql warehouse: none (--phase adopt runs no SQL)`; 10B no longer refuses here. **A first install:** the profile's optional identifying field `MIP_BOOTSTRAP_WAREHOUSE_ID` (a GitHub Environment secret `deploy-dev.yml` carries) names a pro or serverless warehouse; `bundle_state bootstrap-warehouse-id` proves it read-only (no state binding, no App, the same id, live and `PRO`), the log says `sql warehouse: first-install-bootstrap`, and step 4 switches to the bundle's own warehouse. With neither, a live `plan` or `release` still refuses `this deployer's bundle state binds no SQL warehouse yet` (exit 2, nothing changed). | Done. Client #1 sets no `MIP_BOOTSTRAP_WAREHOUSE_ID` (the profile refuses it beside `MIP_LEGACY_BUNDLE_ROOT`): plan #3 and the release take the adopted warehouse from the deployer's bundle state. A new client sets it once ([onboarding.md](onboarding.md), section 4). |
 | B2 | fixed | `operation_acks` carries adopt-live's acks: `adopt_live` (`MIP_ACK_ADOPT_LIVE`, phase `adopt`), `supersede` (`MIP_ACK_SUPERSEDE`, `adopt`) with its selector `supersedes_deployment` (`MIP_ADOPT_LIVE_SUPERSEDE`, `adopt`: the sha256 of the adopted record's deployment id, a digest and never a switch), and `unadopt` (`MIP_ACK_UNADOPT`, `unadopt`). The carrier checks each entry alone: the bind's `adopt_plan` without adopt-live's ack still refuses before the lease (`the adopt needs the adopt-live ack as well`), and a selector that names no adopted record refuses in adopt-live (`supersede_mismatch`). | Fixed on `main`. Step 10B's dispatches, its supersede remedy and its rollback carry them. |
-| B3 | fixed | A live `phase=adopt` is CI-only and the deploy job has no Node (by design), so an adopted blue's `frontend/dist` is always `unverified`: `MIP_ADOPT_BUILD_REFERENCE_DIST` has no live governed use for an adopted legacy install (a dist built on another host or Node never byte-equals a reference build). The release's pre-activation proof then refused green activation (`unverified_frontend_unacked`) after the non-App bundle apply and the window, and no dispatch input carried the ack. | Fixed on `main`: `operation_acks` carries `restore_unverified_frontend` (`MIP_ACK_RESTORE_UNVERIFIED_FRONTEND`, phase `release` only). The ack names blue's immutable copy, its restore payload and the run's commit, so the window's re-pin keeps it. The completing plan #3 prints it (step 11), and the release predicts the proof read-only before the lease (`[mip-activation-prediction]`), refusing there with nothing changed. Plans #1 and #2 measure blue's env-name parity, the step-7 gate (step 6). `no_rollback_for` stays shell-only on purpose. |
+| B3 | fixed | A live `phase=adopt` is CI-only and the deploy job has no Node (by design), so an adopted blue's `frontend/dist` is always `unverified`: `MIP_ADOPT_BUILD_REFERENCE_DIST` has no live governed use for an adopted legacy install (a dist built on another host or Node never byte-equals a reference build). The release's pre-activation proof then refused green activation (`unverified_frontend_unacked`) after the non-App bundle apply and the window, and no dispatch input carried the ack. | Fixed on `main`: `operation_acks` carries `restore_unverified_frontend` (`MIP_ACK_RESTORE_UNVERIFIED_FRONTEND`, phase `release` only). The ack names blue's immutable copy, its restore payload and the run's commit, so the window's re-pin keeps it. The completing plan #3 prints it (step 11), and the release predicts the proof read-only before the lease (`[mip-activation-prediction]`), refusing there with nothing changed. Plans #1 and #2 measure blue's env-name parity, the step-7 gate (step 6): only `holds` passes it, and a set that differs, a set that holds the lease name (`LEASE-BOUND`, the blue the release would refuse `frontend_ack_unpredictable`) and an unmeasured one each stop the cutover there. `no_rollback_for` stays shell-only on purpose. |
 | B4 | fixed | (a) and (b): `genie_pin` (`MIP_GENIE_PIN_ACK`) and `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) are admitted in `plan`, `release`, `adopt` and `unadopt` (never `data`), for the two readers the adopt phases reach: the step-0 Genie pin check (`provision_genie_space --plan-pin`, no phase guard, `scripts/lib/deploy_step_preflight_gates.sh`) and the pre-stop probes in their adopt mode. So 10B-0 refuses at the pin check and prints the pin plan's sha256, and 10B-1 carries it. (c): before an adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well: step 7's rollback-scope check looks for it), so the adopt phases' bundle plan (`install_state_adopt`'s `bundle_env plan`), its binds and unbinds and adopt-live's bundle summary refused `no pin names the governed Genie space yet` (exit 2) whatever `genie_pin` said. Those calls, and no others, now pass `bundle_env --adopt-acked-genie-pin`: while nothing pins a space, bundle_env binds the one title match whose pin plan sha256 is that exact `genie_pin`, through the step-0 check's own resolution (a pin always wins; no ack, another plan's ack, no title match or two of them refuse). bundle_env builds the deployer's client the provisioner's way, so it recomputes the very digest 10B-0 printed. Nothing writes a pin: adopt-live's signed v7 record then names the space (`genie_space_id`), and no later dispatch needs `genie_pin`. Each of those calls re-resolves the match, so a direct `CAN_MANAGE` change mid-run refuses (10B, Refusals). | Fixed on `main`: (a) and (b) by the carrier fix, (c) by the acked title pin. `phase=unadopt` reads the same `genie_pin` while no record names the space (10B, Rollback). |
 | B5 (fixed: #343) | step 10B | The deploy job's checkout was shallow (`actions/checkout@v6` at depth 1), so adopt-live refused `health_sha_not_on_main` for every live health `git_sha` older than the run's own commit. `deploy-dev.yml`'s adopt phase now checks out main's full history (`fetch-depth` 2147483647, git's infinite depth: the run's commit at `refs/remotes/origin/main`, unshallow, and no other branch or tag); every other phase stays at depth 1, and a shallow checkout refuses saying so. adopt-live still refuses, by design, a health sha `main` does not hold: in CI, `the health sha resolves to no single commit in this checkout's history of main` (step 10A's source check finds it first). | Done. Keep the two history rules in "Decisions taken". |
 | B6 | step 11 | Fixed. Plan #3 plans run 1's WR2 window, and it always exited 2: `quiesce_window` was release-only, so a plan could not carry the window's ack and the pre-lease window plan refused `window_unacked`; and the window's admission was judged against the plan job's own 30 minutes, which admit no window (each needs about an hour), so an acked plan would still refuse `window_budget_refused`. Plan #3 never printed the active deployment's sha256 or published the PlanReport step 12 needs. | Fixed on `main`: a plan carries `quiesce_window` (read-only) and forecasts the window's admission for a release dispatched now; step 11 is two dispatches. A release refuses an unacked or unadmitted window exactly as before. |
@@ -113,12 +130,37 @@ holder that changes after 10B-0 (`the ack names another plan` at 10B-1's pin
 check; mid-run, 10B says what the job log shows), a Genie turn
 over budget (the adopt phases' probes ask one real turn), and adopt-live's
 checks of the live App (`bindings_differ`, `tree_drift`, `closure_differs`,
-...). B3 does not stop 10B (the record's frontend reads `unverified`); it
-stops step 12.
+...). B3 never stopped 10B (the record's frontend reads `unverified`); step
+12 carries the ack for it.
 
-Two smaller gaps are noted at their steps: the freeze marker needs a signing
-key no shell holds (step 1), and an open quiesce window that the owner
-restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
+**12 walked with #343 to #348 and B3 (#349) all on `main`** (read offline
+against the merged code, and run against fakes with the real payload builder;
+never live). The dispatch carries four operation acks, each admitted in
+`release` and read where the run looks for it: `quiesce_window` (the pre-lease
+window plan and its recheck under the lease), `accepted_exposure_plan` and
+`metastore_app_grants` (the pre-stop probes; the treatment converger reads the
+attestation again after the lease) and `restore_unverified_frontend`. Before
+the lease the run takes the adopted warehouse from the deployer's bundle state
+(B1), finds the Genie space in the adopted record (no `genie_pin`), passes the
+pre-stop probes, plans the window and admits its budget, checks the expected
+active deployment, and predicts the pre-activation proof with the frontend ack
+(B3). A missing ack, another commit's ack or a restore payload this profile
+cannot rebuild refuses there, with nothing changed. Under the lease, step 0a
+keeps the serving blue; the window stops, migrates, starts and re-pins it; and
+the proof at step 10b accepts the same digest over the re-pinned record,
+because the ack names blue's immutable copy, which a re-pin keeps. The EXIT
+trap's tier-b restore accepts it too. **No known code gap is left on step 12's
+path.** What can still refuse is what the run measures, each named at steps 11
+and 12: the window's digest moving after plan #3, `main` moving after plan #3
+(the frontend ack covers one commit), an App that no longer serves the 10A
+start, an attestation past its 29 days, a Genie turn over budget, and the
+release postflight's run_as check.
+
+Two smaller gaps are noted at their steps, and neither stops the cutover: the
+freeze marker needs a signing key no shell holds (step 1), and an open quiesce
+window that the owner restarts by hand stays refused (docs/deployment.md,
+"Owner break-glass"). Both are follow-ups: a reviewed owner break-glass re-pin
+over an open window journal, and a freeze and thaw marker that CI signs.
 
 ## Decisions taken (the runbook's defaults)
 
@@ -180,7 +222,7 @@ restarts by hand stays refused (docs/deployment.md, "Owner break-glass").
 | 4 | Bootstrap: identities, environments, profile | owner | ready |
 | 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
 | 6 | Plan #1 | CI | ready |
-| 7 | Unity Catalog ownership handover | owner | **wait** for the blockers (it starts the 14-day sequence) |
+| 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
 | 10 | Start the App (10A), then adopt (10B) | owner, CI | needs the S0(b′) attestation |
@@ -238,7 +280,8 @@ databricks apps list-deployments <app-name> -p <owner-profile>
 ```
 
 **Proof:** the snapshot is hashed; the newest deployment's env-name set has no
-`MIP_AGENT_*` or Gateway name; one real turn in the governed Genie space (its
+`MIP_AGENT_*` or Gateway name, and no `MIP_APP_DEPLOYMENT_LEASE_ID` (a set
+that holds it stops at step 6, `LEASE-BOUND`); one real turn in the governed Genie space (its
 own UI works with the App stopped) answers, and a `BUDGET_EXCEEDED` means the
 owner restores the budget before step 12.
 
@@ -490,7 +533,9 @@ App's newest deployment's env-name set, the set 10A's start copies (spike S7)
 and step 12's tier-b restore payload must reproduce
 (`tools.databricks.activation_prediction env-names`: it proves the workspace
 and the deployer first, then reads the App, never a value). The step summary's
-"Activation prediction" section, and the log, show one verdict:
+"Activation prediction" section, and the log, show one verdict. Only the first
+lets the cutover go on; each of the others ends `do not start step 7`, and a
+summary with no such section is not `holds` either (stop and read the log):
 
 - `env-name parity holds: ... (no env-name difference)`: the precondition of
   step 7;
@@ -499,6 +544,14 @@ and the deployer first, then reads the App, never a value). The step summary's
   step 7 leaves the install half handed over. Fix the profile field the names
   point at (an optional role name blue lacks is already left out) and re-run
   plan #1, or report it as a code follow-up; never start step 7 around it;
+- `env-name parity is LEASE-BOUND: ... the set holds
+  MIP_APP_DEPLOYMENT_LEASE_ID`: **stop.** The names rebuild, but the newest
+  deployment was made under a deployment lease (by `scripts/deploy.sh`), not
+  by the emergency recipe. CI adopts it with an unverified frontend, and its
+  restore payload would carry the release's own lease, so no
+  `restore_unverified_frontend` digest exists before that lease: plan #3 and
+  the release would refuse `frontend_ack_unpredictable`, and no dispatch input
+  clears that. Report it as a code follow-up; never start step 7 around it;
 - `env-name parity not measured` (the profile refuses, the workspace or the
   deployer is not the profile's, or a read could not complete, which shows its
   error class only): stop, as for any live-check line outside the set above.
@@ -722,7 +775,7 @@ read the catalog through `<prefix>-data-owners`), and any step-6 marker read
 refusal or storage-root line is gone. Nothing else refuses: the handovers
 changed no profile field the live checks read. A `plan` cannot show more of an
 unadopted install. The env-name parity verdict (step 6) still reads `holds`:
-any difference now stops the sequence before 10A. The adoption's own
+any other verdict now stops the sequence before 10A. The adoption's own
 read-only readout (the bind plan, the pre-stop probes in their adopt mode and
 adopt-live's preconditions) is step 10B's first dispatch, which needs the
 running App of step 10A.
@@ -1105,7 +1158,7 @@ stale; take it again); `owner_policy` with `the metastore summary returned no
 owner` (S0(b)'s worst case, stop); the
 activation prediction's `no_rollback_proof` (the rebuilt payload's env-name set
 is not blue's, names only), `payload_invalid` or `frontend_ack_unpredictable`
-(blue's set holds the lease name): stop and report it, never ack around it. No Genie
+(blue's set holds the lease name, step 6's `LEASE-BOUND` verdict): stop and report it, never ack around it. No Genie
 pin refusal is expected: after 10B the adopted v7 record names the space the
 App binds (`genie_space_id`), and the pin check uses it. A pin refusal here
 (the record and a pin disagree, or the space is gone) means stop and read it.

@@ -2234,12 +2234,24 @@ verifier, the agent runtime or the Supervisor proxy:
   `frontend_ack_unpredictable` for a payload-less blue whose env-name set
   holds the lease name). It loads the record with the core release's own
   loader, rebuilds the payload in process as `restore-payload` does and runs
-  the proof's own candidate check; `MIP_ACK_NO_ROLLBACK_FOR` defers each of
-  those verdicts to the proof (its value is never passed). It does not
+  the proof's own candidate check. `MIP_ACK_NO_ROLLBACK_FOR` (its value is
+  never passed) defers three of those verdicts to the proof, which admits that
+  ack in their place: `unverified_frontend_unacked`, `no_rollback_proof` and
+  `frontend_ack_unpredictable`. `payload_invalid` and the tier gate's codes
+  still refuse before the lease, because the proof raises them before it reads
+  that ack; a plan never defers. It does not
   predict the copy's re-hash or blue being active at activation. A plan that
   stops at the client live checks (an install not adopted yet) first measures
   blue's env-name parity names only (`activation_prediction env-names`): this
-  profile's rebuilt payload against the App's newest deployment.
+  profile's rebuilt payload against the App's newest deployment. Its one
+  verdict goes to the log and the step summary, and the plan exits 2 at the
+  live checks whatever it is: `holds`; `DIFFERS` (names only); `LEASE-BOUND`
+  (the names rebuild but hold `MIP_APP_DEPLOYMENT_LEASE_ID`, as a deployment
+  `scripts/deploy.sh` made does: a CI adoption of it is the blue the release
+  refuses `frontend_ack_unpredictable`); or `not measured` (the profile
+  refuses, the identity is not the profile's, or a read fails, by its class
+  only). Every verdict but `holds` exits the tool 2 and says not to start the
+  cutover's ownership handover.
 - **A refused pre-activation proof** (`unverified_frontend_unacked`,
   `no_rollback_proof`, a rebuild that fails) exits 2 at step 10b while signed
   blue still serves. Over signed blue the run reaches step 10b in the quiesce
