@@ -139,9 +139,11 @@ def _block_commands(block: str) -> list[str]:
 
 
 def break_glass_block() -> str:
+    """The break-glass reads and, in its own block right after them, the one start."""
+
     text = _read(DEPLOYMENT_DOC)
     section = text[text.index(BREAK_GLASS_HEADING) :]
-    return _bash_blocks(section)[0]
+    return "\n".join(_bash_blocks(section)[:2])
 
 
 def documented_commands() -> list[tuple[str, str]]:

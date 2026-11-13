@@ -1250,13 +1250,18 @@ and read the journal:
 ```bash
 databricks apps get <app-name> -p <owner-profile> -o json | jq -r .compute_status.state
 DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.quiesce_window status --unverified --app-name <app-name>
-databricks apps start <app-name> -p <owner-profile>
 ```
 
 Start only a `STOPPED` App, once, and never a contract window (`blue
 restorable False`). A journal that reads `window_starting` over an `ACTIVE`
-compute needs no start: the dead run's own start is serving. Then tell the
-agent that you started it. Right before the release, dispatch a plan; it
+compute needs no start: the dead run's own start is serving. Only then, in its
+own paste (never pasted with the reads):
+
+```bash
+databricks apps start <app-name> -p <owner-profile>
+```
+
+Then tell the agent that you started it. Right before the release, dispatch a plan; it
 refuses `window_journal_open` before the lease (read-only) and prints `owner
 start over the open window: candidate (...)` with `owner_start_repin=<sha256>`,
 and the window's own sha256 when run 1 still needs its window. Then dispatch

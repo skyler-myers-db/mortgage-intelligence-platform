@@ -672,11 +672,18 @@ the owner started the App: the owner says so). `apps start` creates a new
 SNAPSHOT deployment of the App's current `default_source_code_path` bytes,
 with the newest deployment's env-name set (spike S7); it never deploys other
 source. Read the window journal and the App's compute state first, read-only
-(codes and booleans only), and start only a `STOPPED` App:
+(codes and booleans only):
 
 ```bash
 DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.quiesce_window status --unverified --app-name <app-name>
 databricks apps get <app-name> -p <owner-profile> -o json | jq -r .compute_status.state
+```
+
+Then start only a `STOPPED` App, and only when the journal is one the bullets
+below allow (never a contract window). The start is its own paste, never
+pasted with the reads:
+
+```bash
 databricks apps start <app-name> -p <owner-profile>
 ```
 

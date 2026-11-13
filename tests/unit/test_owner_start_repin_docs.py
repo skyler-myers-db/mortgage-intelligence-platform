@@ -53,11 +53,33 @@ def _break_glass() -> str:
     return text[start : text.index(NEXT_HEADING)]
 
 
+def _reads_then_start(section: str) -> tuple[list[str], list[str], str]:
+    """The first bash block (the reads), the next one (the start) and the prose between them."""
+
+    fences = list(re.finditer(r"```bash\n(.*?)\n```", section, flags=re.DOTALL))
+    assert len(fences) >= 2
+    between = section[fences[0].end() : fences[1].start()]
+    return fences[0].group(1).splitlines(), fences[1].group(1).splitlines(), _flat(between)
+
+
 def test_the_break_glass_block_reads_the_state_before_the_one_start() -> None:
-    block = _bash_blocks(_break_glass())[0].splitlines()
-    assert [line.split()[0:3] for line in block[1:]] == [["databricks", "apps", "get"], ["databricks", "apps", "start"]]
-    assert "quiesce_window status --unverified" in block[0] and ".compute_status.state" in block[1]
-    assert len(block) == 3, "one start, after the two reads"
+    # The reads gate the start, so the start is never in the paste that reads them.
+    reads, start, between = _reads_then_start(_break_glass())
+    assert [line.split()[0:3] for line in reads[1:]] == [["databricks", "apps", "get"]]
+    assert "quiesce_window status --unverified" in reads[0] and ".compute_status.state" in reads[1]
+    assert len(reads) == 2 and not any("apps start" in line for line in reads), "the two reads, no start"
+    assert [line.split()[0:3] for line in start] == [["databricks", "apps", "start"]], "one start, after the reads"
+    assert "start only a `STOPPED` App" in between and "never pasted with the reads" in between
+    runbook = _read("docs/clients/first-client-cutover.md")
+    glass = runbook[runbook.index("**If the outage cannot wait for the dead-man") : runbook.index("## Step 13.")]
+    reads, start, between = _reads_then_start(glass)
+    assert sorted(line.split()[0:3] for line in reads) == [
+        ["DATABRICKS_CONFIG_PROFILE=<owner-profile>", "python", "-m"],
+        ["databricks", "apps", "get"],
+    ]
+    assert not any("apps start" in line for line in reads), "the runbook's reads carry no start either"
+    assert [line.split()[0:3] for line in start] == [["databricks", "apps", "start"]], "one start, in its own block"
+    assert "Start only a `STOPPED` App, once" in between and "never pasted with the reads" in between
 
 
 def test_the_procedure_never_tells_the_owner_to_cancel_a_live_run() -> None:
