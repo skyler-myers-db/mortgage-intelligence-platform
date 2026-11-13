@@ -442,7 +442,15 @@ def _pending(estate: Estate) -> None:
     estate.apps.pending_id = BLUE_ID
 
 
-@pytest.mark.parametrize("break_it", (_stopped, _starting, _pending), ids=("stopped", "starting", "pending"))
+def _error(estate: Estate) -> None:
+    estate.apps.compute = "ERROR"  # the GET still shows the owner's start active, nothing pending
+    shown = estate.apps.get(APP_NAME)
+    assert shown.active_deployment is not None and shown.pending_deployment is None, "only the compute is not ACTIVE"
+
+
+@pytest.mark.parametrize(
+    "break_it", (_stopped, _starting, _pending, _error), ids=("stopped", "starting", "pending", "error-while-shown")
+)
 def test_an_app_that_is_not_serving_with_nothing_pending_is_not_classified(break_it: Any) -> None:
     estate = _estate()
     _open_then_die(estate)
