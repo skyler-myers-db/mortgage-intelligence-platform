@@ -47,7 +47,15 @@ identity half does (tools/clients/live_identity.py), then compares names: the
 payload the profile rebuilds (a sentinel copy and commit, blue's droppable
 rule, and the names scripts/deploy.sh derives after the live checks,
 ``GOVERNED_DERIVED_NAMES``) against the App's newest deployment's set, which an
-``apps start`` copies (spike S7). Step 12's tier-b restore depends on it.
+``apps start`` copies (spike S7). Step 12's tier-b restore depends on it. Only
+``holds`` lets the cutover go on. ``DIFFERS`` stops it, and so does
+``LEASE-BOUND``: the names rebuild, but the set holds the lease name, and a
+blue adopted from it (always unverified in CI) is the unpredictable one
+above (``frontend_ack_unpredictable``), which no dispatch input clears.
+``not measured`` (the profile refuses, the identity is not the profile's, a
+read fails) stops it too. Every verdict goes to the log and the step summary;
+the cutover's step numbers are this command's alone (``predict``'s note names
+none).
 
 Read-only: workspace GETs, the rollback slot's secret read, no signing key
 (the verify key alone checks the record), no write but the step summary.
@@ -59,6 +67,7 @@ class only.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 from collections.abc import Callable, Mapping
@@ -96,6 +105,18 @@ GOVERNED_DERIVED_NAMES = (
     "MIP_LAKEBASE_SYNC_TABLES",
 )
 _SENTINEL = "activation-prediction-names-only"
+# What ``env-names`` (the cutover's plans before an adoption) adds to a verdict
+# that stops them. ``predict``'s no-record note prints the verdict alone: it
+# also runs where the cutover's step numbers mean nothing.
+_CUTOVER_STOP = {
+    "differs": "Step 12's tier-b restore payload cannot be rebuilt from this profile; do not start step 7",
+    "lease_bound": (
+        "An adopted blue is unverified in CI, so step 12's release would refuse "
+        "frontend_ack_unpredictable before its lease, and no dispatch input clears that; do not start step 7"
+    ),
+}
+# Never the passing verdict's own words: an owner looks for them in the summary.
+_NOT_MEASURED_STOP = "Step 7's precondition is a measured parity, and this run measured none; do not start step 7"
 _SENTINEL_SHA = "0" * 40
 _SENTINEL_SOURCE = "/Workspace/Users/activation-prediction/app-src/names-only"
 
@@ -138,7 +159,12 @@ def env_name_parity(
     derived_sentinels: bool = False,
     build: Callable[..., dict[str, object]] | None = None,
 ) -> tuple[str, str]:
-    """(``same``, ``differs``, ``no_app`` or ``no_deployment``; a names-only message)."""
+    """(``same``, ``lease_bound``, ``differs``, ``no_app`` or ``no_deployment``; a names-only message).
+
+    ``lease_bound``: the names rebuild, but they hold the lease name, so a
+    payload rebuilt for that deployment carries a run's own lease. The message
+    states the measurement only and names no runbook step.
+    """
 
     from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 
@@ -171,9 +197,12 @@ def env_name_parity(
             **payload_inputs,
         )
     if payload is None:
-        return "differs", (
-            f"env-name parity DIFFERS: {_names_only(why)}. Step 12's tier-b restore payload "
-            "cannot be rebuilt from this profile; do not start step 7"
+        return "differs", f"env-name parity DIFFERS: {_names_only(why)}"
+    if core_blue.LEASE_ENV in live:
+        return "lease_bound", (
+            f"env-name parity is LEASE-BOUND: this profile rebuilds the App's newest deployment's {len(live)} "
+            f"env names, but the set holds {core_blue.LEASE_ENV}: a restore payload rebuilt for it carries "
+            f"a run's own lease, so no {PURPOSE} digest over it exists before that lease"
         )
     return "same", (
         f"env-name parity holds: this profile rebuilds the App's newest deployment's {len(live)} "
@@ -307,18 +336,13 @@ def _env_names(args: argparse.Namespace, workspace_factory: Callable[[], Any]) -
     try:
         profile = resolve(from_local(os.environ, ENV_LOCAL))
     except ProfileRefusal:
-        print(f"{_PREFIX} env-name parity not measured: the client profile refuses", file=sys.stderr)
-        return 2
+        return _not_measured(args, "the client profile refuses")
     if profile.agentic_tier != "off":
         print(f"{_PREFIX} env-name parity: the agentic tier's blue is not rebuilt (nothing measured)")
         return 0
     workspace = workspace_factory()
     if identity_lines(profile, workspace):
-        print(
-            f"{_PREFIX} env-name parity not measured: the workspace or the deployer is not the profile's",
-            file=sys.stderr,
-        )
-        return 2
+        return _not_measured(args, "the workspace or the deployer is not the profile's")
     inputs = {
         "install_class": profile.install_class,
         "app_env": profile.app_env,
@@ -330,9 +354,23 @@ def _env_names(args: argparse.Namespace, workspace_factory: Callable[[], Any]) -
     verdict, message = env_name_parity(
         workspace, app_name=profile.app_name, payload_inputs=inputs, derived_sentinels=True
     )
-    print(f"{_PREFIX} {message}", file=sys.stderr if verdict == "differs" else sys.stdout)
+    stop = _CUTOVER_STOP.get(verdict)
+    if stop is not None:
+        message = f"{message}. {stop}"
+    # The summary first: a verdict it could not take is not measured, never a log-only ``holds``.
     _summary(args.step_summary, [message])
-    return 2 if verdict == "differs" else 0
+    print(f"{_PREFIX} {message}", file=sys.stdout if stop is None else sys.stderr)
+    return 0 if stop is None else 2
+
+
+def _not_measured(args: argparse.Namespace, why: str) -> int:
+    """Exit 2 with the one not-measured line, in the log and (when it can be written) the step summary."""
+
+    message = f"env-name parity not measured: {why}"
+    print(f"{_PREFIX} {message}", file=sys.stderr)
+    with contextlib.suppress(OSError):  # the log line stands when the summary cannot be written
+        _summary(args.step_summary, [f"{message}. {_NOT_MEASURED_STOP}"])
+    return 2
 
 
 def _predict(args: argparse.Namespace, workspace_factory: Callable[[], Any]) -> int:
@@ -381,8 +419,10 @@ def main(argv: list[str] | None = None, *, workspace_factory: Callable[[], Any] 
             return _env_names(args, workspace_factory)
         return _predict(args, workspace_factory)
     except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
-        what = "env-name parity not measured" if args.action == "env-names" else "REFUSED"
-        print(f"{_PREFIX} {what}: the prediction could not complete ({type(exc).__name__})", file=sys.stderr)
+        why = f"the prediction could not complete ({type(exc).__name__})"
+        if args.action == "env-names":
+            return _not_measured(args, why)
+        print(f"{_PREFIX} REFUSED: {why}", file=sys.stderr)
         return 2
 
 

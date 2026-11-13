@@ -10,6 +10,12 @@ that point: ``.env.local`` is the client profile, ``resolve_client_profile``
 has exported its deploy controls, and nothing later in scripts/deploy.sh has
 run, so the names the preflight and the automation step derive afterwards are
 still unset. The live set is D0's 32 names, which the emergency recipe built.
+
+Only ``holds`` lets the cutover start its ownership handover, so these also pin
+what must never read as ``holds``: a set that carries the lease name (the blue
+a CI adoption makes from it is the one the release then refuses
+``frontend_ack_unpredictable``), and a measurement that did not complete, each
+in the log and in the step summary an owner reads.
 """
 
 from __future__ import annotations
@@ -23,7 +29,17 @@ from tests.fixtures import rollback_records as rr
 from tests.fixtures.client_profiles import IDENTITY_IDS, core_tier_profile, env_file_text
 from tests.fixtures.core_blue_world import CoreWorld
 from tests.fixtures.live_workspace import LiveWorkspace
-from tests.unit.test_activation_prediction import INPUTS, _workspace, _world
+from tests.unit.test_activation_prediction import (
+    INPUTS,
+    LEASE,
+    NAMES,
+    _predict,
+    _profile_world,
+    _Untouchable,
+    _workspace,
+    _world,
+    builder,
+)
 from tests.unit.test_settings_d0_env_parity import D0_NAMES, D0_OPERATOR_INPUTS, _d0_operator_config
 from tools.clients import profile as views
 from tools.clients.environment import RawProfile, resolve
@@ -112,3 +128,160 @@ def test_a_measurement_that_cannot_complete_is_not_measured_and_prints_its_class
     err = capsys.readouterr().err
     assert "env-name parity not measured: the prediction could not complete (RuntimeError)" in err
     assert "01f0-secret-id" not in err and "REFUSED" not in err
+
+
+# --- what must never read as ``holds`` ------------------------------------------------------
+
+
+@pytest.fixture
+def adopted_world(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stub-builder world of tests/unit/test_activation_prediction.py: its keys, its owned scope."""
+
+    rr.signing_env(monkeypatch)
+    monkeypatch.setattr(ap, "_scope_names", lambda _workspace: {rr.SCOPE})
+    monkeypatch.delenv(LEASE, raising=False)
+
+
+def test_a_set_that_holds_the_lease_name_stops_before_step_7_and_never_reads_as_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A deployment scripts/deploy.sh made carries the lease name; CI adopts it unverified."""
+
+    live, world, controls = _plan_shell(tmp_path, monkeypatch)
+    world.add_deployment("deployment-governed", source=rr.LEGACY_FOLDER, env_names=sorted({*D0_NAMES, LEASE}))
+    summary = tmp_path / "summary.md"
+
+    code = ap.main(["env-names", "--step-summary", str(summary)], workspace_factory=lambda: _workspace(live, world.apps))
+
+    printed = capsys.readouterr()
+    assert code == 2, printed.out
+    for text in (printed.err, summary.read_text(encoding="utf-8")):
+        assert f"env-name parity is LEASE-BOUND: this profile rebuilds the App's newest deployment's 33 env names, but the set holds {LEASE}" in text
+        assert "frontend_ack_unpredictable" in text and "no dispatch input clears that; do not start step 7" in text
+    everything = printed.out + printed.err + summary.read_text(encoding="utf-8")
+    assert "parity holds" not in everything and "no env-name difference" not in everything
+    assert "[mip-activation-prediction]" not in printed.out, "a stop verdict is never the passing stream's"
+    shown = "\n".join(line for line in everything.splitlines() if not line.startswith("::add-mask::"))
+    for secret in ("deployment-governed", rr.LEGACY_FOLDER, *(value for value in controls.values() if len(value) > 8)):
+        assert secret not in shown, secret
+    assert world.apps.mutations == [] and world.secrets.puts == []
+
+
+@pytest.mark.parametrize(
+    ("live_names", "built_names", "verdict", "plan_code"),
+    [
+        (NAMES, NAMES, "same", "pass"),
+        (sorted({*NAMES, LEASE}), sorted({*NAMES, LEASE}), "lease_bound", "frontend_ack_unpredictable"),
+        (sorted({*NAMES, "MIP_OTEL_ENDPOINT"}), NAMES, "differs", "no_rollback_proof"),
+        (NAMES, sorted({*NAMES, "MIP_OTEL_ENDPOINT"}), "differs", "no_rollback_proof"),
+    ],
+)
+@pytest.mark.usefixtures("adopted_world")
+def test_the_gate_before_step_7_holds_exactly_when_plan_3_would_print_the_frontend_digest(
+    tmp_path: Path, live_names: list[str], built_names: list[str], verdict: str, plan_code: str
+) -> None:
+    """The same set, first unadopted (plans #1 and #2), then adopted in CI, so unverified (plan #3 and the release)."""
+
+    before = _world(tmp_path / "before", names=live_names)
+    before.secrets.values.clear()
+    measured, message = ap.env_name_parity(before, app_name=rr.APP_NAME, payload_inputs=INPUTS, build=builder(built_names))
+    adopted = _world(tmp_path / "adopted", names=live_names)
+    plan = _predict(adopted, "plan", build=builder(built_names))
+    release = _predict(adopted, "release", build=builder(built_names), frontend_ack=plan.frontend_ack or "0" * 64)
+
+    assert (measured, plan.code) == (verdict, plan_code), message
+    assert (measured == "same") is (plan.code == "pass" and plan.frontend_ack is not None) is (release.code == "pass")
+    assert ("parity holds" in message) is (measured == "same") and "step" not in message.lower()
+
+
+@pytest.mark.usefixtures("adopted_world")
+def test_a_verdict_that_is_not_measured_reaches_the_step_summary_on_every_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def summary_of(label: str, factory: Any) -> str:
+        summary = tmp_path / f"{label}.md"
+        assert ap.main(["env-names", "--step-summary", str(summary)], workspace_factory=factory) == 2, label
+        err = capsys.readouterr().err
+        text = summary.read_text(encoding="utf-8")
+        line = next(line for line in err.splitlines() if "env-name parity not measured: " in line)
+        assert line.split("] ", 1)[1] in text and "do not start step 7" in text, (label, text)
+        assert "### Activation prediction" in text and "parity holds" not in text + err
+        return text
+
+    # A read that fails: the class only, in the summary too.
+    live, world = _profile_world(tmp_path / "read", monkeypatch)
+
+    def unreadable(*_a: Any, **_kw: Any) -> Any:
+        raise RuntimeError("deployment 01f0-secret-id could not be listed")
+
+    monkeypatch.setattr(world.apps, "list_deployments", unreadable)
+    failed = summary_of("read", lambda: _workspace(live, world.apps))
+    assert "the prediction could not complete (RuntimeError)" in failed and "01f0-secret-id" not in failed
+
+    # A workspace that is not the profile's: nothing more is read.
+    from tests.fixtures.client_profiles import IDENTITY_IDS, core_tier_profile
+    from tests.fixtures.live_workspace import LiveWorkspace
+
+    _profile_world(tmp_path / "stranger", monkeypatch)
+    stranger = _workspace(LiveWorkspace(core_tier_profile(), identity_ids=IDENTITY_IDS, workspace_id="999"), _Untouchable())
+    assert "the workspace or the deployer is not the profile's" in summary_of("stranger", lambda: stranger)
+
+    # A profile that refuses: no workspace client at all.
+    def never() -> Any:
+        raise AssertionError("no workspace client without a resolved core profile")
+
+    _profile_world(tmp_path / "broken", monkeypatch, MIP_APP_NAME=None)
+    assert "the client profile refuses" in summary_of("broken", never)
+
+
+def test_a_step_summary_that_cannot_be_written_is_not_measured_and_never_a_log_only_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    live, world, _controls = _plan_shell(tmp_path, monkeypatch)
+    nowhere = tmp_path / "no-such-folder" / "summary.md"
+
+    assert ap.main(["env-names", "--step-summary", str(nowhere)], workspace_factory=lambda: _workspace(live, world.apps)) == 2
+
+    printed = capsys.readouterr()
+    assert "parity holds" not in printed.out + printed.err
+    assert "env-name parity not measured: the prediction could not complete (FileNotFoundError)" in printed.err
+    # The same App, with a summary that can be written, holds: only the write differed.
+    assert ap.main(["env-names", "--step-summary", str(tmp_path / "s.md")], workspace_factory=lambda: _workspace(live, world.apps)) == 0
+    assert "parity holds" in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("adopted_world")
+def test_predicts_no_record_note_states_the_verdict_without_the_cutovers_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A release after an interrupted first install, or a plan after unadopt: no record, an App, no runbook."""
+
+    from tests.unit.test_activation_prediction import _argv, _main
+
+    rebuild = ap.core_blue.rebuild_for_env_names
+    lacking = builder([name for name in NAMES if name != "APP_ENV"])
+    monkeypatch.setattr(ap.core_blue, "rebuild_for_env_names", _with_build(rebuild, lacking))
+    world = _world(tmp_path)
+    world.secrets.values.clear()
+    for phase in ("plan", "release", "complete"):
+        summary = tmp_path / f"{phase}.md"
+        assert _main(world, *_argv(phase, "--step-summary", str(summary))) == 0
+        out = capsys.readouterr().out
+        assert "PASS: no signed blue to protect; env-name parity DIFFERS" in out and "lacks APP_ENV" in out
+        written = summary.read_text(encoding="utf-8") if summary.exists() else ""
+        assert (phase == "plan") is bool(written)
+        assert "step 7" not in (out + written).lower() and "step 12" not in (out + written).lower()
+
+    governed = sorted({*NAMES, LEASE})
+    monkeypatch.setattr(ap.core_blue, "rebuild_for_env_names", _with_build(rebuild, builder(governed)))
+    world.add_deployment("deployment-governed", source=rr.LEGACY_FOLDER, env_names=governed)
+    assert _main(world, *_argv("release")) == 0
+    out = capsys.readouterr().out
+    assert "PASS: no signed blue to protect; env-name parity is LEASE-BOUND" in out and "step" not in out.lower()
+
+
+def _with_build(original: Any, build: Any) -> Any:
+    def call(names: Any, **kwargs: Any) -> Any:
+        return original(names, **{**kwargs, "build": build})
+
+    return call

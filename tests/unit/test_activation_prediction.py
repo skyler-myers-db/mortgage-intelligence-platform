@@ -279,6 +279,7 @@ def test_no_record_has_no_blue_and_reports_env_name_parity(tmp_path: Path) -> No
         assert noted.code == "pass" and "DIFFERS" in noted.message and "lacks APP_ENV" in noted.message, (
             "nothing to protect: a note; the plans before an adoption gate step 7 through env-names"
         )
+        assert "step" not in f"{holds.message} {noted.message}".lower(), "the runbook's steps are env-names' alone"
 
 
 def test_no_rollback_scope_is_no_record_as_in_a_first_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,7 +299,7 @@ def test_env_name_parity_reads_the_newest_deployment_and_prints_names_only(tmp_p
     world = _world(tmp_path)
     world.add_deployment("deployment-newer", source=rr.LEGACY_FOLDER, env_names=sorted({*NAMES, "MIP_OTEL_ENDPOINT"}))
     verdict, message = ap.env_name_parity(world, app_name=rr.APP_NAME, payload_inputs=INPUTS, build=builder())
-    assert verdict == "differs" and "lacks MIP_OTEL_ENDPOINT" in message and "do not start step 7" in message
+    assert verdict == "differs" and "lacks MIP_OTEL_ENDPOINT" in message and "step" not in message.lower()
     for secret in ("deployment-newer", rr.LEGACY_FOLDER, SENTINEL_VALUE, rr.GIT_SHA):
         assert secret not in message
     assert world.apps.mutations == []
