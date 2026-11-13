@@ -79,6 +79,9 @@ WORKSPACE_MODULES = frozenset(
     {
         "tools.branding.lender_mark",
         "tools.clients",
+        # deploy-dev.yml's own freeze and thaw step (wave 7c): no deploy file
+        # names it, and it writes one workspace file with the deployer's client.
+        "tools.clients.publisher_freeze",
         "tools.databricks.activation_prediction",
         "tools.databricks.active_deployment_pin",
         "tools.databricks.app_deploy_payload",

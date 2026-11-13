@@ -109,7 +109,11 @@ environment and one phase (`plan`, `release`, `data`, `adopt` or `unadopt`) per
 run, approved in that client's GitHub Environment, plan first. It runs
 `./scripts/deploy.sh -t client --phase <phase>` in CI: profile resolution and
 live identity checks, build, env-aware direct bundle validate/plan/deploy, app
-snapshot promotion, refresh jobs, Genie rebinding, and smoke checks. A live
+snapshot promotion, refresh jobs, Genie rebinding, and smoke checks. Two more
+phases, `freeze` and `thaw`, run no `scripts/deploy.sh`: one workflow step signs,
+or lifts, the create-only marker that freezes the emergency recipe during an
+adopted install's cutover (docs/deployment.md, "The freeze during the
+first-client cutover"). A live
 phase, `plan` included, is CI-only: outside GitHub Actions `scripts/deploy.sh`
 runs a phase only with `--dry-run`. `make deploy-dev` no longer deploys from a
 workstation; it prints the dispatch command. Onboarding a client, in order, is
@@ -119,7 +123,8 @@ workspace your own CLI auth names, with the filled client profile in
 `.env.local`; it changes no resource, but the CLI creates the root's empty
 `files` folder when it is missing. The former mutable `make bundle-deploy` and
 `make bundle-deploy-dev` aliases, and `make bundle-plan`, fail closed. All
-workspace mutation goes through the deploy script so non-App resource
+workspace mutation goes through the deploy script (the freeze marker and its
+thaw, above, are the workflow's only writes outside it) so non-App resource
 selection, App resource reconciliation, signed source promotion, migrations,
 proof checks, refreshes, and smoke gates remain one reviewable flow.
 

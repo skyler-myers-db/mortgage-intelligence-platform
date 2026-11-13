@@ -49,6 +49,9 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
         assert name in shell, f"{name} is the export a refusal names, so the deploy must read it"
     for name in ("MIP_ACK_OVERRIDE_FREEZE", "MIP_ACK_TIER_TRANSITION"):
         assert name not in shell, "no code reads it, so no refusal may name it"
+    # The thaw's ack is CI's alone (tools/clients/publisher_freeze.py): no deploy.sh export.
+    assert "freeze_thaw" in acks.PURPOSES and "freeze_thaw" not in acks.ACK_ENV
+    assert "MIP_ACK_FREEZE_THAW" not in shell and "export" not in acks.REMEDY["freeze_thaw"]
 
 
 @pytest.mark.parametrize(
@@ -64,6 +67,12 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
             "export MIP_ACK_RESTORE_UNVERIFIED_FRONTEND=<its sha256> for this run only",
         ),
         ("tier_transition", "pass --tier-transition-ack <its sha256> to the one blue proof"),
+        # CI only (wave 7c): no shell export exists, so the refusal names the dispatch.
+        (
+            "freeze_thaw",
+            "dispatch deploy-dev.yml with phase=thaw and the dispatch input operation_acks "
+            "freeze_thaw=<its sha256>",
+        ),
     ],
 )
 def test_a_missing_ack_names_the_route_that_purpose_is_really_handed_in_by(
