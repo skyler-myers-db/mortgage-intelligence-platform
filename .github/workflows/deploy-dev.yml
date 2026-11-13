@@ -7,7 +7,10 @@ name: deploy-dev
 # clear (tools/clients/workflow_contexts.py names the two steps that read one). `phase` is the scripts/deploy.sh
 # --phase the run executes: `plan` changes no governed resource (its one write
 # is a create-only plan report in the deployer's plan-reports folder), the
-# others mutate behind the environment's approval. Manual dispatch only: no push, pull_request or
+# others mutate behind the environment's approval. Two phases never run
+# scripts/deploy.sh: `freeze` and `thaw` sign the create-only marker the
+# emergency recipe's publisher obeys (tools/clients/publisher_freeze.py),
+# behind the same approval, profile ack and OIDC proof. Manual dispatch only: no push, pull_request or
 # schedule trigger reaches a deploy job.
 on:
   workflow_dispatch:
@@ -17,9 +20,9 @@ on:
         type: string
         required: true
       phase:
-        description: "scripts/deploy.sh --phase: plan (no governed change; its one write is the create-only plan report), release, data, adopt or unadopt"
+        description: "scripts/deploy.sh --phase: plan (no governed change; its one write is the create-only plan report), release, data, adopt or unadopt; or freeze / thaw (the emergency publisher's signed marker, no deploy.sh run)"
         type: choice
-        options: [plan, release, data, adopt, unadopt]
+        options: [plan, release, data, adopt, unadopt, freeze, thaw]
         default: plan
       owner_attestation:
         description: "Mutating phases: the exact profile ack (purpose profile) the plan printed; hardware-key attestation is deferred (M1-PR5)"
@@ -100,8 +103,8 @@ jobs:
             copilot|dev|github-pages) echo "::error::client must name a client's environment; ${MIP_DISPATCH_CLIENT} is not one."; exit 1 ;;
           esac
           case "$MIP_DISPATCH_PHASE" in
-            plan|release|data|adopt|unadopt) ;;
-            *) echo "::error::phase must be plan, release, data, adopt or unadopt."; exit 1 ;;
+            plan|release|data|adopt|unadopt|freeze|thaw) ;;
+            *) echo "::error::phase must be plan, release, data, adopt, unadopt, freeze or thaw."; exit 1 ;;
           esac
       - name: Refuse a profile name set at repository or organization level
         # This job runs in no environment, so vars and secrets hold only
@@ -359,9 +362,10 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    # Per phase: plan 30, release 330, data 330, adopt and unadopt 60 minutes.
+    # Per phase: plan 30, release 330, data 330, adopt and unadopt 60 minutes;
+    # freeze and thaw 15 (one marker file, no deploy.sh run).
     # MIP_JOB_TIMEOUT_MINUTES below is the same expression (M0-PR9).
-    timeout-minutes: ${{ fromJSON('{"plan":30,"release":330,"data":330,"adopt":60,"unadopt":60}')[inputs.phase] }}
+    timeout-minutes: ${{ fromJSON('{"plan":30,"release":330,"data":330,"adopt":60,"unadopt":60,"freeze":15,"thaw":15}')[inputs.phase] }}
     # The client's own environment: its reviewers and branch policy gate the
     # run, its variables and secrets are the profile, and the deployer's
     # federation policy trusts exactly its subject
@@ -392,7 +396,7 @@ jobs:
         # restarts blue at it if this runner dies. MIP_JOB_TIMEOUT_MINUTES must
         # equal timeout-minutes (tests/unit/test_quiesce_window_workflow.py).
         env:
-          MIP_JOB_TIMEOUT_MINUTES: ${{ fromJSON('{"plan":30,"release":330,"data":330,"adopt":60,"unadopt":60}')[inputs.phase] }}
+          MIP_JOB_TIMEOUT_MINUTES: ${{ fromJSON('{"plan":30,"release":330,"data":330,"adopt":60,"unadopt":60,"freeze":15,"thaw":15}')[inputs.phase] }}
         run: |
           set -euo pipefail
           echo "MIP_JOB_DEADLINE_EPOCH=$(( $(date -u +%s) + MIP_JOB_TIMEOUT_MINUTES * 60 ))" >> "$GITHUB_ENV"
@@ -419,7 +423,7 @@ jobs:
           # a short sha shadows that commit. Every other phase reads HEAD only
           # and stays at depth 1. The key set equals inputs.phase's options
           # (tests/unit/test_deploy_dev_checkout_history.py).
-          fetch-depth: ${{ fromJSON('{"plan":1,"release":1,"data":1,"adopt":2147483647,"unadopt":1}')[inputs.phase] }}
+          fetch-depth: ${{ fromJSON('{"plan":1,"release":1,"data":1,"adopt":2147483647,"unadopt":1,"freeze":1,"thaw":1}')[inputs.phase] }}
       - uses: actions/setup-python@v6
         with: { python-version: '3.11' }
       - uses: databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c # v1.7.0
@@ -646,6 +650,9 @@ jobs:
           --github-env "$GITHUB_ENV"
           --step-summary "$GITHUB_STEP_SUMMARY"
       - name: Run the client phase
+        # Every scripts/deploy.sh phase. freeze and thaw run the next step
+        # instead: deploy.sh has no such phase and refuses the name.
+        if: ${{ inputs.phase != 'freeze' && inputs.phase != 'thaw' }}
         env:
           # The deployer is the DEFAULT github-oidc profile: scripts/deploy.sh's
           # workspace-auth bind checks its host against .env.local's
@@ -674,6 +681,19 @@ jobs:
             args+=(--skip-smoke)
           fi
           ./scripts/deploy.sh "${args[@]}"
+      - name: Freeze or thaw the emergency publisher
+        # tools/clients/publisher_freeze.py, CI only: it signs the create-only
+        # freeze marker (or its thaw) the emergency recipe's publisher obeys,
+        # with the proof-signing key it reads in-process from .env.local. No
+        # secret and no variable is bound to this step, the key is never in
+        # its env or argv, and it prints marker ids, epochs and digests only.
+        # The thaw's exact freeze_thaw ack arrives through GITHUB_ENV, from the
+        # preflight above, which admits it in the thaw phase only.
+        if: ${{ inputs.phase == 'freeze' || inputs.phase == 'thaw' }}
+        env:
+          DATABRICKS_CONFIG_PROFILE: DEFAULT
+          MIP_DISPATCH_PHASE: ${{ inputs.phase }}
+        run: python -m tools.clients.publisher_freeze --phase "$MIP_DISPATCH_PHASE" --env-file .env.local
       - name: Record the quiesce window journal state
         # Read-only, whatever happened above (M0-PR9): the window journal and
         # its dead-man's marker, as codes and booleans only. It never stops,
