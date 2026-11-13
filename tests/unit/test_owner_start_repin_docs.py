@@ -15,7 +15,7 @@ import re
 from datetime import timedelta
 from pathlib import Path
 
-from tests.unit.test_docs_commands_parse import BREAK_GLASS_HEADING, _bash_blocks
+from tests.unit.test_docs_commands_parse import BREAK_GLASS_HEADING
 from tools.clients import dispatch_acks
 from tools.databricks import app_deployment_lease as lease
 from tools.databricks import app_start_deployment as starts
