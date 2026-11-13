@@ -12,9 +12,16 @@ with one GET by id per object:
   experiment count as missing);
 * **renamed**: the live name is neither the name the bundle gives the key nor
   that name under the CLI's development-mode prefix (``[dev <user>] ``, on the
-  basename of an experiment path). Apps, Lakebase instances and catalogs are
-  named by their id, so their names must be equal: a different one would be
-  an identity change, which the bundle could only apply by recreating;
+  basename of an experiment path, in the same folder). Apps, Lakebase
+  instances and catalogs are named by their id, so their names must be equal:
+  a different one would be an identity change, which the bundle could only
+  apply by recreating, so the remedy there is the profile's name
+  (``RENAMED_EXACT_REMEDY``), never another name for the live object. A key
+  whose bundle name changed after the legacy install was deployed refuses
+  here too (the MLflow experiment's folder and base name both changed): the
+  map never accepts another folder or base name, which would bind whatever
+  the legacy state names, so the owner gives the live object the bundle's
+  name before the adoption (docs/clients/first-client-cutover.md, step 3b);
 * **foreign_bound**: a job or pipeline whose bundle deployment metadata names
   a root other than the legacy root or this deployer's own; or an id this
   deployer's state already binds under another key, or that another legacy
@@ -103,7 +110,11 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
         "missing": "the legacy object no longer exists; reconcile the legacy state, then re-run",
         "renamed": (
             "the live object's name is not the one the bundle gives this key (or its "
-            "development-mode form): it was renamed, or the legacy state names another object"
+            "development-mode form in the same folder): it was renamed, or the legacy state names "
+            "another object. If the bundle's own name for the key changed after the legacy install "
+            "was deployed, the owner gives the live object the bundle's name before the adoption "
+            "(docs/clients/first-client-cutover.md, step 3b: the MLflow experiment); the plan binds "
+            "no other name"
         ),
         "dashboard_parent_moved": (
             "the legacy dashboard is not in MIP_DASHBOARD_PARENT_PATH. A parent_path change "
@@ -134,6 +145,15 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
     }
 )
 
+# ``renamed`` on a kind named by its id: the name comes from the client profile,
+# and the live object is never given another one (that would be another object).
+RENAMED_EXACT_REMEDY = (
+    "an App, a Lakebase instance and a sync catalog are named by their id, so the live name must be "
+    "exactly the client profile's: the profile names another object than the legacy state binds. "
+    "Correct the profile's name for it (docs/clients/first-client-cutover.md, step 4), then "
+    "re-run; the live object keeps its name"
+)
+
 
 @dataclass(frozen=True)
 class AdoptInputs:
@@ -153,6 +173,8 @@ class AdoptRefusal:
 
     @property
     def remedy(self) -> str:
+        if self.code == "renamed" and self.resource.split(".", 1)[0] in EXACT_NAME_KINDS:
+            return RENAMED_EXACT_REMEDY
         return REMEDIES[self.code]
 
 

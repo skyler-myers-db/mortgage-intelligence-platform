@@ -10,6 +10,12 @@ v1.10.0 by read-only ``bundle validate -p paychex`` runs (the repo bundle's dev
 target, plus a scratch bundle with development, production and no-mode targets);
 ``_cli_presets_name`` mirrors that rewrite and is checked against those renders
 (with a synthetic short name in the dev prefix).
+
+An install deployed under an earlier declaration still holds its experiment
+under that declaration's render, which the adopt map refuses ``renamed``: the
+owner renames it to the name pinned here before the adoption
+(tests/unit/test_adopt_legacy_experiment_name.py;
+docs/clients/first-client-cutover.md, step 3b).
 """
 
 from __future__ import annotations

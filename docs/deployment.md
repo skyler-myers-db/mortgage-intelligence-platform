@@ -3775,8 +3775,16 @@ states and one GET by id per legacy object, and refuses, before the lease:
   experiment included);
 - `renamed`: the live name is neither the bundle's name for the key nor its
   development-mode form (`[dev <user>] <name>`, on an experiment path's
-  basename); an App, a Lakebase instance or catalog must keep its name, since
-  it is named by its id;
+  basename, in the same folder); an App, a Lakebase instance or catalog must
+  keep its name, since it is named by its id, so there the remedy is the
+  profile's name, never another name for the live object. A key whose bundle
+  name changed after the legacy install was deployed refuses here as well:
+  the MLflow experiment of an install first deployed before 2026-07-17, when
+  the bundle declared it in a sub-folder (`/Shared/mip/lead-scoring`; then
+  `/mip-lead-scoring`, and `/Shared/mip-lead-scoring` since 2026-10-27). The
+  map never accepts another folder or base name, which would bind whatever
+  the legacy state names: the owner renames the live object to the bundle's
+  name before the adoption (the cutover runbook's step 3b);
 - `foreign_bound`: a job or pipeline whose bundle deployment metadata names
   another root than the legacy root or the deployer's;
   `bound_elsewhere` (the deployer's state binds the key to another object, or
@@ -3837,12 +3845,30 @@ mask. A live adopt or unadopt phase is CI-only, like the plan phase; locally,
 `--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`; with it,
 adopt-live's own ack must be exported too) prints the steps and stops before
 the lease. The expected run on client #1 binds 16 keys and
-plans exactly 2 creates (the two jobs the legacy install never had).
+plans exactly 2 creates (the two jobs the legacy install never had), once its
+legacy MLflow experiment carries the bundle's name (the cutover runbook's
+step 3b: until the owner's rename, the bind plan refuses that key `renamed`
+before the lease).
 
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
 of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
 pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
 unsupported kind fails its bind, and the run undoes the binds before it.
+
+The post-bind plan for the adopted MLflow experiment is unmeasured too. After
+the owner's rename (the cutover runbook's step 3b) its name equals the
+declared one, so the release has no experiment rename left to apply. The CLI
+v1.10.0 binary's own lifecycle rules for experiments (read offline from the
+installed binary, 2026-11-13) ignore `tags` as a local and as a remote
+change, apply a `name` change in place, and recreate only on
+`artifact_location` (a backend default: skipped when the state and the
+configuration hold none and the remote has one) or `trace_location`. The
+declaration sets neither, so the predicted action is `skip`. What is owed is
+the measurement itself: that a plan right after a `bundle deployment bind`
+shows `skip`, not `recreate`, for an experiment whose declaration has no
+`artifact_location`. What the bind writes as the state's old value is not
+established. A recreate refuses at the post-bind gate, and the run undoes
+the binds.
 
 **Dashboards (attack O9).** Spike S4 measured a dashboard `parent_path` move
 on throwaway resources (CLI v1.10.0, direct engine): `parent_path` is
