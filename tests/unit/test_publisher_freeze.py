@@ -251,6 +251,7 @@ def test_the_signing_key_reaches_no_output_no_environ_and_no_child(
         assert PLANTED not in environ.values()
         assert environ[tool.VERIFY_KEY] == PLANTED_VERIFY, "only the public key, for the lease's key registry"
     assert PLANTED not in out + err
+    assert not [i for i in range(len(PLANTED) - 7) if PLANTED[i : i + 8] in out + err], "nor any 8-character run of it"
     stored = b"".join(node.data for node in workspace.workspace.nodes.values())
     assert PLANTED.encode() not in stored, "a marker holds the public key and a signature"
 
@@ -272,6 +273,7 @@ def test_a_missing_or_invalid_key_refuses_with_nothing_written(
     assert "nothing was written" in err
     if signing:
         assert signing not in err, "a malformed key is still never printed"
+        assert not [i for i in range(len(signing) - 7) if signing[i : i + 8] in err], "nor any 8-character run of it"
     assert tool.VERIFY_KEY not in os.environ
 
 
