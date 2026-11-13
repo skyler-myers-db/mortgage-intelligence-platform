@@ -360,7 +360,8 @@ run_redacted() {
 # resource id, its service principal's application and SCIM ids, a deployment
 # id) is in no client profile, so the profile's mask step never registered it.
 # Register each as a GitHub runner mask the moment the shell holds it, before
-# any command is handed it (tools/clients/redact.py, the one mask rule). The
+# any command is handed it, through the redact module's emit_mask (the one
+# mask rule; a library the inline program imports, never a tool run here). The
 # values go in on stdin, never on a command line; an empty one registers
 # nothing. Outside GitHub Actions, or with nothing to register, this starts
 # nothing. It fails closed: when a mask cannot be registered it returns
