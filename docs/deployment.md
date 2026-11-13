@@ -694,9 +694,9 @@ refuses the name.
 What obeys the marker does not change. `app_release_source publish` refuses
 while it is frozen. The governed run's own publish is exempt through its held
 lease; the window dead-man's arm and adopt-live's copy of the adopted source
-never pass the publisher's gate. The raw CLI reads no marker at all:
-`databricks apps start` (the owner break-glass, below) and `databricks apps
-deploy` of a folder that already exists are not stopped by a freeze. While the
+never pass the publisher's gate. The raw CLI reads no marker at all: its
+`apps start` (the owner break-glass, below) and its `apps deploy` of a folder
+that already exists are not stopped by a freeze. While the
 marker is frozen, an emergency publish that must go out has two routes: the
 exact `--override-freeze <marker id> --override-freeze-ack <sha256>` its
 refusal prints (that marker, that folder, that one publish), or a thaw. On
