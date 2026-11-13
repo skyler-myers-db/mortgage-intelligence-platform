@@ -24,19 +24,30 @@ For the one space that carries the title it prints:
   only when CI saw this space, these holders and that deployer, so the counts
   below describe the plan a ``genie_pin`` ack would name;
 * how many principals hold a direct CAN_MANAGE (the CI plan's creator line
-  lists one ``***`` per holder) and whether the caller is one of them;
+  lists one ``***`` per holder) and whether the caller is one of them, or
+  holds CAN_EDIT or CAN_MANAGE by inheritance only (a space in the caller's
+  home folder gives the caller CAN_MANAGE through the folder: no direct
+  grant, so no entry on the creator line);
 * how many of the reviewed managers (``MIP_GENIE_MANAGER_PRINCIPALS``) are
-  among them, and how many holders are outside that list;
+  among them, how many holders are outside that list, how many reviewed
+  managers hold CAN_EDIT or CAN_MANAGE another way (by inheritance, or a
+  direct CAN_EDIT) and how many hold neither. The three reviewed counts add
+  up to the reviewed list;
 * how many principals hold CAN_EDIT or CAN_MANAGE on the space, direct or
   inherited, that the pre-stop owner-equivalent probe does not approve
   (tools/databricks/prestop_owner_equivalent.py, its own functions: the
   approved owners, the deployer and the reviewed Genie managers, compared
   case-folded, and the platform's ``admins`` group). 10B-1 refuses each one
-  (``owner_equivalent``) before the lease.
+  (``owner_equivalent``) before the lease. This is the count that must be 0.
+  When it is not, how many of those hold their grant by inheritance only: such
+  a grant cannot be removed on the space itself (the probe's own remedy);
+* the rule to go on: that count 0, and no reviewed manager with neither.
 
-Counts never say who a holder is: an expected creator and a stranger in its
-place count the same, so the profile's approval lists, not this review, name
-who may hold the space. It prints no space id and no principal name. Its reads
+Every count comes from the one permissions read and the probe's own grant
+list; none changes what the probe refuses. Counts never say who a holder is:
+an expected creator and a stranger in its place count the same, so the
+profile's approval lists, not this review, name who may hold the space. It
+prints no space id and no principal name. Its reads
 are the pin check's own: the paged space list, one permissions GET and the
 caller's identity. Exit 0: exactly one space carries the title. Exit 2: none
 or several do, a read failed (its class only), or ``MIP_IDENTITY_IDS_JSON`` is
@@ -57,6 +68,7 @@ from tools.databricks import genie_space_pin
 from tools.databricks.prestop_owner_equivalent import (
     APPROVAL_GENIE,
     APPROVAL_UC,
+    OwnerEquivalentGrant,
     OwnerEquivalentRefusal,
     approved_principals,
     assert_owner_equivalent_grantees,
@@ -81,6 +93,11 @@ class Review:
     caller_holds: bool = False
     plan_sha256: str = ""
     unapproved: int = 0
+    # Reviewed managers that hold CAN_EDIT or CAN_MANAGE without a direct CAN_MANAGE, and with neither.
+    reviewed_other: int = 0
+    reviewed_absent: int = 0
+    caller_inherits: bool = False
+    unapproved_inherited: int = 0
 
 
 class ReviewInputError(ValueError):
@@ -111,15 +128,14 @@ def _workspace() -> Any:
     return deployment_workspace_client()
 
 
-def _unapproved(acl: Mapping[str, Any], *, space_id: str, approved: Any) -> int:
-    """How many grantees 10B-1's owner-equivalent probe refuses on this space."""
+def _unapproved(grants: list[OwnerEquivalentGrant], *, approved: Any) -> tuple[OwnerEquivalentGrant, ...]:
+    """The grantees 10B-1's owner-equivalent probe refuses on this space."""
 
-    grants = genie_owner_equivalent_grants([(space_id, acl)], space_id=space_id)
     try:
         assert_owner_equivalent_grantees(grants, approved=approved)
     except OwnerEquivalentRefusal as refusal:
-        return len(refusal.grants)
-    return 0
+        return refusal.grants
+    return ()
 
 
 def review(
@@ -151,6 +167,11 @@ def review(
     approved = approved_principals(
         approved_owners=approved_owners, deployer=deployer, genie_managers=reviewed_managers
     )
+    # The probe's own grant list: every CAN_EDIT or CAN_MANAGE entry, direct or inherited.
+    grants = genie_owner_equivalent_grants([(space_id, acl)], space_id=space_id)
+    granted = {grant.principal.casefold() for grant in grants}
+    inherited_only = {grant.principal.casefold() for grant in grants if grant.inherited_from}
+    refused = _unapproved(grants, approved=approved)
     return Review(
         matches=1,
         holders=len(holders),
@@ -158,7 +179,11 @@ def review(
         reviewed_holding=len(reviewed & holders),
         caller_holds=bool(caller) and caller in holders,
         plan_sha256=genie_space_pin.plan_sha256(plan),
-        unapproved=_unapproved(acl, space_id=space_id, approved=approved),
+        unapproved=len(refused),
+        reviewed_other=len((reviewed - holders) & granted),
+        reviewed_absent=len(reviewed - holders - granted),
+        caller_inherits=bool(caller) and caller in inherited_only,
+        unapproved_inherited=sum(1 for grant in refused if grant.inherited_from),
     )
 
 
@@ -167,11 +192,20 @@ def _report(found: Review, *, owners_set: bool) -> None:
         f"{_PREFIX} direct CAN_MANAGE holders of that space: {found.holders} "
         f"(the caller is one: {'yes' if found.caller_holds else 'no'})"
     )
+    print(
+        f"{_PREFIX} the caller holds CAN_EDIT or CAN_MANAGE on that space by inheritance only: "
+        f"{'yes' if found.caller_inherits else 'no'}"
+    )
     if found.reviewed:
         print(
             f"{_PREFIX} reviewed Genie managers ({MANAGERS_ENV}) among them: "
             f"{found.reviewed_holding} of {found.reviewed}; holders outside that list: "
             f"{found.holders - found.reviewed_holding}"
+        )
+        print(
+            f"{_PREFIX} reviewed Genie managers that hold CAN_EDIT or CAN_MANAGE on that space another "
+            f"way (by inheritance, or a direct CAN_EDIT): {found.reviewed_other}; with neither: "
+            f"{found.reviewed_absent}"
         )
     else:
         print(
@@ -191,6 +225,11 @@ def _report(found: Review, *, owners_set: bool) -> None:
             "exact principal in the profile, or remove its grant with its owner's consent, then "
             "review again"
         )
+        print(
+            f"{_PREFIX} of them, by inheritance only: {found.unapproved_inherited}. An inherited grant "
+            "cannot be removed on the space itself: approve that exact principal, move the space out "
+            "of that folder, or have the folder's owner remove the grant there"
+        )
     print(
         f"{_PREFIX} pin plan sha256 for that space, its holders and the profile's deployer "
         f"({IDENTITY_IDS_ENV}.deployer): {found.plan_sha256}"
@@ -198,6 +237,11 @@ def _report(found: Review, *, owners_set: bool) -> None:
     print(
         f"{_PREFIX} the CI pin plan's creator line must list exactly {found.holders} masked entries "
         "and its pin plan sha256 must equal this one before it is passed as genie_pin"
+    )
+    print(
+        f"{_PREFIX} go on only when the unapproved count above is 0 and no reviewed manager is with "
+        "neither: direct and inherited holders are both judged, and only the direct ones are on the "
+        "CI creator line"
     )
 
 

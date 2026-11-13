@@ -9,11 +9,18 @@ pre-stop owner-equivalent probe would refuse previews 10B-1. It never prints a
 space id or a principal name, makes no write, and refuses (exit 2) any title
 count but one, as the pin check does, and a shell without the profile's
 deployer.
+
+A space in a user's home folder gives that user CAN_MANAGE by inheritance, not
+by a direct grant. The probe judges it like a direct one, and the review says
+so: whether the caller inherits, how many reviewed managers hold their grant
+another way or not at all, and how many refused grantees are inherited-only
+(a grant no one can remove on the space itself).
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +39,7 @@ from tools.clients import genie_pin_review as review
 from tools.databricks import genie_space_pin
 from tools.databricks import prestop_owner_equivalent as probe
 
+ROOT = Path(__file__).resolve().parents[2]
 CREATOR = "creator@lender.example"
 REVIEWED = "reviewed-principal@lender.example"
 STRANGER = "unreviewed-principal@lender.example"
@@ -337,3 +345,193 @@ def test_a_shell_without_the_profiles_deployer_refuses_naming_no_value(
     assert "holders" not in text and "sha256" not in text
     for value in (CI_DEPLOYER, CREATOR, SPACE):
         assert value not in text, value
+
+
+# --- inherited grants: the home-folder case (the snapshot's gap g2) -----------------------------
+
+SERVICE = "00000000-0000-4000-8000-0000000000a7"  # another App's service principal: the one direct holder
+LINES = {
+    "inherits": "the caller holds CAN_EDIT or CAN_MANAGE on that space by inheritance only: ",
+    "another_way": "another way (by inheritance, or a direct CAN_EDIT): ",
+    "inherited_unapproved": "of them, by inheritance only: ",
+    "rule": "go on only when the unapproved count above is 0 and no reviewed manager is with neither",
+}
+
+
+def _service(name: str, level: str = "CAN_MANAGE", *, inherited: bool = False) -> dict[str, object]:
+    return {"service_principal_name": name, "all_permissions": _direct(level, inherited=inherited)}
+
+
+def _direct_levels(entry: dict[str, object]) -> list[dict[str, object]]:
+    levels = entry["all_permissions"]
+    assert isinstance(levels, list)
+    return levels
+
+
+def _line(text: str, marker: str) -> str:
+    lines = [line for line in text.splitlines() if marker in line]
+    assert len(lines) == 1, (marker, text)
+    return lines[0]
+
+
+def _another_way(text: str) -> tuple[int, int]:
+    """(reviewed managers holding another way, reviewed managers with neither)."""
+
+    tail = _line(text, LINES["another_way"]).split(LINES["another_way"], 1)[1]
+    other, absent = tail.split("; with neither: ")
+    return int(other), int(absent)
+
+
+def _probe_messages(workspace: PinWorkspace, *, owners: str, managers: str) -> list[str]:
+    def absent(name: str) -> None:
+        raise NotFound("no such catalog")
+
+    refusals, _notes = probe.owner_equivalent_refusals(
+        SimpleNamespace(catalogs=SimpleNamespace(get=absent), workspace=SimpleNamespace(get_status=absent)),
+        catalog="mip",
+        genie_space_id=SPACE,
+        acls=[(SPACE, genie_space_pin.space_acl(workspace, SPACE))],
+        approved=probe.approved_principals(approved_owners=owners, deployer=CI_DEPLOYER, genie_managers=managers),
+    )
+    return [refusal.message for refusal in refusals]
+
+
+def test_a_space_in_the_owners_home_folder_passes_once_both_holders_are_reviewed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One direct holder and the owner's inherited CAN_MANAGE: ``1 of 2`` is the correct, passing review."""
+
+    workspace = _acl_workspace(_service(SERVICE), _user(OWNER, inherited=True))
+    managers = f"{SERVICE}, {OWNER}"
+
+    rc, text = _main(workspace, capsys, managers=managers)
+
+    assert rc == 0
+    assert "direct CAN_MANAGE holders of that space: 1 (the caller is one: no)" in text
+    assert _line(text, LINES["inherits"]).endswith(": yes")
+    assert "among them: 1 of 2; holders outside that list: 0" in text
+    assert _another_way(text) == (1, 0)
+    assert _unapproved(text) == 0 == len(_probe_messages(workspace, owners="", managers=managers))
+    assert LINES["inherited_unapproved"] not in text, "nothing is refused, so nothing is inherited-and-refused"
+    assert text.rstrip().splitlines()[-1].endswith(
+        f"{LINES['rule']}: direct and inherited holders are both judged, and only the direct ones are on the CI creator line"
+    )
+    assert "must list exactly 1 masked entries" in text, "the creator line lists the direct holder only"
+    for value in (SPACE, SERVICE, OWNER, CI_DEPLOYER):
+        assert value not in text, value
+
+
+def test_an_unreviewed_home_folder_owner_is_refused_and_the_review_says_the_grant_is_inherited(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = _acl_workspace(_service(SERVICE), _user(OWNER, inherited=True))
+
+    rc, text = _main(workspace, capsys, managers=SERVICE)
+
+    messages = _probe_messages(workspace, owners="", managers=SERVICE)
+    assert rc == 0 and _unapproved(text) == 1 == len(messages)
+    assert "among them: 1 of 1; holders outside that list: 0" in text and _another_way(text) == (0, 0)
+    assert _line(text, LINES["inherits"]).endswith(": yes")
+    inherited = _line(text, LINES["inherited_unapproved"])
+    assert inherited.split(LINES["inherited_unapproved"], 1)[1].startswith("1. ")
+    assert "An inherited grant cannot be removed on the space itself" in inherited
+    # The probe's own remedy for that grantee says the same.
+    assert "the grant is inherited, so it cannot be removed on the space" in messages[0]
+    for value in (SPACE, SERVICE, OWNER):
+        assert value not in text, value
+
+
+@pytest.mark.parametrize(
+    ("entries", "managers", "direct", "other", "absent", "unapproved", "inherited"),
+    (
+        pytest.param((_service(SERVICE), _user(OWNER, inherited=True)), f"{SERVICE},{OWNER}", 1, 1, 0, 0, 0, id="home-folder"),
+        pytest.param((_service(SERVICE),), f"{SERVICE},{REVIEWED}", 1, 0, 1, 0, 0, id="a-reviewed-manager-with-no-grant"),
+        pytest.param((_service(SERVICE), _user(REVIEWED, "CAN_EDIT")), f"{SERVICE},{REVIEWED}", 1, 1, 0, 0, 0, id="a-direct-editor"),
+        pytest.param(
+            (_service(SERVICE), _user(STRANGER), _user(CREATOR, inherited=True)), SERVICE, 1, 0, 0, 2, 1,
+            id="a-direct-stranger-and-an-inherited-one",
+        ),
+        pytest.param(
+            (_service(SERVICE, inherited=True), _user(REVIEWED, "CAN_EDIT", inherited=True), _user(STRANGER, "CAN_RUN")),
+            f"{SERVICE},{REVIEWED},{CREATOR},{STRANGER}", 0, 2, 2, 0, 0, id="all-inherited-and-a-runner",
+        ),
+        pytest.param((_user(STRANGER, inherited=True), _user(CREATOR, "CAN_EDIT", inherited=True)), REVIEWED, 0, 0, 1, 2, 2, id="only-inherited-strangers"),
+        pytest.param((_service(SERVICE), _user(OWNER, "CAN_EDIT")), f"{SERVICE},{OWNER}", 1, 1, 0, 0, 0, id="the-caller-edits-directly"),
+    ),
+)
+def test_the_three_reviewed_counts_add_up_and_the_inherited_refusals_are_counted(
+    entries: tuple[dict[str, object], ...],
+    managers: str,
+    direct: int,
+    other: int,
+    absent: int,
+    unapproved: int,
+    inherited: int,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = _acl_workspace(*entries)
+    reviewed = len(managers.split(","))
+
+    rc, text = _main(workspace, capsys, managers=managers)
+
+    assert rc == 0
+    assert f"among them: {direct} of {reviewed}; " in text
+    assert _another_way(text) == (other, absent)
+    assert direct + other + absent == reviewed, "direct, another way and neither partition the reviewed list"
+    assert _unapproved(text) == unapproved == len(_probe_messages(workspace, owners="", managers=managers))
+    if unapproved:
+        tail = _line(text, LINES["inherited_unapproved"]).split(LINES["inherited_unapproved"], 1)[1]
+        assert int(tail.split(". ", 1)[0]) == inherited
+    else:
+        assert LINES["inherited_unapproved"] not in text
+    assert LINES["rule"] in text.rstrip().splitlines()[-1]
+    # The caller (the owner) inherits only when every level of the owner's own entry is inherited.
+    own = [level for entry in entries if entry.get("user_name") == OWNER for level in _direct_levels(entry)]
+    inherits = bool(own) and all(level["inherited"] for level in own)
+    assert _line(text, LINES["inherits"]).endswith(": yes" if inherits else ": no")
+    for value in (SPACE, SERVICE, CREATOR, REVIEWED, STRANGER, OWNER, CI_DEPLOYER):
+        assert value not in text, value
+
+
+def test_the_new_lines_keep_the_markers_the_other_lines_are_found_by(capsys: pytest.CaptureFixture[str]) -> None:
+    """The unapproved count and the digest are each still exactly one line; no reviewed list, no reviewed counts."""
+
+    workspace = _acl_workspace(_service(SERVICE), _user(OWNER, inherited=True))
+
+    _rc, text = _main(workspace, capsys, managers=SERVICE)
+    _rc, unset = _main(workspace, capsys)
+
+    for marker in ("does not approve", "pin plan sha256 for that space", "among them"):
+        assert len([line for line in text.splitlines() if marker in line]) == 1, marker
+    assert "among them" not in unset and LINES["another_way"] not in unset
+    assert _line(unset, LINES["inherits"]).endswith(": yes") and LINES["rule"] in unset
+
+
+def test_the_runbooks_review_rule_quotes_the_reviews_own_lines(capsys: pytest.CaptureFixture[str]) -> None:
+    """10B-0's go-on rule is read against this output, so each line it quotes is one the tool prints."""
+
+    workspace = _acl_workspace(_service(SERVICE), _user(OWNER, inherited=True))
+    _rc, text = _main(workspace, capsys, managers=f"{SERVICE}, {OWNER}")
+    runbook = " ".join((ROOT / "docs" / "clients" / "first-client-cutover.md").read_text(encoding="utf-8").split())
+    rule = runbook[runbook.index("**10B-0, read-only: the Genie pin plan.**") : runbook.index("**10B-1, read-only: the adopt plans.**")]
+
+    for quoted in ("the caller is one: no", "with neither: 0", "another way (by inheritance, or a direct CAN_EDIT): 1", "1 of 2"):
+        assert f"`{quoted}`" in rule and quoted in text, quoted
+    for words in (
+        "**the unapproved count is 0.**",
+        "direct or inherited",
+        "That line lists the **direct** `CAN_MANAGE` holders only: an inherited holder is never on it",
+        "An inherited grant cannot be removed on the space itself",
+        "no reviewed manager is without a grant on the space",
+    ):
+        assert words in rule, words
+    assert "every reviewed manager is among the holders" not in runbook, "unsatisfiable for a space in a home folder"
+    step_2 = runbook[runbook.index("## Step 2. Owner decisions") : runbook.index("## Step 3.")]
+    assert "by inheritance from the folder it lives in" in step_2 and "Settle this list before step 6" in step_2
+    step_6b = runbook[runbook.index("## Step 6b.") : runbook.index("## Step 7.")]
+    assert "python -m tools.clients.genie_pin_review --app-name <app-name>" in step_6b
+    assert "the unapproved count is 0 and no reviewed manager is with neither" in step_6b
+    step_7 = runbook[runbook.index("## Step 7. Unity Catalog ownership handover") : runbook.index("## Step 8.")]
+    assert "- Step 6b's Genie review shows one title match, an unapproved count of 0 and no reviewed manager with neither." in step_7
+    deployment = " ".join((ROOT / "docs" / "deployment.md").read_text(encoding="utf-8").split())
+    assert "would refuse on that space, direct or inherited (an inherited grant" in deployment

@@ -87,7 +87,9 @@ What is left is no code change:
   before 10B-1 ran the adopt bind plan, which is why that refusal stayed
   unseen until a snapshot derived it by hand. `tools.databricks.adopt_preflight`
   computes the plan's name and existence checks for all 16 keys, as the
-  owner, before step 7; it also proves step 3b.
+  owner, before step 7; it also proves step 3b. The same step runs 10B-0's
+  Genie review early, so a holder the owner-equivalent probe would refuse at
+  10B-1, an inherited one included, is settled before the sequence starts.
 - **The owner gives two things:** the metastore owner's attestation of the
   App's metastore privileges (S0(b′)) for every adopt, plan, unadopt and
   release run, and a clean rollback-scope check (step 7).
@@ -99,7 +101,7 @@ predict is a new blocker: stop where it appears.
 **Do not start step 7 until plan #1 (step 6) has answered S0(b) and reports
 blue's env-name parity holding, step 7's read-only
 rollback-scope check is clean, step 3b is done, step 6b's preflight is
-clear, and the owner can take
+clear and its Genie review counts no unapproved holder, and the owner can take
 S0(b′)'s attestation (below):** steps 7 to 12
 run as one sequence inside a 14-day window (step 7), and a sequence started
 while 10B or 12 cannot run leaves the install half handed over.
@@ -247,7 +249,7 @@ over an open window journal, and a freeze and thaw marker that CI signs.
 | 4 | Bootstrap: identities, environments, profile | owner | ready |
 | 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
 | 6 | Plan #1 | CI | ready |
-| 6b | Owner preflight of the bind plan (read-only) | owner | after 3b, 4 and 6; before 7 |
+| 6b | Owner preflights (read-only): the bind plan, the Genie space's holders | owner | after 3b, 4 and 6; before 7 |
 | 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers, step 3b and step 6b (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
@@ -336,7 +338,14 @@ each in the client profile (step 4), never in git:
   the reviewed third-party principal that holds `CAN_MANAGE` on the governed
   Genie space, and the space's creator, which holds a direct `CAN_MANAGE` from
   creation, for as long as it keeps that grant (unless the creator is the
-  deployer, which the probe approves anyway). Without them the pre-stop
+  deployer, which the probe approves anyway). Also every user or group that
+  holds `CAN_MANAGE` or `CAN_EDIT` on the space by inheritance from the
+  folder it lives in: a space in a user's home folder gives that user
+  `CAN_MANAGE` through the folder. That grant is on no creator line and
+  cannot be removed on the space itself, yet the probe judges it like a direct
+  one. Settle this list before step 6: step 6b's review counts it without any
+  CI run, and a change after step 7 changes the profile ack inside the 14-day
+  window. Without them the pre-stop
   owner-equivalent probe refuses (docs/deployment.md, "Pre-stop probes"). The
   Genie API names no creator, so this list, not a count, is what names it:
   10B-0's review counts every holder this list (with the approved owners, the
@@ -772,17 +781,19 @@ an existing catalog's, a `metastore owner:` line): **stop the cutover** and fix 
 
 **Rollback:** read-only.
 
-## Step 6b. Owner preflight (read-only): the bind plan's names
+## Step 6b. Owner preflights (read-only): the bind plan's names, and the Genie space's holders
 
 **Who:** the owner, with their own profile. **Preconditions:** step 4 (the
 profile and its local `MIP_IDENTITY_IDS_JSON` pins), step 3b, and plan #1
-(step 6) for the profile ack it prints. Run it again right before step 7 if
+(step 6) for the profile ack it prints. Run both again right before step 7 if
 days have passed.
 
-Nothing before 10B-1 runs the adopt bind plan, and 10B-1 comes after both
-ownership handovers. This read measures, before step 7, what the owner can
-measure of it. A refusal found here costs a re-run; found at 10B-1 it leaves
-the install half handed over.
+Nothing before 10B-1 runs the adopt bind plan or the pre-stop probes in their
+adopt mode, and 10B-1 comes after both ownership handovers. These two reads
+measure, before step 7, what the owner can measure of them. A refusal found
+here costs a re-run; found at 10B-1 it leaves the install half handed over.
+
+**1. The bind plan's name and existence checks.**
 
 ```bash
 DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.adopt_preflight --report-out <private-dir>/adopt-preflight.json
@@ -831,6 +842,20 @@ their names are unchanged. The `adopt_plan` ack comes from 10B-1's own output
 only, never from this preflight; if the two digests differ, read why before
 10B-2.
 
+**2. The Genie space's holders.** 10B-0's review needs no CI run for its
+counts (only its digest comparison waits for 10B-0's log). Run it now, and
+settle the approvals before the plan whose profile ack the sequence carries:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.genie_pin_review --app-name <app-name> --genie-space-name "<genie-space-title>"
+```
+
+with the three profile values exported for that one command, as in 10B-0. Go
+on only if the title count is 1, the unapproved count is 0 and no reviewed
+manager is with neither (10B-0 explains each count). If an approval changes,
+re-run `github_environment`, plan #1 and the first preflight: the profile,
+and so its ack, changed.
+
 **Rollback:** read-only.
 
 ## Step 7. Unity Catalog ownership handover
@@ -860,6 +885,9 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
   `experiments.mip_lead_scoring`, after the handovers.
 - Step 6b's preflight ends `verdict: clear`, and prints the profile ack plan
   #1 printed. A refusal it predicts stops 10B-1 after the handovers.
+- Step 6b's Genie review shows one title match, an unapproved count of 0 and
+  no reviewed manager with neither. An unapproved holder, direct or
+  inherited, stops 10B-1 at the owner-equivalent probe, after the handovers.
 
 **The rollback-scope check (read-only).** As the owner:
 
@@ -1183,29 +1211,49 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.genie_pin_revi
 It prints counts and one digest, never an id or a principal name
 (`tools/clients/genie_pin_review.py`): how many spaces carry the governed title
 (the pin check pins only exactly one, so anything else is a stop); how many
-principals hold a direct `CAN_MANAGE` on that one and whether the owner is one
-of them; how many of the reviewed managers are among the holders and how many
-holders are outside that list; how many principals with `CAN_EDIT` or
-`CAN_MANAGE` on the space, direct or inherited, the pre-stop owner-equivalent
-probe does not approve (counted by the probe's own functions); and the pin plan
-sha256 recomputed from that space, its holders and the profile's deployer. Go
-on only if:
+principals hold a direct `CAN_MANAGE` on that one, and whether the caller is
+one of them or holds `CAN_EDIT` or `CAN_MANAGE` by inheritance only; how many
+of the reviewed managers are among the direct holders, how many direct
+holders are outside that list, how many reviewed managers hold their grant
+another way (by inheritance, or a direct `CAN_EDIT`) and how many hold
+neither; how many principals with `CAN_EDIT` or `CAN_MANAGE` on the space,
+direct or inherited, the pre-stop owner-equivalent probe does not approve
+(counted by the probe's own functions), and how many of those hold it by
+inheritance only; and the pin plan sha256 recomputed from that space, its
+direct holders and the profile's deployer. Go on only if:
 
 - the title count is 1;
 - the recomputed `pin plan sha256` equals the CI log's. Only then did CI see
   this space, these holders and that deployer: a stranger in the creator's
   place counts the same but gives another digest;
-- the holder count equals the masked entries on the CI creator line, and every
-  reviewed manager is among the holders;
-- no principal is outside the probe's approved principals. 10B-1 refuses each
-  one (`[mip-prestop] REFUSED: owner_equivalent`) before the lease. A count
-  never says who a holder is, so a creator the list leaves out counts like a
-  stranger: approve the reviewed one in `.env.local` (step 2), re-run
+- the holder count equals the masked entries on the CI creator line. That
+  line lists the **direct** `CAN_MANAGE` holders only: an inherited holder is
+  never on it;
+- **the unapproved count is 0.** This is the count that decides 10B-1: every
+  principal with `CAN_EDIT` or `CAN_MANAGE` on the space that the probe does
+  not approve, direct or inherited. 10B-1 refuses each one (`[mip-prestop]
+  REFUSED: owner_equivalent`) before the lease. A space that lives in a
+  user's home folder gives that user `CAN_MANAGE` through the folder: that
+  user is no direct holder (for the owner the review says `the caller is one:
+  no`, and that the caller holds one by inheritance only), is on no creator
+  line, and is refused all the same until approved. A count never says who a
+  holder is, so a creator or a folder owner the list leaves out counts like a
+  stranger. For a direct grant: approve the reviewed principal in
+  `.env.local` (step 2), or remove its grant with its owner's consent. An
+  inherited grant cannot be removed on the space itself: approve that exact
+  principal, or move the space out of that folder, or have the folder's owner
+  remove the grant there. After a change to the list, re-run
   `github_environment --plan` and `--apply --ack-plan <sha256>` so the deploy
-  reads it, and take the new profile ack from a plan dispatch (the profile
-  changed); or remove its grant with its owner's consent. Then review again.
-  If the owner created the space, the review says the caller is one of the
-  holders, and the owner's own user is then the creator to approve.
+  reads it, take the new profile ack from a plan dispatch (the profile
+  changed), and review again. If the owner created the space, the review
+  says the caller is one of the direct holders, and the owner's own user is
+  then the creator to approve;
+- no reviewed manager is without a grant on the space (`with neither: 0`). A
+  reviewed manager need not be a direct holder: `1 of 2` among the direct
+  holders beside `another way (by inheritance, or a direct CAN_EDIT): 1` is
+  the home-folder case, and it passes. A reviewed manager that holds nothing
+  is an approval nobody uses, and it would admit that principal later
+  without a review: remove it.
 
 The digest binds that candidate, those holders and the deployer: if a holder
 changes before 10B-1, 10B-1 refuses `the ack names another plan`; review again.

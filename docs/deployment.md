@@ -2414,8 +2414,10 @@ emergency recipe gates on.
    it with `tools.clients.genie_pin_review` (read-only, counts and one digest
    only): it recomputes the plan's sha256 from the profile's
    `MIP_IDENTITY_IDS_JSON.deployer`, which must equal the CI log's, and counts
-   the grantees the pre-stop owner-equivalent probe would refuse on that space
-   (the cutover runbook's 10B-0).
+   the grantees the pre-stop owner-equivalent probe would refuse on that
+   space, direct or inherited (an inherited grant, such as the one a space in
+   a user's home folder gives that user, is on no creator line and cannot be
+   removed on the space itself; the cutover runbook's 10B-0 and step 6b).
 4. **More than one.** Refused as ambiguous.
 
 **The adopt phases (B4(c)).** Adopting an existing install (below) binds the
