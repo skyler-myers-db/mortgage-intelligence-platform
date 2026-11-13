@@ -411,7 +411,11 @@ def test_only_a_candidate_with_a_digest_can_be_acknowledged(facts: WindowFacts) 
     for given in ("", OWNER_DIGEST, facts.owner_start_sha256):
         plan = _owner_plan(facts, "pre-lease", given)
         assert plan.refusals == ("window_journal_open",), (facts.owner_start_state, given)
-        assert plan.public_summary()["owner_start_recovery"] is False
+        summary = plan.public_summary()
+        assert summary["owner_start_recovery"] is False
+        # The summary carries a digest only for a candidate: nothing else is ever one to ack.
+        candidate = facts.owner_start_state == "candidate"
+        assert summary["owner_start_sha256"] == (facts.owner_start_sha256 if candidate else "")
 
 
 def test_a_closed_or_absent_journal_needs_no_owner_start_ack() -> None:
