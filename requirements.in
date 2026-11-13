@@ -119,16 +119,25 @@ pg8000==1.31.5
 # MIP_OTEL_ENDPOINT, but the deployed App image must carry these wheels so
 # turning on a collector results in log_export=otlp instead of a safe
 # stdout-only fallback.
-# Security floor for GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing in
-# opentelemetry-api <=1.45.0, first patched in 1.45.1, published 2026-10-22).
-# The SDK pins the API to its own version, so the api/sdk/exporter family
-# moves together at 1.45.1 (semantic-conventions 0.66b1; 1.45 also splits out
-# opentelemetry-exporter-otlp-common and opentelemetry-exporter-http-transport).
-opentelemetry-api>=1.45.1,<2
-opentelemetry-sdk>=1.45.1,<2
+# Security floor for GHSA-mf5v-w3w3-f6cg (quadratic-time traceparent parsing,
+# a ReDoS in TraceContextTextMapPropagator.extract, in opentelemetry-api
+# <=1.45.1, first patched in 1.45.2, published 2026-11-13). Before it, 1.45.1
+# was the floor for GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing, <=1.45.0,
+# published 2026-10-22).
+# The SDK and semantic-conventions each pin the API to their own release, so
+# api and sdk move together to 1.45.2 with semantic-conventions 0.66b2. The
+# exporter wheels admit any 1.45.x SDK (opentelemetry-sdk~=1.45.1) and no
+# advisory names them, so opentelemetry-exporter-otlp and its closure (the
+# -proto-grpc, -proto-http and -proto-common exporters, opentelemetry-proto,
+# and the opentelemetry-exporter-otlp-common and
+# opentelemetry-exporter-http-transport wheels 1.45 split out) stay on 1.45.1
+# and 0.66b1.
+opentelemetry-api>=1.45.2,<2
+opentelemetry-sdk>=1.45.2,<2
 opentelemetry-exporter-otlp>=1.45.1,<2
 # The OTLP logging.Handler. opentelemetry-sdk 1.41.1 deprecated its own
 # opentelemetry.sdk._logs.LoggingHandler (DeprecationWarning on construction)
 # in favour of this package's handler; the 0.x line is versioned with
-# semantic-conventions (0.66b1 pairs with the 1.45.1 family).
-opentelemetry-instrumentation-logging>=0.66b1,<1
+# semantic-conventions (0.66b2 pairs with the 1.45.2 API and SDK; 0.66b1 pins
+# semantic-conventions 0.66b1, which pins the API to 1.45.1).
+opentelemetry-instrumentation-logging>=0.66b2,<1
