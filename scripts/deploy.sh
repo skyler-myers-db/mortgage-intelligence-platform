@@ -355,39 +355,6 @@ run_redacted() {
   "$@"
 }
 
-# The helpers above echo every command line, and a governed release's job log
-# is public. An identifier the release resolves at run time (the App's
-# resource id, its service principal's application and SCIM ids, a deployment
-# id) is in no client profile, so the profile's mask step never registered it.
-# Register each as a GitHub runner mask the moment the shell holds it, before
-# any command is handed it, through the redact module's emit_mask (the one
-# mask rule; a library the inline program imports, never a tool run here). The
-# values go in on stdin, never on a command line; an empty one registers
-# nothing. Outside GitHub Actions, or with nothing to register, this starts
-# nothing. It fails closed: when a mask cannot be registered it returns
-# nonzero and nothing uses the value.
-mask_runtime_ids() {
-  local joined
-  printf -v joined '%s' "$@"
-  [[ "${GITHUB_ACTIONS:-}" == "true" && -n "$joined" ]] || return 0
-  printf '%s\n' "$@" | "$PYTHON" -c '
-import sys
-
-from tools.clients.redact import emit_mask
-
-emit_mask(sys.stdin.read())
-'
-}
-
-# The deployment ids a sourced rollback binding or quiesce window env file
-# carries, each a runner mask before the release hands one to a command.
-mask_deployment_ids() {
-  mask_runtime_ids "${MIP_APP_ROLLBACK_DEPLOYMENT_ID:-}" \
-    "${MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID:-}" \
-    "${MIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID:-}" \
-    "${MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID:-}"
-}
-
 # For idempotent bundle job runs only. The CLI long-polls the run status,
 # and a laptop network flap (VPN reconnect, Wi-Fi handoff) kills that poll
 # with "read: can't assign requested address" while the job itself keeps
@@ -492,6 +459,39 @@ import sys
 left, right = (value.strip().casefold() for value in sys.argv[1:])
 raise SystemExit(0 if left and right and left == right else 1)
 PYEOF
+}
+
+# The run helpers echo every command line, and a governed release's job log
+# is public. An identifier the release resolves at run time (the App's
+# resource id, its service principal's application and SCIM ids, a deployment
+# id) is in no client profile, so the profile's mask step never registered it.
+# Register each as a GitHub runner mask the moment the shell holds it, before
+# any command is handed it, through the redact module's emit_mask (the one
+# mask rule; a library the inline program imports, never a tool run here). The
+# values go in on stdin, never on a command line; an empty one registers
+# nothing. Outside GitHub Actions, or with nothing to register, this starts
+# nothing. It fails closed: when a mask cannot be registered it returns
+# nonzero and nothing uses the value.
+mask_runtime_ids() {
+  local joined
+  printf -v joined '%s' "$@"
+  [[ "${GITHUB_ACTIONS:-}" == "true" && -n "$joined" ]] || return 0
+  printf '%s\n' "$@" | "$PYTHON" -c '
+import sys
+
+from tools.clients.redact import emit_mask
+
+emit_mask(sys.stdin.read())
+'
+}
+
+# The deployment ids a sourced rollback binding or quiesce window env file
+# carries, each a runner mask before the release hands one to a command.
+mask_deployment_ids() {
+  mask_runtime_ids "${MIP_APP_ROLLBACK_DEPLOYMENT_ID:-}" \
+    "${MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID:-}" \
+    "${MIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID:-}" \
+    "${MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID:-}"
 }
 
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
