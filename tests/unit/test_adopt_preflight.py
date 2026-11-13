@@ -576,6 +576,8 @@ def test_the_runbook_makes_the_preflight_a_step_7_precondition_and_quotes_what_t
         "`verdict: not measured`",
         "Not measured is not clear.",
         "never a name or an id",
+        # The names are the checkout's own databricks.yml: the one the dispatches will run.
+        "Run it in a checkout of the `main` commit the adopt dispatches will run: the names are that checkout's.",
         "The `adopt_plan` ack comes from 10B-1's own output only, never from this preflight",
         "It does not measure the CI deployer's own reads",
     ):

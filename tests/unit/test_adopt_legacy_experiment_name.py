@@ -258,6 +258,9 @@ def test_the_sequence_waits_for_the_rename_and_says_what_a_rollback_leaves() -> 
     assert "a legacy object whose live name is not the bundle's (`renamed`: the MLflow experiment, until step 3b)" in walk
     state = _section(runbook, "## The state this runbook starts from", "## Blockers on main")
     assert "**Step 1's read-only snapshot is taken** (an agent, 2026-11-12)." in state
+    decisions = _section(runbook, "## Decisions taken", "## Steps at a glance")
+    assert "**The legacy MLflow experiment takes the bundle's name**, by the owner's rename before step 7 (step 3b)." in decisions
+    assert "nothing is pinned in the profile, and the bind plan's name rule stays as strict as it is" in decisions
     glance = _section(runbook, "## Steps at a glance", "## Step 1. Freeze and snapshot")
     assert "| 3b | Rename the legacy MLflow experiment | owner | ready; do and prove before step 7 |" in glance
 

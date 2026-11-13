@@ -219,6 +219,11 @@ over an open window journal, and a freeze and thaw marker that CI signs.
   immutable (spike S4), so `MIP_DASHBOARD_PARENT_PATH` names that folder for
   good. The alternative, a one-time recreate that loses the dashboards' ids,
   URLs and published history, is the owner's choice only.
+- **The legacy MLflow experiment takes the bundle's name**, by the owner's
+  rename before step 7 (step 3b). Unlike a dashboard's folder, an experiment
+  moves in place and keeps its id (spike S8), so nothing is pinned in the
+  profile, and the bind plan's name rule stays as strict as it is: it binds
+  the bundle's name, or its development-mode form in the same folder.
 - **The App start before step 10** is the owner's raw `apps start` (step 10A).
 - **Until 10B, no emergency ship from a commit `main` does not hold.** This
   rule, not adopt-live, keeps a branch ship out. adopt-live refuses
@@ -803,9 +808,11 @@ It computes the adopt plan as 10B-1 does (the legacy state under
 `MIP_LEGACY_BUNDLE_ROOT`, this deployer's state, one GET by id per legacy
 object, the same refusal codes), with one difference: the name each key must
 have comes from `databricks.yml` and the profile, not from a bundle CLI plan,
-which only the CI deployer runs. It prints counts, symbolic keys, refusal
-codes, two digests and one verdict, never a name or an id; the full document,
-which names resources, goes to the private report (mode 0600). Go on only if:
+which only the CI deployer runs. Run it in a checkout of the `main` commit
+the adopt dispatches will run: the names are that checkout's. It prints
+counts, symbolic keys, refusal codes, two digests and one verdict, never a
+name or an id; the full document, which names resources, goes to the private
+report (mode 0600). Go on only if:
 
 - it ends `verdict: clear`: 16 legacy keys would bind, 2 expected creates, no
   refusal;
