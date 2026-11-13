@@ -95,7 +95,6 @@ from tools.databricks.bundle_plan_lookups import (  # noqa: E402
     prove_full_visibility,
 )
 from tools.databricks.bundle_plan_shape import (  # noqa: E402
-    DOCUMENT_RESOURCE,
     BundlePlan,
     PlanEntry,
     PlanShapeError,
@@ -120,7 +119,8 @@ JOURNAL_OWNED_NOTE = (
     "journal; the recovery under the lease reconciles (deletes) it, and the pre-apply gate "
     "judges the create again, strictly"
 )
-PLAN_RESOURCE = DOCUMENT_RESOURCE
+# bundle_plan_shape.DOCUMENT_RESOURCE, where a parser refusal names the document.
+PLAN_RESOURCE = "bundle.plan"
 PUBLIC_REASON_CODES = frozenset({"malformed_plan", "lookup_failed"})
 _PREFIX = "[mip-plan-gate]"
 

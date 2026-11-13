@@ -18,7 +18,7 @@ import pytest
 
 from tests.fixtures import bundle_plan_fixtures as fx
 from tools.databricks import bundle_plan_gate as gate
-from tools.databricks.bundle_plan_shape import parse_plan
+from tools.databricks.bundle_plan_shape import DOCUMENT_RESOURCE, parse_plan
 
 INSTANCE = "resources.database_instances.mip_app_state"
 
@@ -144,6 +144,7 @@ def test_a_parser_refusal_is_public_only_as_its_resource_and_field_class(
     assert refusal["detail"]["reason"] == "changes"
     assert map_key in refusal["detail"]["message"]
     assert refusal["detail"]["skeleton"]["json"] is True
+    assert gate.PLAN_RESOURCE == DOCUMENT_RESOURCE, "a document-level refusal names the same resource"
 
 
 def test_a_missing_plan_file_refuses(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
