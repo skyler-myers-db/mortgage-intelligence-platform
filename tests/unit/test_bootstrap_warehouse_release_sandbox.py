@@ -30,7 +30,12 @@ client's workspace. The run must:
   the log altogether (the App with its service principal's name and OAuth
   client ids; the created deployment with its id, source path and creator),
   and register the created deployment's id as a runner mask right there, before
-  the capture names it (tests/unit/test_cli_result_private.py drives the helper).
+  the capture names it (tests/unit/test_cli_result_private.py drives the helper);
+* register the App's URL and its host as runner masks where the activation
+  resolves the URL, before it prints ``app url:`` or hands it to a command
+  (tests/unit/test_app_url_runner_masks.py drives both places);
+* keep each job run's ``Run URL:`` line, which names the job id and the run id,
+  off the log, and its progress on it (tests/unit/test_job_run_url_withheld.py).
 """
 
 from __future__ import annotations
@@ -41,7 +46,12 @@ import pytest
 
 from tests.fixtures.client_profiles import core_tier_profile
 from tests.fixtures.release_sandbox import Release, core_client_ids, first_install_estate, release
-from tests.fixtures.release_sandbox_cli import DEPLOY_RESULT_ONLY, START_RESULT_ONLY
+from tests.fixtures.release_sandbox_cli import (
+    DEPLOY_RESULT_ONLY,
+    JOB_RUN_URL_IDS,
+    START_RESULT_ONLY,
+    job_run_progress,
+)
 from tests.fixtures.release_sandbox_python import APP, CAPTURED_DEPLOYMENT, LEASE_ID
 from tests.fixtures.release_sandbox_python import WAREHOUSE as BUNDLE_WAREHOUSE
 
@@ -235,5 +245,39 @@ def test_what_the_cli_renders_for_the_start_and_the_activation_never_reaches_the
 
 def test_nothing_to_mask_starts_no_interpreter(fresh: Release) -> None:
     # A first install's journal read names no App: the helper registers nothing and runs nothing.
+    # Three masks run: step 4's App ids, the activation's App URL, the capture's deployment id.
     masks = [index for index, call in enumerate(fresh.python_calls) if _is_mask(call)]
-    assert len(masks) == 2, masks
+    assert len(masks) == 3, masks
+
+
+# The URL the sandbox App answers (tests/fixtures/release_sandbox_cli.py).
+APP_URL = "https://mip-app.example.invalid"
+APP_HOST = APP_URL.removeprefix("https://")
+
+
+def test_the_apps_url_is_masked_where_the_activation_resolves_it_before_anything_prints_it(fresh: Release) -> None:
+    calls = fresh.python_calls
+    (parse,) = [index for index, call in enumerate(calls) if 'get("url","")' in " ".join(call["argv"])]
+    assert _is_mask(calls[parse + 1]), calls[parse + 1]["argv"]
+    assert APP_URL not in " ".join(calls[parse + 1]["argv"]), "stdin, never the command line"
+    carriers = _carriers(fresh, APP_URL)
+    assert carriers and carriers[0] > parse + 1, carriers[:1]
+    # stderr: the runner reads the commands there; the URL and its host, once each.
+    assert [line for line in fresh.result.stderr.splitlines() if APP_HOST in line] == [
+        f"::add-mask::{APP_URL}",
+        f"::add-mask::{APP_HOST}",
+    ]
+    printed = [ANSI.sub("", line) for line in fresh.result.stdout.splitlines() if APP_HOST in line]
+    assert printed[0] == f"  app url:    {APP_URL}" and printed[-1] == f"  App URL:     {APP_URL}", printed
+    assert printed[1:-1] and all(line.startswith("$ ") for line in printed[1:-1]), printed
+
+
+def test_no_job_run_url_reaches_the_log_and_each_runs_progress_does(fresh: Release) -> None:
+    runs = fresh.state.get("bundle_runs", [])
+    assert runs, "the release runs bundle jobs"
+    for value in JOB_RUN_URL_IDS.values():
+        assert value not in fresh.transcript, value
+    errors = fresh.result.stderr.splitlines()
+    assert errors.count("Run URL: withheld from the log (it names the job id and the run id)") == len(runs)
+    for job in runs:
+        assert all(line in errors for line in job_run_progress(job)), job

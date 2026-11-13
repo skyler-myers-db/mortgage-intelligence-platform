@@ -5564,9 +5564,9 @@ variable, and a public one found in a secret.
 
 **Ids the release resolves at run time** are in no profile, so that first
 step cannot register them: the App's resource id, its service principal's
-application and SCIM ids (the platform mints the App's service principal) and
-each deployment id. `scripts/deploy.sh` echoes every command it runs, so each
-of these is registered as a runner mask at the place the run first holds one,
+application and SCIM ids (the platform mints the App's service principal),
+each deployment id and the App's URL. `scripts/deploy.sh` echoes every command
+it runs, so each of these is registered as a runner mask at the place the run first holds one,
 before any command is handed it (`mask_runtime_ids` in the shell and
 `emit_mask` in a tool: one rule, `tools/clients/redact.py`):
 
@@ -5585,7 +5585,13 @@ before any command is handed it (`mask_runtime_ids` in the shell and
   the release sources, and every quiesce window env file whose deployment id
   it hands to a command. The dead-man recovery and a failed open's run-id
   read source a window env file too; they hand no deployment id on and
-  register none.
+  register none;
+- **the App's URL** (`mask_app_url`: the URL and its host, which names the
+  workspace id), at the two places the release reads it from the App: the
+  activation's `apps get` on a first install (`deploy_app_snapshot`, before
+  it prints `app url:`) and step 0a's read of the existing App's inventory
+  row on a routine release. Every `--base-url` and `--app-url` echo and the
+  closing summary's `App URL:` come after.
 
 **What the apps CLI prints is kept off the log.** `apps deploy` renders the
 created deployment as JSON on its stdout when it returns (its id,
@@ -5595,6 +5601,24 @@ deployments, its URL), before the shell holds any of it, so no mask could
 come first. `keep_cli_result_private` runs those three with the result in a
 private file, registers the deployment ids it names and removes the file; the
 first install's `apps create` already wrote its result to a private file.
+
+**A job run's `Run URL:` line is kept off the log.** `databricks bundle run
+<job>` writes `Run URL: https://<host>/jobs/<job id>/runs/<run id>?o=<workspace
+id>` (or the Jobs API's legacy `/?o=<workspace id>#job/<job id>/run/<run id>`
+form) to its stderr when the run starts, before the shell holds either id (CLI
+v1.7.0, which `deploy-dev.yml` installs, and v1.10.0: `bundle/run/job.go`
+logs the `job_run_url` event through `cmdio.LogString`). The host and the
+workspace id are profile masks. The job id and the run id are identifiers
+too: a run id is the 16-digit shape `tests/unit/test_no_client_identifiers_committed.py`
+keeps out of the tree, the data phase's job runner prints job keys and never a
+job or run id, and the adopt map registers every live job id it reads as a
+mask. Every `bundle run` of the release goes through `run_job_with_retry`,
+which runs each attempt through `keep_run_url_off_the_log`: the CLI's stderr
+passes a filter that replaces that one line with `Run URL: withheld from the
+log (it names the job id and the run id)` and passes every other line (each
+state change, a failed task's error and trace, the CLI's own error) through as
+it comes; stdout and the exit status are the command's own. The run is in its
+job's run list in the workspace.
 
 The data phase reads the App's service principal through
 `tools/databricks/data_phase_app_identity.py`, which registers it before
@@ -5609,11 +5633,9 @@ Not covered, and so still printed in clear:
 - the agentic tier's other sourced env files (the agentic env, the cutover
   journals, the agent evaluation and the verifier capture carry endpoint,
   Supervisor and credential ids);
-- the App's URL, which the release prints where it resolves it (`app url:`,
-  the closing summary) and in each `--base-url` it echoes;
-- the job id and the run id in the run URL `databricks bundle run` prints for
-  each job it runs. The host and the workspace id in that URL are profile
-  values the first step registered;
+- the run URL the CLI also logs (`Run available at <url>`) when its log level
+  is raised to `info` or `debug` (`DATABRICKS_LOG_LEVEL`). The release sets
+  none, and the CLI's default, `warn`, logs no run URL;
 - the lease id and the release id, which are the release's own and name no
   platform object.
 

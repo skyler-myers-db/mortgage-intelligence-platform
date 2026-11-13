@@ -360,7 +360,8 @@ run_redacted() {
 # with "read: can't assign requested address" while the job itself keeps
 # succeeding server-side (observed twice on 2026-07-07, deploy step 7, on
 # two different local IPs). Re-running the job is safe by design; a real
-# job failure still fails the deploy after the retries.
+# job failure still fails the deploy after the retries. Each attempt's
+# `Run URL:` line is kept off the log (keep_run_url_off_the_log).
 run_job_with_retry() {
   local attempt
   echo "${DIM}\$ $*${RST}"
@@ -373,7 +374,7 @@ run_job_with_retry() {
       echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
       return 1
     fi
-    if "$@"; then
+    if keep_run_url_off_the_log "$@"; then
       return 0
     fi
     if [[ "$attempt" -lt 3 ]]; then
@@ -528,6 +529,46 @@ if isinstance(result, dict):
   fi
   rm -f "$result"
   return "$rc"
+}
+
+# The App's URL (https://<app>-<workspace id>.<cloud>.databricksapps.com) is
+# no profile field either: the release reads it from the App. It and its host
+# (what a tool that parses the URL prints bare) are runner masks before the
+# release prints it or hands it to a command. Same contract as above.
+mask_app_url() {
+  local host="${1#*://}"
+  mask_runtime_ids "$1" "${host%%/*}"
+}
+
+# `databricks bundle run <job>` writes `Run URL: <url>` to its stderr when the
+# run starts (the CLI's job_run_url event, bundle/run/progress/job_events.go),
+# before the shell holds either id: https://<host>/jobs/<job id>/runs/<run
+# id>?o=<workspace id>. The host and the workspace id are profile masks, the
+# job id and the run id are not, and the log is public. Run the command with
+# its stderr through a filter that withholds that one line and passes every
+# other one (the run's progress, a task's error and trace, the CLI's error)
+# through unchanged as it comes; stdout is untouched. Returns the command's
+# own status, or the filter's when only the filter failed.
+withhold_run_url_lines() {
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == *"Run URL: "* ]]; then
+      line="Run URL: withheld from the log (it names the job id and the run id)"
+    fi
+    printf '%s\n' "$line"
+  done
+}
+
+keep_run_url_off_the_log() {
+  local -a codes
+  # Both statuses, under errexit or not: a failed pipeline skips the first
+  # assignment, and the second still reads the pipeline's PIPESTATUS.
+  { "$@" 2>&1 1>&3 3>&- | withhold_run_url_lines >&2 3>&- && codes=("${PIPESTATUS[@]}") || \
+      codes=("${PIPESTATUS[@]}"); } 3>&1
+  if [[ "${codes[0]}" -ne 0 ]]; then
+    return "${codes[0]}"
+  fi
+  return "${codes[1]}"
 }
 
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0

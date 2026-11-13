@@ -79,6 +79,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # A resumed first install (M1-PR6) takes the first-install branch below.
   if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" && "${FIRST_INSTALL_RESUMED:-0}" -ne 1 ]]; then
     APP_UPGRADE_STATE="unverified_existing"
+    # >>> app url: the existing App's, masked at resolve >>>
     _EXISTING_APP_URL="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
 import json, os, sys
 items = json.load(sys.stdin)
@@ -86,9 +87,16 @@ name = os.environ.get("MIP_APP_NAME", "mip-app")
 matches = [item for item in items if str(item.get("name") or "") == name]
 print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
 ')"
+    # A routine release's first sight of the URL: a runner mask before any
+    # --base-url echo or the closing summary prints it (mask_app_url).
+    if ! mask_app_url "$_EXISTING_APP_URL"; then
+      echo "${RED}[deploy] the existing App's URL could not be registered as a runner mask; refusing to print it or hand it to a command.${RST}" >&2
+      exit 4
+    fi
     if [[ -z "${MIP_APP_URL:-}" && -n "$_EXISTING_APP_URL" ]]; then
       export MIP_APP_URL="$_EXISTING_APP_URL"
     fi
+    # <<< app url: the existing App's, masked at resolve <<<
     APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
     if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \
           "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then

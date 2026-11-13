@@ -17,6 +17,11 @@ deployment, JSON in the default text mode): the App with its service
 principal's name and OAuth client ids, and the deployment with its id, its
 source path and its creator. No read hands the shell those values first, so
 a test can prove that neither result reaches the job log.
+
+``bundle run`` writes what the real CLI writes on stderr for a job run
+(bundle/run/job.go): ``Run URL:`` with the job id and the run id
+(``JOB_RUN_URL_IDS``), then each state change, so a test can prove the ids
+never reach the job log while the progress does.
 """
 
 from __future__ import annotations
@@ -47,6 +52,15 @@ DEPLOY_RESULT_ONLY = {
     "creator": "deployment-creator-sandbox",
     "deployment_artifacts": {"source_code_path": "/Workspace/sandbox/deployment-artifacts-sandbox"},
 }
+# The job id and the run id only a job run's ``Run URL:`` line names (digit runs
+# shorter than a real id's, which the committed-identifier scan looks for).
+JOB_RUN_URL_IDS = {"job": "4" * 15, "run": "3" * 15}
+
+
+def job_run_progress(job: str) -> list[str]:
+    """The state changes ``bundle run`` writes for a run of ``job`` that succeeds."""
+
+    return [f'2026-11-13 10:00:00 "{job}" RUNNING', f'2026-11-13 10:01:00 "{job}" TERMINATED SUCCESS']
 
 
 def _app(state: dict[str, Any]) -> dict[str, Any]:
@@ -115,6 +129,9 @@ def main() -> int:
     if args[:2] == ["bundle", "run"] and args[3:] == ["-t", "client"]:
         state.setdefault("bundle_runs", []).append(args[2])
         _save(state)
+        host = os.environ["DATABRICKS_HOST"].rstrip("/")
+        url = f"{host}/jobs/{JOB_RUN_URL_IDS['job']}/runs/{JOB_RUN_URL_IDS['run']}?o=workspace-sandbox"
+        print("\n".join([f"Run URL: {url}", "", *job_run_progress(args[2])]), file=sys.stderr)
         return 0
     if args[:4] == ["api", "post", "/api/2.0/sql/statements/", "--json"]:
         print(json.dumps(_statement(json.loads(args[4]))))
