@@ -2251,7 +2251,8 @@ verifier, the agent runtime or the Supervisor proxy:
   refuses `frontend_ack_unpredictable`); or `not measured` (the profile
   refuses, the identity is not the profile's, or a read fails, by its class
   only). Every verdict but `holds` exits the tool 2 and says not to start the
-  cutover's ownership handover.
+  cutover's ownership handover. With no App, or an App that has no deployment
+  yet, there is nothing to measure, and it says so (exit 0).
 - **A refused pre-activation proof** (`unverified_frontend_unacked`,
   `no_rollback_proof`, a rebuild that fails) exits 2 at step 10b while signed
   blue still serves. Over signed blue the run reaches step 10b in the quiesce

@@ -77,7 +77,9 @@ VERDICTS = {
 
 
 @pytest.mark.usefixtures("world_keys")
-def test_the_runbooks_step_6_lists_every_verdict_env_names_prints_and_only_holds_goes_on(tmp_path: Path) -> None:
+def test_the_runbooks_step_6_lists_every_verdict_env_names_prints_and_only_holds_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     governed = sorted({*NAMES, LEASE})
     cases: dict[str, tuple[list[str], Any]] = {
         "same": (NAMES, builder()),
@@ -103,6 +105,13 @@ def test_the_runbooks_step_6_lists_every_verdict_env_names_prints_and_only_holds
     deployment = _flat("docs/deployment.md")
     for word in ("`holds`; `DIFFERS` (names only); `LEASE-BOUND`", "or `not measured`", "Every verdict but `holds` exits the tool 2"):
         assert word in deployment, word
+    # The two readings that measure nothing are no verdict: nothing to rebuild, exit 0.
+    assert "With no App, or an App that has no deployment yet, there is nothing to measure, and it says so (exit 0)." in deployment
+    undeployed = _world(tmp_path / "undeployed")
+    undeployed.secrets.values.clear()
+    monkeypatch.setattr(undeployed.apps, "list_deployments", lambda *_a, **_kw: [])
+    measured, message = ap.env_name_parity(undeployed, app_name=rr.APP_NAME, payload_inputs=INPUTS, build=builder())
+    assert measured == "no_deployment" and "parity" not in message and measured not in ap._CUTOVER_STOP
 
 
 def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_names_the_two_follow_ups() -> None:
