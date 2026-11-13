@@ -113,6 +113,8 @@ plan_quiesce_window() {
   if [[ -s "$probe_dir/applicable.env" ]]; then
     # shellcheck disable=SC1091
     . "$probe_dir/applicable.env"
+    # The App's service principal: a runner mask before a role check echoes it.
+    mask_runtime_ids "${MIP_QUIESCE_WINDOW_APP_CLIENT_ID:-}" || exit 2
   fi
   # The rebase is the one step 0a takes, never the raw flag: requested AND no
   # signed first-install journal (the tool reads it as step 0a and the pre-stop

@@ -18,6 +18,8 @@ helper and the App's own ids.
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -190,3 +192,57 @@ def test_every_sourced_binding_and_window_env_is_followed_by_the_mask() -> None:
     # The two that hand no deployment id on: a failed open's dead-man run id, and
     # the dead-man recovery, whose re-pin takes the deployment from the journal itself.
     assert unmasked == ["read_quiesce_window_deadman_run_id() {", "recover_deadman_quiesce_window() {"]
+
+
+# Every env file the release shell sources, by the spelling of its source line.
+# MASKED: a runner mask follows within three lines, for the ids the file hands on.
+MASKED_SOURCES = {
+    '. "$APP_ROLLBACK_BINDING_ENV"': 4,
+    '. "$refreshed_env"': 1,
+    '. "$env_file"': 3,
+    # The window plan's probe file: the App's service principal, before the lease.
+    '. "$probe_dir/applicable.env"': 1,
+}
+# UNMASKED: no mask follows, and why. A file that is in neither table fails the test below.
+UNMASKED_SOURCES = {
+    # A failed open's dead-man run id and the dead-man recovery: they hand no deployment id on.
+    '. "$env_file"': 2,
+    # The signed first-install journal: its mask follows the unsets and the removal of the file
+    # (tests/unit/test_runtime_id_runner_masks.py drives it).
+    '. "$status_env"': 1,
+    # The lease's recovery root and the lease id: the release's own, not platform identifiers.
+    '. "$APP_LEASE_RECOVERY_ENV"': 1,
+    '. "$APP_DEPLOYMENT_LEASE_ENV"': 1,
+    # WR5's plan: owner-run (scripts/lakebase_handover_window.sh), never in a release, and the
+    # commands it hands the App's ids to are not echoed.
+    '. "$work/plan.env"': 1,
+    # The agentic tier's env files (endpoint, Supervisor, credential and verifier ids): not audited
+    # by the runner-mask change, and said so in docs/deployment.md.
+    '. "$AGENTIC_ENV_FILE"': 5,
+    '. "$AGENTIC_ENV_CACHE"': 1,
+    '. "$AGENT_EVAL_ENV_FILE"': 1,
+    '. "$journal_env"': 1,
+    '. "$CUTOVER_JOURNAL_ENV_FILE"': 2,
+    '. "$HISTORICAL_CUTOVER_JOURNAL_ENV"': 1,
+    '. "$VERIFIER_IDENTITY_CAPTURE_ENV"': 1,
+}
+
+
+def test_every_env_file_the_release_sources_is_masked_or_classified() -> None:
+    """A new sourced env file must mask the ids it hands over, or be classified above with its reason."""
+
+    lines = deploy_contract_text().splitlines()
+    masked: Counter[str] = Counter()
+    unmasked: Counter[str] = Counter()
+    for index, line in enumerate(lines):
+        spelling = line.strip()
+        # A sourced file whose path is a variable; the entrypoint's own libraries are code, not env files.
+        if not re.fullmatch(r'\. "\$(?!REPO_ROOT/)[^"]+"', spelling):
+            continue
+        following = [text.strip() for text in lines[index + 1 : index + 4]]
+        mask = any(text.startswith(("mask_deployment_ids", "mask_runtime_ids ")) for text in following)
+        (masked if mask else unmasked)[spelling] += 1
+    assert dict(masked) == MASKED_SOURCES
+    assert dict(unmasked) == UNMASKED_SOURCES
+    journal = shell_function("refresh_first_install_journal_status")
+    assert journal.index('. "$status_env"') < journal.index("mask_runtime_ids "), "the journal's mask follows its source"

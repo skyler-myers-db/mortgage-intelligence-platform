@@ -14,7 +14,10 @@ them, and every ``--app-application-id``, ``--principal``, ``--app-scim-id``,
   its App), whose three parses discard stderr, where a mask is written;
 * the App inventory before step 4 (a routine release's first sight);
 * the signed first-install journal (an interrupted install's App);
-* the EXIT trap's fallback read of the App's service principal;
+* the EXIT trap's two fallback reads of the App's service principal;
+* the window plan's probe file (``plan_quiesce_window``), which hands the
+  shell the App's service principal before the lease, in a plan and in a
+  release, ahead of every place above;
 * every sourced rollback binding and quiesce window env file, for the
   deployment ids it carries (``mask_deployment_ids``).
 
@@ -41,6 +44,7 @@ from tests.fixtures.runner_mask_harness import (
     carrying,
     env_writer,
     merged_log,
+    shell_function,
     shell_slice,
 )
 from tools.clients.redact import emit_mask
@@ -314,6 +318,98 @@ def test_a_fallback_principal_that_cannot_be_masked_is_not_used(tmp_path: Path) 
     assert code == 0, lines
     assert lines[-3:] == ["no App identity", "failed closed: 1", "reached-after-block"], lines
     assert not carrying(lines, CLIENT)
+
+
+# --------------------------------------------------------------------------
+# The window plan's probe file: before the lease, in a plan and in a release
+# --------------------------------------------------------------------------
+
+# The real function and the real bounded-authority wrappers, each of which echoes
+# the whole command line it is handed. The credentials are placeholders.
+WINDOW_PLAN = (
+    shell_function("run_with_account_identity")
+    + shell_function("run_with_proof_signing_authority")
+    + shell_function("run_with_lakebase_bootstrap_authority")
+    + shell_function("plan_quiesce_window")
+    + "tier_is_agentic() { return 1; }\ncollect_quiesce_window_binding_payload() { return 1; }\n"
+    "nonblank_control_value() { echo seed@example.invalid; }\n"
+    "_GRANTS_APP_NAME=mip-app\nAPP_ROLLBACK_SECRET_SCOPE=mip-app-rollback\nMIP_LAKEBASE_INSTANCE=mip-app-state\n"
+    "LAKEBASE_DATABASE=mip_app_state\nTARGET=client\nQUIESCE_WINDOW_STATE=\nCLIENT_JOBS_PRINCIPAL=jobs-EXAMPLE\n"
+    "DATABRICKS_ACCOUNT_CLIENT_ID=account-EXAMPLE\nDATABRICKS_ACCOUNT_CLIENT_SECRET=placeholder\n"
+    "DATABRICKS_RELEASE_PROBE_CLIENT_ID=probe-EXAMPLE\nDATABRICKS_RELEASE_PROBE_CLIENT_SECRET=placeholder\n"
+    "MIP_AI_GATEWAY_PROOF_SIGNING_KEY=placeholder\nMIP_LENDER_NAME=Summit\nMIP_LENDER_NMLS_ID=1\nMIP_TENANT_ID=t\n"
+)
+ROLE_CHECK = f"--application-id {CLIENT} --role-contract app"
+
+
+def _window_tools(repo: Path, probe: str) -> None:
+    """Stand-ins for the tools the plan runs; ``applicable`` writes ``probe`` as its env file."""
+
+    package = repo / "tools" / "databricks"
+    package.mkdir(parents=True, exist_ok=True)
+    for init in (repo / "tools" / "__init__.py", package / "__init__.py"):
+        init.write_text("", encoding="utf-8")
+    (package / "quiesce_window.py").write_text(
+        "import json, sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[0] == 'applicable':\n"
+        f"    open(args[args.index('--out-env') + 1], 'w', encoding='utf-8').write({probe!r})\n"
+        "    print('[mip-quiesce-window] applicable: read')\n"
+        "elif args[0] == 'plan':\n"
+        "    json.dump({'code': 'none', 'reasons': []}, open(args[args.index('--out') + 1], 'w', encoding='utf-8'))\n",
+        encoding="utf-8",
+    )
+    (package / "converge_lakebase_oauth_role.py").write_text("", encoding="utf-8")
+    (repo / "jobs").mkdir(exist_ok=True)
+    (repo / "jobs" / "lakebase_migrate.py").write_text("print('{}')\n", encoding="utf-8")
+
+
+def _installed(client: str = CLIENT) -> str:
+    return f"MIP_QUIESCE_WINDOW_APP_PRESENT=1\nMIP_QUIESCE_WINDOW_APP_CLIENT_ID={client}\nMIP_QUIESCE_WINDOW_REBASE=0\n"
+
+
+def _plan_the_window(phase: str) -> str:
+    return WINDOW_PLAN + f'DEPLOY_PHASE={phase}\nplan_quiesce_window pre-lease "$PWD/gate-report.json"\n'
+
+
+@pytest.mark.parametrize("phase", ["plan", "release"])
+def test_the_window_plan_masks_the_installed_apps_principal_before_its_role_check_echoes_it(
+    tmp_path: Path, phase: str
+) -> None:
+    # Before the lease: a plan ends right after this gate and never reaches the inventory's mask, and a
+    # release reaches it only after the lease. The probe file is the shell's first sight of the id in both.
+    _window_tools(tmp_path, _installed())
+    code, lines = merged_log(tmp_path, _plan_the_window(phase))
+
+    assert code == 0, lines
+    printed = carrying(lines, CLIENT)
+    assert printed[0] == f"::add-mask::{CLIENT}", lines
+    # Each of the two wrappers echoes the role check, and nothing else carries the id.
+    assert len(printed) == 3 and all(line.startswith("$ ") and ROLE_CHECK in line for line in printed[1:]), printed
+    assert lines.index(printed[0]) == lines.index("[mip-quiesce-window] applicable: read") + 1, "right after the probe"
+
+
+@pytest.mark.parametrize("phase", ["plan", "release"])
+def test_a_window_plan_whose_probe_cannot_be_masked_refuses_before_any_role_check(tmp_path: Path, phase: str) -> None:
+    _window_tools(tmp_path, _installed())
+    code, lines = merged_log(tmp_path, _plan_the_window(phase), redact=False)
+
+    assert code == 2, lines
+    assert not carrying(lines, CLIENT), "neither the failure nor a role check printed the id"
+    assert not [line for line in lines if "converge_lakebase_oauth_role" in line], "no role check ran"
+    assert "reached-after-block" not in lines
+
+
+@pytest.mark.parametrize("probe", ["", "MIP_QUIESCE_WINDOW_APP_PRESENT=0\nMIP_QUIESCE_WINDOW_APP_CLIENT_ID=\n"])
+def test_a_window_plan_with_no_app_registers_nothing(tmp_path: Path, probe: str) -> None:
+    # No probe file, or one that names no App (a first install): nothing to mask, and no interpreter is needed.
+    _window_tools(tmp_path, probe)
+    code, lines = merged_log(tmp_path, _plan_the_window("release"), redact=False)
+
+    assert code == 0, lines
+    assert not [line for line in lines if line.startswith("::")], lines
+    assert not [line for line in lines if "--role-contract app" in line], "no App role to check"
+    assert lines[-1] == "reached-after-block"
 
 
 def test_the_helper_never_prints_through_run() -> None:
