@@ -16,8 +16,9 @@ and nothing granted. The release's distinctness refusal (the App identity is nev
 the bounded account credential's client) stays in the shell, beside the
 release's own (``same_identity_casefold``).
 
-Prints the pinned client id on stdout and nothing else. Every call is a GET or
-a list.
+Prints the pinned client id on stdout and nothing else, registered as a runner
+mask first (tools/clients/redact.emit_mask): the data phase echoes it in every
+grant command it runs, in a public job log. Every call is a GET or a list.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+from tools.clients.redact import emit_mask
 from tools.databricks.app_rollback_record_contract import _load_record
 
 EXIT_REFUSED = 2
@@ -76,7 +78,7 @@ def main(argv: Sequence[str] | None = None, *, workspace: Any = None) -> int:
     except Exception as exc:  # the class only: an SDK message can carry a host or an id
         print(f"[data-phase] refused: {type(exc).__name__}; nothing was granted", file=sys.stderr)
         return EXIT_REFUSED
-    print(client_id)
+    print(emit_mask(client_id))
     return 0
 
 

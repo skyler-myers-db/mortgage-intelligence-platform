@@ -45,6 +45,7 @@ refresh_signed_blue_binding() {
   . "$refreshed_env"
   set +a
   rm -f "$refreshed_env"
+  mask_deployment_ids
 }
 
 converge_signed_blue_agent_proxy_boundary() {

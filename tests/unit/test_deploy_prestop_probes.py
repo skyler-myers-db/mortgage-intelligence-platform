@@ -915,6 +915,43 @@ def test_main_exits_2_and_reports_without_mutating(
     assert "nothing was changed and the App was not stopped by this run" in err
 
 
+@pytest.mark.parametrize("actions", [True, False])
+def test_the_apps_service_principal_is_a_runner_mask_before_a_refusal_names_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], actions: bool
+) -> None:
+    # The Genie-group refusal ends "reaches App SP <application id>", on a job log that is
+    # public, before the lease: the probe's read of the App is a plan's and a release's first
+    # sight of that id, so it registers the mask there (tools/clients/redact.emit_mask).
+    import databricks.sdk
+
+    from tools.databricks import m2m_access_policy, provision_agentic_resources
+
+    client, scim = "d4d4d4d4-0000-4000-8000-000000000004", "100000000000004"
+    workspace = _ReadOnlyWorkspace(
+        acls={"space-two": _acl(_group("users", ("CAN_RUN", False)))}, app=_app()
+    )
+    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(provision_agentic_resources, "_supervisor_agents", _agents_human)
+    monkeypatch.setattr(m2m_access_policy, "resolve_effective_groups", _walk({}))
+    monkeypatch.delenv(ack.ACKNOWLEDGEMENT_ENV, raising=False)
+    if actions:
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    else:
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    assert probes.main(_main_args()) == 2
+
+    err = capsys.readouterr().err.splitlines()
+    named = [line for line in err if client in line]
+    refusals = [line for line in named if line.startswith("[mip-prestop] REFUSED: ")]
+    assert refusals and all(f"reaches App SP {client}" in line for line in refusals)
+    if not actions:
+        assert not [line for line in err if line.startswith("::add-mask::")], "silent outside GitHub Actions"
+        return
+    assert named[0] == f"::add-mask::{client}", "the mask is the first line that carries the id"
+    assert f"::add-mask::{scim}" in err[: err.index(refusals[0])]
+
+
 def test_main_passes_once_the_operator_acknowledges_and_grants_are_clean(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

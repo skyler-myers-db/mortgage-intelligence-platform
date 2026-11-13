@@ -45,6 +45,39 @@ def test_the_pinned_identity_is_printed_alone(monkeypatch: pytest.MonkeyPatch, c
     assert capsys.readouterr().out == f"{CLIENT}\n"
 
 
+def test_the_pinned_identity_is_a_runner_mask_before_the_data_phase_echoes_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The data phase captures stdout and hands the id to every grant command it echoes.
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _record(monkeypatch, PINNED)
+    assert identity.main(ARGV, workspace=_workspace()) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"{CLIENT}\n", "the capture keeps the id alone, never the mask command"
+    assert captured.err == f"::add-mask::{CLIENT}\n"
+
+
+def test_outside_actions_the_pinned_identity_registers_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    _record(monkeypatch, PINNED)
+    assert identity.main(ARGV, workspace=_workspace()) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"{CLIENT}\n" and captured.err == ""
+
+
+def test_a_refused_identity_is_neither_printed_nor_masked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    other = "00000000-0000-4000-8000-0000000000cc"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _record(monkeypatch, PINNED)
+    assert identity.main(ARGV, workspace=_workspace(client=other)) == identity.EXIT_REFUSED
+    captured = capsys.readouterr()
+    assert captured.out == "" and other not in captured.err and "::add-mask::" not in captured.err
+
+
 @pytest.mark.parametrize(
     "live",
     ({"client": "00000000-0000-4000-8000-0000000000cc"}, {"scim": "9999"}, {"client": ""}, {"scim": ""}),

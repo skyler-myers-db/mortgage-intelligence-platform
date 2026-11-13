@@ -77,7 +77,7 @@ deploy_app_snapshot() {
     --expected-principal "$APP_RELEASE_PRINCIPAL" \
     --expected-target "$TARGET" \
     --expected-root-leaf "$APP_RELEASE_ROOT_LEAF"
-  run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
+  run keep_cli_result_private databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
   assert_expected_app_identity "$APP_NAME"
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
     rm -f "$APP_LAST_DEPLOY_PAYLOAD"
@@ -127,6 +127,7 @@ capture_last_good_app() {
   # shellcheck disable=SC1090
   . "$APP_ROLLBACK_BINDING_ENV"
   set +a
+  mask_deployment_ids
 }
 
 # The bundle files root (workspace.file_path) is where the per-release folder

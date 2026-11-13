@@ -151,6 +151,7 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       # shellcheck disable=SC1090
       . "$APP_ROLLBACK_BINDING_ENV"
       set +a
+      mask_deployment_ids
       APP_SIGNED_BLUE_AVAILABLE=1
       TREATMENT_RUNTIME_QUIESCED=1
       APP_UPGRADE_STATE="blue_quiesced"
