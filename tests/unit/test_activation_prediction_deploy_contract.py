@@ -10,7 +10,10 @@ changed, that its payload flags are the rebuild's byte for byte, that it never
 runs under the proof-signing wrapper, which acks reach it and which never do,
 that a plan which stops at the client live checks measures blue's env-name
 parity first, and the lexical guard that keeps the digest it prints equal to
-the late gate's: no step after it assigns a payload-builder input.
+the late gate's: no step after it assigns a payload-builder input. That guard
+pins sites, not only names (tests/fixtures/shell_assignments.py): every
+"<file>:<function>" that assigns one, every function that writes through a
+name it is handed, and which of them a step after the prediction can reach.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures import shell_assignments
 from tests.fixtures.deploy_block_harness import block, drive, function
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools.databricks import activation_prediction, app_deploy_payload
@@ -244,14 +248,57 @@ def _builder_inputs() -> set[str]:
     return names | {app_deploy_payload.PREVIOUS_SECRET_KID_ENV}
 
 
+# Where scripts/ may assign a builder input: "<file>:<function>" (``<top>`` is a file's own
+# sequence) to the names assigned there. A new site is red until it is reviewed here, even for a
+# name SHELL_ASSIGNED already holds: a reviewed name re-exported from a new function, or at the
+# end of a later step file, would move the late gate's payload away from the predicted one.
+_PREFLIGHT = "deploy_step_preflight_gates.sh:<top>"  # before the prediction
+_AUTOMATION = "deploy_step_automation_identities.sh:<top>"  # its text after the prediction is scanned below
+_SYNC = {"MIP_LAKEBASE_SYNC_CATALOG", "MIP_LAKEBASE_SYNC_SCHEMA", "MIP_LAKEBASE_SYNC_TABLES"}
+_AGENTIC_KEYS = {
+    "MIP_AGENT_SUPERVISOR_NAME",
+    "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
+    "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
+    "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
+}
+ASSIGNMENT_SITES: dict[str, set[str]] = {
+    _PREFLIGHT: set(SHELL_ASSIGNED)
+    - {"MIP_GIT_SHA", "MIP_APP_DEPLOYMENT_LEASE_ID", "MIP_SALESFORCE_BINDINGS", "MIP_REVIEWED_FUNCTION_OWNER"},
+    _AUTOMATION: {"MIP_ADMIN_IDENTITIES", "MIP_APP_DEPLOYMENT_LEASE_ID"},
+    # Called by the preflight only (pinned below): it decides no payload name.
+    "deploy_identity_lifecycle.sh:resolve_salesforce_bindings_switch": {"MIP_SALESFORCE_BINDINGS"},
+    # The data phase's dry-run lease: --phase data never reaches the prediction or an activation.
+    "deploy_governed_phases_lifecycle.sh:plan_data_phase": {"MIP_APP_DEPLOYMENT_LEASE_ID"},
+    "deploy_step_agentic_provisioning.sh:<top>": {"MIP_REVIEWED_FUNCTION_OWNER"},
+    # The three a step after the prediction reaches (AFTER_THE_PREDICTION, below).
+    "deploy_app_access_lifecycle.sh:restore_deployment_sync_contract": _SYNC,
+    "deploy_step_app_promotion_and_refresh.sh:emit_app_deploy_payload": {"MIP_GIT_SHA"},
+    "deploy_identity_lifecycle.sh:run_as_m2m_identity": _AGENTIC_KEYS,
+}
+# The function sites a step after the prediction reaches, each with what keeps the predicted
+# payload: the Sync restore puts the preflight's own values back; the green payload's commit is a
+# one-command prefix; the M2M runner exports agentic names inside its own subshell.
+AFTER_THE_PREDICTION = {
+    "restore_deployment_sync_contract": _SYNC,
+    "emit_app_deploy_payload": {"MIP_GIT_SHA"},
+    "run_as_m2m_identity": _AGENTIC_KEYS,
+}
+# Every site that writes a variable through a name it holds in another (printf -v "$name",
+# export "${name?}", read "$name", eval). A builder input handed to one of these functions is
+# assigned with no assignment in sight, so a line that names one counts as a writer line.
+BY_NAME_SITES = {
+    "deploy.sh:<top>",  # un-exports the private credentials, a closed list of no builder input
+    "deploy_adopt_phase_lifecycle.sh:run_adopt_live_plan",  # only prints the export line an operator types
+    "deploy_identity_lifecycle.sh:mint_m2m_token",
+    "deploy_identity_lifecycle.sh:resolve_client_profile",  # BUNDLE_VAR_* names only; the preflight's
+    "deploy_identity_lifecycle.sh:resolve_m2m_credential",
+    "deploy_identity_lifecycle.sh:run_as_m2m_identity",  # inside its subshell
+}
+_BY_NAME = {site.split(":", 1)[1] for site in BY_NAME_SITES} - {shell_assignments.TOP}
+
+
 def _assignments(text: str, names: set[str]) -> set[str]:
-    alternation = "|".join(sorted(names, key=len, reverse=True))
-    found = set(re.findall(rf"(?<![A-Za-z0-9_$])({alternation})(?:\+)?=", text))
-    for line in text.splitlines():
-        code = line.split(" #", 1)[0]
-        if re.match(r"\s*(export|read)\b", code):
-            found |= {word for word in re.findall(r"[A-Z][A-Z0-9_]+", code) if word in names}
-    return found
+    return shell_assignments.assignments(text, names, _BY_NAME)
 
 
 def _shell_texts() -> dict[str, str]:
@@ -264,6 +311,15 @@ def test_every_builder_input_the_shell_assigns_is_reviewed() -> None:
     names = _builder_inputs()
     assigned = set().union(*(_assignments(text, names) for text in _shell_texts().values()))
     assert assigned == set(SHELL_ASSIGNED), sorted(assigned ^ set(SHELL_ASSIGNED))
+    # ...and each at a reviewed site: the same names from any other function or file are red.
+    sites = shell_assignments.sites(_shell_texts(), names, _BY_NAME)
+    assert sites == ASSIGNMENT_SITES, {
+        site: sorted(sites.get(site, set()) ^ ASSIGNMENT_SITES.get(site, set()))
+        for site in {*sites, *ASSIGNMENT_SITES}
+        if sites.get(site) != ASSIGNMENT_SITES.get(site)
+    }
+    assert set().union(*ASSIGNMENT_SITES.values()) == set(SHELL_ASSIGNED)
+    assert shell_assignments.by_name_sites(_shell_texts()) == BY_NAME_SITES
     derived = {name for name, kind in SHELL_ASSIGNED.items() if kind == "derived"}
     assert derived == set(activation_prediction.GOVERNED_DERIVED_NAMES)
     assert {n for n, k in SHELL_ASSIGNED.items() if k == "agentic"} <= app_deploy_payload.CORE_TIER_DROPPED_NAMES | {
@@ -309,6 +365,116 @@ def test_no_step_after_the_prediction_assigns_a_builder_input_but_the_controlled
     for text in after:
         called = set(re.findall(r"^\s*([a-z_]+)\b", text, re.M))
         assert not (called & assigners - {"restore_deployment_sync_contract"}), called & assigners
+    # Through any chain of calls: the functions those steps reach (a mention counts as a call)
+    # assign a builder input only at the three reviewed sites, and never reach the preflight's
+    # own resolvers.
+    assert _reached_sites(_shell_texts(), names) == AFTER_THE_PREDICTION
+    reached = _reached(_shell_texts())
+    assert {"predict_activation_rollback", "prove_blue_restorable_before_activation"} <= reached, "the walk is live"
+    assert not reached & {"resolve_salesforce_bindings_switch", "resolve_client_profile", "plan_data_phase"}
+
+
+def _reached(texts: dict[str, str]) -> set[str]:
+    """Every shell function a step after the prediction can reach, transitively."""
+
+    automation = texts["deploy_step_automation_identities.sh"]
+    order = texts["deploy.sh"]
+    later = [
+        text for name, text in texts.items()
+        if name.startswith("deploy_step_") and name != "deploy_step_preflight_gates.sh"
+        and order.index(name) > order.index("deploy_step_automation_identities.sh")
+    ]  # fmt: skip
+    roots = [automation[automation.rindex("  predict_activation_rollback\n") :], *later]
+    return shell_assignments.reachable(roots, shell_assignments.functions(texts))
+
+
+def _reached_sites(texts: dict[str, str], names: set[str]) -> dict[str, set[str]]:
+    reached = _reached(texts)
+    found: dict[str, set[str]] = {}
+    for site, assigned in shell_assignments.sites(texts, names, _BY_NAME).items():
+        function_name = site.split(":", 1)[1]
+        if function_name in reached:
+            found.setdefault(function_name, set()).update(assigned)
+    return found
+
+
+# The forms the first matcher missed (the B3 review), each as a later step file could write it.
+MISSED_FORMS = (
+    "IFS=$'\\t' read -r MIP_ADMIN_IDENTITIES _rest <<< \"$line\"",
+    "while IFS= read -r MIP_ADMIN_IDENTITIES; do :; done < /dev/null",
+    ': "${MIP_ADMIN_IDENTITIES:=reviewer-probe}"',
+    'printf -v MIP_ADMIN_IDENTITIES "%s" reviewer-probe',
+    "for MIP_ADMIN_IDENTITIES in one two; do :; done",
+    "mapfile -t MIP_ADMIN_IDENTITIES < /dev/null",
+    "readarray -t MIP_ADMIN_IDENTITIES < /dev/null",
+    "true && export MIP_ADMIN_IDENTITIES",
+    "true && export -n MIP_ADMIN_IDENTITIES",
+    "if true; then unset MIP_ADMIN_IDENTITIES; fi",
+    "declare -x MIP_ADMIN_IDENTITIES",
+    "read -r _first \\\n  MIP_ADMIN_IDENTITIES <<< \"a b\"",
+    'for name in MIP_ADMIN_IDENTITIES; do export -n "${name?}"; done',
+    "mint_m2m_token MIP_ADMIN_IDENTITIES DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET",
+    "resolve_m2m_credential MIP_ADMIN_IDENTITIES",
+)
+READS_ONLY = (
+    'echo "$MIP_ADMIN_IDENTITIES"',
+    '--admin-identities "${MIP_ADMIN_IDENTITIES:-}" \\',
+    '[[ -n "${MIP_ADMIN_IDENTITIES}" ]] || exit 2',
+    'local copy="${MIP_ADMIN_IDENTITIES:-}"',
+    'echo "${MIP_ADMIN_IDENTITIES}" && export OTHER_NAME="x"',
+    'IFS= read -r OTHER_NAME <<< "$MIP_ADMIN_IDENTITIES"',
+    'echo "set MIP_ADMIN_IDENTITIES in the profile"',
+)
+
+
+@pytest.mark.parametrize("line", MISSED_FORMS)
+def test_every_way_a_later_step_could_assign_a_builder_input_is_seen(line: str) -> None:
+    names = _builder_inputs()
+    assert _assignments(line, names) == {"MIP_ADMIN_IDENTITIES"}, line
+    # As the review wrote it: appended to a step file after the prediction, the after-scan is red.
+    texts = _shell_texts()
+    apply_step = texts["deploy_step_bundle_apply.sh"] + "\n" + line + "\n"
+    assert "MIP_ADMIN_IDENTITIES" in _assignments(apply_step, names)
+    assert "MIP_ADMIN_IDENTITIES" not in _assignments(texts["deploy_step_bundle_apply.sh"], names)
+    sites = shell_assignments.sites({**texts, "deploy_step_bundle_apply.sh": apply_step}, names, _BY_NAME)
+    assert sites != ASSIGNMENT_SITES and "MIP_ADMIN_IDENTITIES" in sites["deploy_step_bundle_apply.sh:<top>"]
+
+
+@pytest.mark.parametrize("line", READS_ONLY)
+def test_a_read_of_a_builder_input_is_no_assignment(line: str) -> None:
+    assert _assignments(line, _builder_inputs()) == set(), line
+
+
+def test_a_reviewed_name_assigned_from_a_new_function_a_later_step_calls_is_red() -> None:
+    """The review's second mutation: a lifecycle function re-exports a reviewed name; a later step calls it."""
+
+    names = _builder_inputs()
+    texts = _shell_texts()
+    assert shell_assignments.sites(texts, names, _BY_NAME) == ASSIGNMENT_SITES
+    for definition in (
+        'reviewer_probe_reassign() { export MIP_ADMIN_IDENTITIES="reviewer-probe"; }',
+        'reviewer_probe_reassign() {\n  MIP_ADMIN_IDENTITIES="reviewer-probe"\n  export MIP_ADMIN_IDENTITIES\n}',
+    ):
+        library = texts["deploy_app_access_lifecycle.sh"] + "\n" + definition + "\n"
+        mutated = {**texts, "deploy_app_access_lifecycle.sh": library}
+        # Not yet called: the site map alone is red.
+        new_site = {"deploy_app_access_lifecycle.sh:reviewer_probe_reassign": {"MIP_ADMIN_IDENTITIES"}}
+        assert shell_assignments.sites(mutated, names, _BY_NAME) == {**ASSIGNMENT_SITES, **new_site}
+        assert _reached_sites(mutated, names) == AFTER_THE_PREDICTION
+        # Called from a later step, directly or through another function: the reach is red too.
+        direct = {**mutated, "deploy_step_bundle_apply.sh": texts["deploy_step_bundle_apply.sh"] + "\nreviewer_probe_reassign\n"}
+        through = {
+            **mutated,
+            "deploy_app_access_lifecycle.sh": library + "reviewer_probe_outer() {\n  reviewer_probe_reassign\n}\n",
+            "deploy_step_core_activation.sh": texts["deploy_step_core_activation.sh"] + "\nreviewer_probe_outer\n",
+        }
+        for called in (direct, through):
+            assert _reached_sites(called, names) == {**AFTER_THE_PREDICTION, "reviewer_probe_reassign": {"MIP_ADMIN_IDENTITIES"}}
+    # A new function that writes through a name it is handed is red before anything hands it one.
+    helper = texts["deploy_app_access_lifecycle.sh"] + '\nreviewer_probe_set() {\n  printf -v "$1" "%s" "$2"\n}\n'
+    assert shell_assignments.by_name_sites({**texts, "deploy_app_access_lifecycle.sh": helper}) == BY_NAME_SITES | {
+        "deploy_app_access_lifecycle.sh:reviewer_probe_set"
+    }
 
 
 def test_no_env_file_a_core_release_sources_carries_a_builder_input_but_the_lease() -> None:
