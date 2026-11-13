@@ -5520,6 +5520,21 @@ and mode 0600, and outputs public values only. Identifying fields come from
 secrets only: the resolver refuses an identifying or secret field found in a
 variable, and a public one found in a secret.
 
+**Ids the release resolves at run time** are in no profile, so that first
+step cannot register them: the App's resource id, its service principal's
+application and SCIM ids (the platform mints the App's service principal) and
+each deployment id. `scripts/deploy.sh` echoes every command it runs, so it
+registers each of these as a runner mask at the place it first holds one,
+before any command is handed it (`mask_runtime_ids`, through
+`tools/clients/redact.py`): the step-4 resolve after the bundle apply (a first
+install's first sight of its App), the App inventory a routine release reads
+before it, the signed first-install journal, the EXIT trap's fallback read,
+and every rollback binding or quiesce window env file it sources
+(`mask_deployment_ids`). The data phase reads the App's service principal
+through `tools/databricks/data_phase_app_identity.py`, which registers it
+before printing it. A mask that cannot be registered stops the step, and the
+value is handed to no command.
+
 **The dispatch preflight** (`tools/clients/dispatch_preflight.py`) prints codes,
 counts, digests, field names and tracked paths only, and appends them to the
 step summary. The owner hardware-key attestation layer (plan M1-PR5) is

@@ -82,6 +82,10 @@ run_with_lakebase_bootstrap_authority() { "$@"; }
 # The profile's agentic tier (resolve_client_profile, M2-PR3): client #1's by default.
 tier_is_agentic() { [[ "${CLIENT_AGENTIC_TIER:-on}" == "on" ]]; }
 mint_m2m_token() { :; }
+# The entrypoint's runner-mask helpers: nothing here, under GitHub Actions too, so the call
+# log is the same in CI (tests/unit/test_deployment_id_runner_masks.py drives the real ones).
+mask_runtime_ids() { :; }
+mask_deployment_ids() { :; }
 converge_app_treatment_access() { echo "treatment $1" >> "$CALLS"; }
 converge_runtime_app_release_access() { echo "release-runtime" >> "$CALLS"; }
 reconcile_reviewed_function_execute_grants() { echo "function-reconcile" >> "$CALLS"; }

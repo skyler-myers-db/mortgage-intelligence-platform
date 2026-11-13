@@ -177,6 +177,9 @@ import json, sys
 print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
 ' 2>/dev/null || true)"
     fi
+    # Resolved only here on this path: a runner mask before the quiesce below
+    # is handed it. An id that cannot be masked is not used (fail closed).
+    mask_runtime_ids "$principal" || principal=""
     APP_SP_CLIENT_ID="$principal"
   fi
   if converge_app_treatment_access quiesce; then

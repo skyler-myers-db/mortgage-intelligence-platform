@@ -304,6 +304,7 @@ open_quiesce_window() {
   # shellcheck disable=SC1090
   . "$env_file"
   rm -f "$env_file"
+  mask_deployment_ids || return 1
   QUIESCE_WINDOW_DEADMAN_RUN_ID="$MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID"
   QUIESCE_WINDOW_BLUE_RESTORABLE="$MIP_QUIESCE_WINDOW_BLUE_RESTORABLE"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID"
@@ -432,6 +433,7 @@ repin_proven_quiesce_window() {
   # shellcheck disable=SC1090
   . "$env_file"
   rm -f "$env_file"
+  mask_deployment_ids || return 1
   repin_and_close_quiesce_window "$MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID"
 }
 
@@ -469,6 +471,7 @@ repin_and_close_quiesce_window() {
   # shellcheck disable=SC1090
   . "$APP_ROLLBACK_BINDING_ENV"
   set +a
+  mask_deployment_ids || return 1
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.quiesce_window close \
     --app-name "$_GRANTS_APP_NAME" \
@@ -578,6 +581,7 @@ compensate_open_quiesce_window() {
   fi
   # shellcheck disable=SC1090
   . "$env_file"
+  mask_deployment_ids || { rm -f "$env_file"; return 1; }
   state="$MIP_QUIESCE_WINDOW_JOURNAL_STATE"
   QUIESCE_WINDOW_BLUE_RESTORABLE="$MIP_QUIESCE_WINDOW_BLUE_RESTORABLE"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID"

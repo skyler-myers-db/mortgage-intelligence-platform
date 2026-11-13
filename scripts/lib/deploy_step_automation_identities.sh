@@ -506,6 +506,9 @@ else:
     IFS=$'\t' read -r \
       _EXISTING_APP_ID _EXISTING_APP_SP_CLIENT_ID _EXISTING_APP_SP_SCIM_ID \
       <<< "$_EXISTING_APP_IDENTITY"
+    # An existing App's ids are first resolved here on a routine release:
+    # runner masks before any command is handed one (mask_runtime_ids).
+    mask_runtime_ids "$_EXISTING_APP_ID" "$_EXISTING_APP_SP_CLIENT_ID" "$_EXISTING_APP_SP_SCIM_ID"
     if [[ -z "$_EXISTING_APP_ID" || -z "$_EXISTING_APP_SP_CLIENT_ID" || \
           -z "$_EXISTING_APP_SP_SCIM_ID" ]]; then
       echo "${RED}[deploy] existing App inventory returned an incomplete immutable identity.${RST}" >&2
