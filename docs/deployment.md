@@ -572,10 +572,13 @@ them. The payload builder refuses an unset switch when every connector
 input is set (`app_deploy_payload: refused:`, exit 2, no payload), so the
 recipe always names it.
 
-**The freeze marker (M2-PR7).** During the cutover the owner freezes this
-recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
-<app-name> --until <epoch>` (with the deploy's proof-signing key exported),
-and lifts it with `thaw --marker-id <id>`; both write a signed, create-only
+**The freeze marker (M2-PR7).** A signed marker freezes this recipe. From a
+shell that holds the deploy's proof-signing key, `python -m
+tools.databricks.app_deployment_lease freeze --app-name <app-name> --until
+<epoch>` writes it and `thaw --marker-id <id>` lifts it; for a client install,
+whose key lives only in its GitHub Environment, `deploy-dev.yml`'s `freeze`
+and `thaw` phases write the same two files in CI ("The freeze during the
+first-client cutover", below). Both write a signed, create-only
 marker in the lease root and nothing is deleted. A freeze is signed before
 the root is touched, so a refused one (no signing key, a bad `--until`)
 changes nothing. Neither ever sets a permission: a missing lease root is
@@ -654,15 +657,55 @@ and its prune lists only that root's `app-src/`. Folders published by this
 recipe, and legacy `app-src/<short sha>` folders (which are not release ids),
 stay owner cleanup until the adoption.
 
-**The freeze during the first-client cutover.** Cutover step 1 freezes this
-recipe ([docs/clients/first-client-cutover.md](clients/first-client-cutover.md)).
+**The freeze during the first-client cutover: CI signs it (wave 7c).** Cutover
+step 1 freezes this recipe by message, and step 6b by marker
+([docs/clients/first-client-cutover.md](clients/first-client-cutover.md)).
 The marker command above needs the deploy's proof-signing key pair in the
-shell, and no shell holds it: `python -m tools.clients.github_environment`
-generates a client's signing key in memory and pipes it into a write-only
-environment secret, and no workflow step runs `freeze`. So on `main` the
-freeze is a message to every peer session plus the owner's rule, not a
-marker; a CI-run freeze and thaw is a follow-up. The governed run is never
-blocked by a marker of its own App (its held lease exempts it, above).
+shell, and no shell holds a client's: `python -m tools.clients.github_environment`
+generates it in memory and pipes it into a write-only environment secret. So
+`deploy-dev.yml` has two phases that run no `scripts/deploy.sh`: `freeze` and
+`thaw`, one step (`tools/clients/publisher_freeze.py`), behind the same
+environment approval, break-glass acknowledgement, OIDC proof and dispatch
+preflight as a release. The preflight holds both to the mutating phases' rules:
+the exact profile ack as `owner_attestation`, the protections rule and the
+tree scan. The step binds no secret and no variable: the tool reads the
+signing key in-process from the job's `.env.local`, never puts it in the
+environment or an argv, never prints it, derives the public verify key from
+it, and refuses outside GitHub Actions (`ci_only`; a shell that does hold a
+key keeps the command above). `scripts/deploy.sh` has no such phase and
+refuses the name.
+
+- `phase=freeze` writes one marker for the profile's App, valid for the
+  marker's maximum of 30 days, with the same read-only root judgement as the
+  command above: it never sets a permission, a missing root is created bare,
+  and `freeze_root_unprotected` leaves no marker. It reads the marker back,
+  requires that it verifies and reads frozen, and prints `frozen: marker <id>
+  until <epoch>` and the thaw's pair, `freeze_thaw=<sha256>`. A second freeze
+  while one is frozen refuses `already_frozen`. It takes no operation ack.
+- `phase=thaw` needs that exact pair in `operation_acks`. The `freeze_thaw`
+  digest covers the App, the marker id and the marker's own sha256, and the
+  carrier admits it in the thaw phase only. The tool recomputes it from the
+  marker it reads, thaws that one marker, reads it back and requires
+  `thawed`. Without the pair, or with any other digest, it refuses
+  `thaw_unacked`, prints each frozen marker's pair and writes nothing; with
+  nothing frozen it refuses `nothing_frozen`; a marker that does not verify
+  is never thawed (`thaw_unverified`).
+
+What obeys the marker does not change. `app_release_source publish` refuses
+while it is frozen. The governed run's own publish is exempt through its held
+lease; the window dead-man's arm and adopt-live's copy of the adopted source
+never pass the publisher's gate. The raw CLI reads no marker at all: its
+`apps start` (the owner break-glass, below) and its `apps deploy` of a folder
+that already exists are not stopped by a freeze. While the
+marker is frozen, an emergency publish that must go out has two routes: the
+exact `--override-freeze <marker id> --override-freeze-ack <sha256>` its
+refusal prints (that marker, that folder, that one publish), or a thaw. On
+either route, and for every publish after the first marker exists, the
+publishing shell exports the client environment's public variable
+`MIP_AI_GATEWAY_PROOF_VERIFY_KEY` (`gh variable get` reads it from the
+`<client>` environment); without it every marker reads as frozen, the thawed
+and the expired included. A marker that outlives its 30 days expires by
+itself; freeze again while the cutover is still open.
 
 ### Owner break-glass: a raw `apps start`
 
@@ -4064,7 +4107,8 @@ above): a plan prints the frontend digest, which survives the window's re-pin,
 and a release refuses there what the proof would refuse.
 
 **Freeze.** The emergency recipe's publisher obeys a signed freeze marker
-(the emergency recipe, above).
+(the emergency recipe, above); for a client install `deploy-dev.yml`'s
+`freeze` and `thaw` phases sign it, the thaw with its exact `freeze_thaw` ack.
 
 ### Ownership handover (M2-PR8, cutover steps 7 and 8)
 
@@ -5479,7 +5523,8 @@ was deleted on 2026-10-29. `deploy-dev.yml` now deploys one client per
 dispatch: `client` names the client's GitHub Environment, which holds the
 whole client profile (public fields as variables, identifying and secret
 fields as secrets; tools/clients/schema.py), and `phase` is the
-`scripts/deploy.sh --phase` the run executes. Nothing client-specific lives in
+`scripts/deploy.sh --phase` the run executes, or one of the two marker phases,
+`freeze` and `thaw`, which run no `scripts/deploy.sh`. Nothing client-specific lives in
 the workflow, and only a manual `workflow_dispatch` reaches it. `nightly.yml`
 validates one client per dispatch under a non-admin validator identity
 (M1-PR8, "Live validation per client"). M1-PR2 replaced the bundle's `dev` and `prod` targets with the one
@@ -5493,7 +5538,7 @@ key.
   The second refuses step debug logging (it traces every expression with its
   operands, a variable's value included), a client key that is not
   `MIP_CLIENT`-shaped or names an environment that is not a client's (`dev`,
-  `copilot`, `github-pages`), and a phase outside the five, before any job
+  `copilot`, `github-pages`), and a phase outside the seven, before any job
   names an environment: GitHub creates an environment, unprotected, the first
   time a job references a name it does not know. It also refuses while any
   profile field or alias name is set as a repository- or organization-level
@@ -5513,7 +5558,7 @@ key.
   }}`), in a non-cancelling lane per client (`mip-client-<client>`), with
   `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
-  unadopt 60 minutes, and its first step turns that into
+  unadopt 60 minutes, freeze and thaw 15, and its first step turns that into
   `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout
   depth is the phase's too: `adopt` fetches main's full history (`fetch-depth`
   2147483647, git's infinite depth: the run's commit pinned at
@@ -5530,7 +5575,10 @@ key.
   collect step, the resolve-client-profile action, the OIDC proof and the
   dispatch preflight,
   then `./scripts/deploy.sh -t client --phase <phase> --no-confirm
-  --prebuilt-release <dir>` with `MIP_REDACT_FOREIGN_NAMES=1`, records the
+  --prebuilt-release <dir>` with `MIP_REDACT_FOREIGN_NAMES=1` (for `freeze`
+  and `thaw`, in its place, `python -m tools.clients.publisher_freeze --phase
+  <phase> --env-file .env.local`: "The freeze during the first-client
+  cutover"), records the
   quiesce window journal and deletes the profile files. Under this workflow's
   ref `scripts/deploy.sh` refuses any run that names no `--phase` or no
   `--prebuilt-release`, before it prints anything.
@@ -5580,7 +5628,9 @@ satisfies another:
 - the trust-root chain is reported "deferred (M1-PR5)": nothing verifies a
   hardware-key signature or a chain;
 - `owner_attestation` must be the exact `profile` ack (purpose, client and
-  profile digest) for every mutating phase; a plan prints it;
+  profile digest) for every mutating phase and for both marker phases
+  (`freeze`, `thaw`), which the preflight holds to every rule here that names
+  a mutating phase; a plan prints it;
 - `operation_acks` carries `purpose=<sha256>` pairs from a closed map
   (`tools/clients/dispatch_acks.OPERATION_ACKS`), each admitted only in the
   phases whose run reads it and exported for this job under the name its own
@@ -5594,7 +5644,10 @@ satisfies another:
   it; a plan prints it, B3), `data_ledger_supersede` and `data_ledger_rerun`
   (data),
   `metastore_app_grants` (plan, adopt, unadopt, release; never data, whose
-  run never reads it: "Metastore authority"), and the one
+  run never reads it: "Metastore authority"), `freeze_thaw` (thaw only: the
+  exact thaw of one signed freeze marker, which the freeze printed; a freeze
+  takes no operation ack, and no `scripts/deploy.sh` phase reads this one),
+  and the one
   selector, `supersedes_deployment` (adopt): the sha256 of the adopted
   record's deployment id that picks adopt-live's supersede mode, exported as
   `MIP_ADOPT_LIVE_SUPERSEDE`. A selector is a digest, never a switch (`yes`,

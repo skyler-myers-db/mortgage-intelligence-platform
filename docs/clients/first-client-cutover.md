@@ -70,8 +70,9 @@ What is left is no code change:
 - **The owner gives two things:** the metastore owner's attestation of the
   App's metastore privileges (S0(b′)) for every adopt, plan, unadopt and
   release run, and a clean rollback-scope check (step 7).
-- **Two follow-ups stop nothing:** an owner break-glass re-pin over an open
-  quiesce window, and a CI-signed freeze marker (the end of this section).
+- **One follow-up stops nothing:** an owner break-glass re-pin over an open
+  quiesce window (the end of this section). The CI-signed freeze and thaw
+  marker is on `main` (wave 7c): steps 6b and 13.
 
 No step from 6 on has run live. A refusal that the two walks below did not
 predict is a new blocker: stop where it appears.
@@ -156,11 +157,13 @@ and 12: the window's digest moving after plan #3, `main` moving after plan #3
 start, an attestation past its 29 days, a Genie turn over budget, and the
 release postflight's run_as check.
 
-Two smaller gaps are noted at their steps, and neither stops the cutover: the
-freeze marker needs a signing key no shell holds (step 1), and an open quiesce
-window that the owner restarts by hand stays refused (docs/deployment.md,
-"Owner break-glass"). Both are follow-ups: a reviewed owner break-glass re-pin
-over an open window journal, and a freeze and thaw marker that CI signs.
+One smaller gap is noted at its step, and it does not stop the cutover: an open
+quiesce window that the owner restarts by hand stays refused
+(docs/deployment.md, "Owner break-glass"). It is a follow-up: a reviewed owner
+break-glass re-pin over an open window journal. The other gap this section
+named is closed (wave 7c): the freeze marker needs a signing key no shell
+holds (step 1), so CI signs it (`phase=freeze`, step 6b) and its thaw
+(`phase=thaw`, the end of step 13).
 
 ## Decisions taken (the runbook's defaults)
 
@@ -203,6 +206,14 @@ over an open window journal, and a freeze and thaw marker that CI signs.
   `main` and is admitted, even one that was never `main`'s tip; step 10A's
   source check passes it too. A refused ship's remedy is another emergency
   ship, of a `main` commit, then step 10A's source check again.
+- **From step 6b to step 13 the emergency recipe is frozen by a signed
+  marker**, for every App in the workspace. Each remedy in this runbook that
+  is an emergency ship, redeploy or deploy then refuses `frozen` at its
+  publish, and its route is the owner's: the exact `--override-freeze <marker
+  id> --override-freeze-ack <sha256>` that refusal prints (that marker, that
+  one folder), with the environment's public `MIP_AI_GATEWAY_PROOF_VERIFY_KEY`
+  exported in the publishing shell, or a thaw (step 6b, "An emergency publish
+  between here and step 13").
 - **No git-history rewrite before 10B, nor before any later supersede** of an
   adopted record. The public-history rewrite is an open owner decision; a
   rewrite gives every commit a new sha, so the live health sha leaves `main`
@@ -222,13 +233,14 @@ over an open window journal, and a freeze and thaw marker that CI signs.
 | 4 | Bootstrap: identities, environments, profile | owner | ready |
 | 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
 | 6 | Plan #1 | CI | ready |
+| 6b | Freeze the emergency recipe (the CI-signed marker) | CI | after 6 (needs its profile ack) |
 | 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
 | 10 | Start the App (10A), then adopt (10B) | owner, CI | needs the S0(b′) attestation |
 | 11 | Plan #3 | CI | after 10; needs the S0(b′) attestation |
 | 12 | Release (run 1) | CI | after 11; needs the S0(b′) attestation |
-| 13 | Post-release verification | agent, owner | after 12 |
+| 13 | Post-release verification, then the thaw | agent, owner, CI | after 12 |
 | 14 | Data phase | CI | after 13 |
 | 15 | Refresh on, after 7 green days | owner | later |
 | 16 | Archive the legacy root | owner | after 13 |
@@ -263,8 +275,11 @@ the run's page. Approve only the run you dispatched, after reading its inputs.
    freeze --app-name <app-name> --until <epoch>`) is **not available here**: it
    needs the deploy's proof-signing key pair in the shell, and that key does
    not exist until step 4, where `github_environment` generates it in memory
-   into a write-only environment secret that no shell can read. The freeze is
-   therefore the message and the owner's rule; a CI-run freeze is a follow-up.
+   into a write-only environment secret that no shell can read. So CI signs
+   the marker, at step 6b, once plan #1 has printed the profile ack that
+   dispatch needs. Until then the freeze is this message and the owner's rule,
+   and the message stays in force after 6b for what a marker does not stop
+   (step 6b).
 3. Take the read-only snapshot, kept in the session's private scratch (never
    committed), hashed: the App's deployments (ids, states, source paths, the
    newest one's env-name set) and its ACL; the legacy bundle state's 16 keys;
@@ -285,7 +300,8 @@ that holds it stops at step 6, `LEASE-BOUND`); one real turn in the governed Gen
 own UI works with the App stopped) answers, and a `BUDGET_EXCEEDED` means the
 owner restores the budget before step 12.
 
-**Rollback:** read-only. Lift the freeze by message.
+**Rollback:** read-only. Lift the freeze by message (and, once step 6b has
+run, by its thaw: step 13).
 
 ## Step 2. Owner decisions
 
@@ -567,6 +583,77 @@ an existing catalog's, a `metastore owner:` line): **stop the cutover** and fix 
 
 **Rollback:** read-only.
 
+## Step 6b. Freeze the emergency recipe (the CI-signed marker)
+
+**Who:** CI, dispatched and approved by the owner. **Preconditions:** step 6.
+Plan #1's dispatch preflight prints the profile ack before its live checks
+refuse, so plan #1's expected exit 2 does not matter here.
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=freeze -f owner_attestation=<profile-ack> -f acknowledge_single_maintainer_break_glass=true
+```
+
+The run never reaches `scripts/deploy.sh`. After the OIDC proof and the
+dispatch preflight, one step signs a create-only marker for `<app-name>` in the
+workspace's lease root, with the environment's proof-signing key, which it
+reads in-process and never prints (docs/deployment.md, "The freeze during the
+first-client cutover"). It reads no warehouse and no bundle state and runs no
+live check, so the unadopted install's refusals of step 6 do not apply. The
+marker lasts 30 days, the most a marker can.
+
+**Proof (that step's log):** `[mip-publisher-freeze] frozen: marker <id> until
+<epoch>`, then `[mip-publisher-freeze] thaw with -f phase=thaw -f
+operation_acks="freeze_thaw=<sha256>"`. Keep the marker id and that pair in
+private scratch: step 13's thaw carries the pair. A lost pair can be read
+again: a `phase=thaw` dispatch without it refuses `thaw_unacked`, writes
+nothing and prints it.
+
+**What the marker stops, and what it does not.** It stops the emergency
+recipe's publish step (`app_release_source publish` refuses `frozen`), for
+every App in this workspace: the publisher cannot know which App a folder is
+for. It does not stop the governed path: step 12's publish runs under its held
+lease, and adopt-live's copy of the adopted source (10B) and the window's
+dead-man never pass the publisher's gate. It does not stop the raw CLI either:
+the owner's `apps start` (10A, the break-glass) and an `apps deploy` of a
+folder that already exists read no marker. For those, step 1's message and the
+owner's rule still stand.
+
+**An emergency publish between here and step 13.** Every remedy in this
+runbook that is an emergency ship, redeploy or deploy (Decisions; 10A's source
+check and its stop point; the `health_sha_not_on_main` and `closure_differs`
+remedies) now refuses `frozen` at its publish. The route is the owner's, one of
+two:
+
+- the exact `--override-freeze <marker id> --override-freeze-ack <sha256>` the
+  refusal prints, added to that one publish command: it covers that marker and
+  that release folder only, lifts nothing else and carries to no other publish;
+- or a thaw (step 13's dispatch), the ship, and this step again.
+
+On either route the publishing shell first exports the environment's public
+variable `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` (`gh variable get
+MIP_AI_GATEWAY_PROOF_VERIFY_KEY --env <client>` prints it: the public half,
+never the signing key). Without it the publisher can verify no marker and
+reads each one as frozen, a thawed or expired one included. That holds for
+every emergency publish in this workspace from this step on, for any App and
+after step 13 too, because markers are never deleted.
+
+**Refusals:** `profile_ack` (dispatch with plan #1's value);
+`freeze_root_unprotected` (the new lease root reads with an accessor other
+than admins and the deployer; this workspace's inherited ACL has not been
+probed: no marker was written, only a bare, empty root, so the message freeze
+stands until the first governed lease, at 10B, converges the root, and this
+step runs again after it); `already_frozen` (a marker of this App still reads
+frozen: keep it, or thaw it first); `freeze_unsigned` (the environment's
+signing key is missing or invalid: step 4's `github_environment`);
+`environment_protections_unreadable` (as in step 6: the exact
+`protections_unverified_ack` the refusal prints).
+
+**If step 13 is not reached within 30 days,** the marker expires by itself:
+dispatch this step again.
+
+**Rollback:** the thaw (step 13's dispatch, with the printed pair). Nothing is
+deleted.
+
 ## Step 7. Unity Catalog ownership handover
 
 **Who:** the owner, as the legacy owner (an agent only on the owner's explicit
@@ -817,7 +904,10 @@ Keep the sha12 in your terminal; the repository records none. **Stop** if
 the leaf has another shape, the two leaves differ, or the commit is not on
 `origin/main`: do not start or adopt. The remedy is an emergency redeploy of a
 `main` commit (docs/deployment.md, "The emergency recipe, command by command"),
-then this check again.
+then this check again. Since step 6b that redeploy's publish refuses `frozen`:
+take the exact `--override-freeze <marker id> --override-freeze-ack <sha256>`
+the refusal prints, with the environment's verify key exported, or thaw first
+(step 6b, "An emergency publish between here and step 13").
 
 Then start it:
 
@@ -851,7 +941,11 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_verif
 **Stop point:** if the start's deployment FAILED, do not adopt. Stop the App
 again if the owner wants it stopped, and fix the folder first (a fresh
 emergency deploy of a current `main` commit is the remedy for `closure_differs`
-and for a health sha `main` does not hold).
+and for a health sha `main` does not hold). Under step 6b's freeze that
+deploy's publish refuses `frozen`: its route is the exact `--override-freeze
+<marker id> --override-freeze-ack <sha256>` the refusal prints, with the
+environment's public `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` exported in that shell,
+or a thaw followed by a new freeze (step 6b).
 
 ### 10B. Adopt (CI)
 
@@ -1259,14 +1353,29 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ow
    `<prefix>-data-owners` in the account console, then dispatch a plan and watch
    the next App-triggered lifecycle run (now as the jobs identity) with
    `handover_verify watch-next-run`.
+6. Last, thaw the emergency recipe (step 6b's marker):
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=thaw -f owner_attestation=<profile-ack> -f operation_acks="freeze_thaw=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+```
+
+   `<profile-ack>` is the one item 5's plan printed (item 4 changed the
+   profile), and the pair is the one step 6b's freeze printed. Then tell the
+   peers the freeze is lifted. The governed dispatch is now the way to ship;
+   an emergency publish still needs the verify key exported (step 6b).
 
 **Proof:** the nightly is green and the gate accepts the commit; `--verify
 --released` passes; after the membership removal the plan shows 0 refusals and
-the lifecycle run SUCCEEDS.
+the lifecycle run SUCCEEDS; the thaw's step logs `[mip-publisher-freeze]
+thawed: marker <id> (nothing was deleted)`.
 
 **Refusals:** `pipeline_owner_unapproved`, `pipeline_owner_not_run_as`,
 `pipeline_run_as_unreadable`, `pipeline_unresolved` (a pipeline dataset not
-owned by the jobs identity: stop, the release did not move the run_as).
+owned by the jobs identity: stop, the release did not move the run_as). The
+thaw: `thaw_unacked` (the pair is not this marker's: the refusal prints the
+exact one, review it and dispatch again; nothing was written),
+`nothing_frozen` (the marker expired or is thawed already: nothing to do),
+`profile_ack` (the profile changed again: take the newest plan's ack).
 
 **Rollback:** re-add the membership; dispatch a release of the previous green
 commit, or restore through the record.
