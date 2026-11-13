@@ -221,17 +221,19 @@ def test_the_runbook_renames_to_the_declared_name_and_rolls_back_to_the_refused_
         "the sub-folder had no ACL of its own",
         "the four permission counts equal the ones read first",
         "if the second prints a `direct` count other than 0",
-        # Run from outside the checkout, as spike S8 measured it (binding change 2).
+        # Run from outside the checkout, as the experiment rename spike measured it (binding change 2).
         "**Run every command of this step from a directory outside the checkout**",
         "so no bundle context can choose the host",
-        # A failed proof stops the cutover (binding change 4).
-        "**If the proof fails, stop: do not go on to step 7.**",
+        # A failed proof stops the cutover, before step 6b's preflight too (binding change 4).
+        "**If the proof fails, stop: do not go on to step 6b or 7.**",
         "`same_id` false, or a `name` that is not exactly",
         "a create call at an existing name returns that experiment's id with exit 0",
-        # Spike S9 measured a rename onto another experiment's name: refused, both unchanged.
-        "a rename onto a name another experiment holds is refused with exit 1 (spike S9",
+        # The experiment bind spike measured a rename onto another experiment's name: refused, both unchanged.
+        "a rename onto a name another experiment holds is refused with exit 1 (the experiment bind spike",
         "so no exit code alone proves it",
-        "another experiment (spike S9: HTTP 409, `ALREADY_EXISTS`, reason `NAME_CONFLICT`, both experiments unchanged)",
+        "another experiment (the experiment bind spike: HTTP 409, `ALREADY_EXISTS`, reason `NAME_CONFLICT`, both experiments unchanged)",
+        # The experiment's spikes have their own names: "spike S8" is the GitHub protections spike (step 6).
+        "The experiment rename spike (its own spike, not the GitHub protections spike S8 of step 6) measured the rename",
         "The read still comes first, so a taken name is found without a mutating call.",
         "Roll back only to abandon the cutover",
         "After step 12 the bundle manages the experiment under the governed name: do not rename it back then.",
@@ -240,6 +242,9 @@ def test_the_runbook_renames_to_the_declared_name_and_rolls_back_to_the_refused_
         assert words in flat, words
     for unmeasured in ("another experiment holds was not measured", "another experiment holding it was not measured"):
         assert unmeasured not in flat, unmeasured
+    for collision in ("(spike S8)", "spike S8 measured", "spike S8 did not", "(spike S9", "Spike S9", "Spike S8 measured"):
+        assert collision not in flat, collision
+    assert "do not go on to step 7.**" not in flat, "a failed proof stops before step 6b's preflight too"
     same_id = next(line for line in proof if "same_id" in line)
     assert same_id.startswith(f"databricks experiments get-by-name {declared} ") and f'== "{_ID}"' in same_id
 
@@ -267,6 +272,7 @@ def test_the_sequence_waits_for_the_rename_and_says_what_a_rollback_leaves() -> 
     decisions = _section(runbook, "## Decisions taken", "## Steps at a glance")
     assert "**The legacy MLflow experiment takes the bundle's name**, by the owner's rename before step 7 (step 3b)." in decisions
     assert "nothing is pinned in the profile, and the bind plan's name rule stays as strict as it is" in decisions
+    assert "keeps its id (the experiment rename spike, step 3b)" in decisions and "(spike S8)" not in decisions
     glance = _section(runbook, "## Steps at a glance", "## Step 1. Freeze and snapshot")
     assert "| 3b | Rename the legacy MLflow experiment | owner | ready; do and prove before step 7 |" in glance
 
@@ -324,7 +330,7 @@ def test_the_runbook_says_what_the_snapshot_found_at_steps_1_and_3_and_the_deplo
     for name, _ in HISTORY:
         assert f"`{name}`" in adopting, name
     # The post-bind action, not the tags, was the unknown (the CLI's own lifecycle rules), and
-    # spike S9 measured it on throwaway objects with CLI v1.10.0.
+    # the experiment bind spike measured it on throwaway objects with CLI v1.10.0.
     owed = adopting[adopting.index("**Owed live confirmations.**") : adopting.index("**Dashboards (attack O9).**")]
     for words in (
         "ignore `tags` as a local and as a remote change",
@@ -332,7 +338,7 @@ def test_the_runbook_says_what_the_snapshot_found_at_steps_1_and_3_and_the_deplo
         "recreate only on `artifact_location`",
         "shows `skip`, not `recreate`, for an experiment whose declaration has no `artifact_location`",
         "The adopted MLflow experiment's bind and post-bind plan are measured, on throwaway objects "
-        "(spike S9, CLI v1.10.0, 2026-11-13)",
+        "(the experiment bind spike, CLI v1.10.0, 2026-11-13; not the GitHub protections spike S8 below)",
         "Its two changes are both skipped: `tags` (reason `terraform_compat`) and `artifact_location` "
         "(reason `backend_default`).",
         "The bind writes the bundle's declared values into the state, never the remote ones",
@@ -342,7 +348,7 @@ def test_the_runbook_says_what_the_snapshot_found_at_steps_1_and_3_and_the_deplo
         "Not measured: any CLI version but v1.10.0 (v1.7.0 among them)",
     ):
         assert words in owed, words
-    for stale in ("is unmeasured", "is not established", "pipeline, dashboards, experiment)"):
+    for stale in ("is unmeasured", "is not established", "pipeline, dashboards, experiment)", "(spike S9"):
         assert stale not in owed, stale
     bundle = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
     experiment = bundle["resources"]["experiments"]["mip_lead_scoring"]

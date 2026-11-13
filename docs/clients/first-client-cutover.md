@@ -221,8 +221,9 @@ over an open window journal, and a freeze and thaw marker that CI signs.
   URLs and published history, is the owner's choice only.
 - **The legacy MLflow experiment takes the bundle's name**, by the owner's
   rename before step 7 (step 3b). Unlike a dashboard's folder, an experiment
-  moves in place and keeps its id (spike S8), so nothing is pinned in the
-  profile, and the bind plan's name rule stays as strict as it is: it binds
+  moves in place and keeps its id (the experiment rename spike, step 3b), so
+  nothing is pinned in the profile, and the bind plan's name rule stays as
+  strict as it is: it binds
   the bundle's name, or its development-mode form in the same folder.
 - **The App start before step 10** is the owner's raw `apps start` (step 10A).
 - **Until 10B, no emergency ship from a commit `main` does not hold.** This
@@ -435,9 +436,11 @@ outside the repository that logs to the old path is the owner's to know of:
 after the rename, a `set_experiment` call with that path would create a new
 experiment there, and log to it.
 
-Spike S8 measured the rename on a throwaway experiment of the same shape (CLI
-v1.10.0, 2026-11-13): it is accepted across folders; the experiment keeps its
-id, artifact location and lifecycle stage; its tags stay, except the system
+The experiment rename spike (its own spike, not the GitHub protections spike
+S8 of step 6) measured the rename on a throwaway experiment of the same
+shape (CLI v1.10.0, 2026-11-13): it is accepted across folders; the
+experiment keeps its id, artifact location and lifecycle stage; its tags
+stay, except the system
 tag `mlflow.experiment.sourceName`, which follows the name; and the rename
 back restores the first state. Its permissions were the same before and after
 **under one condition**: every grant on that experiment was inherited, from
@@ -454,8 +457,8 @@ state binds for `experiments.mip_lead_scoring` (the snapshot holds it; step
 session deploys from the legacy root (step 1's freeze). Nothing here needs
 step 4. **Run every command of this step from a directory outside the
 checkout** (`cd` to one first), so no bundle context can choose the host:
-spike S8 measured each call that way, and the emergency recipe requires the
-same of a raw CLI mutation (docs/deployment.md).
+the rename spike measured each call that way, and the emergency recipe
+requires the same of a raw CLI mutation (docs/deployment.md).
 
 **Read first (read-only).**
 
@@ -475,14 +478,15 @@ exist.`, `Path (...) doesn't exist.`): the governed name is free. **Stop**:
 - if the first prints `deleted` (the bind plan would refuse `missing`), or a
   name of another shape (read why before renaming anything);
 - if the second prints a `direct` count other than 0. A direct grant on the
-  experiment is a shape spike S8 did not measure: review whose it is first;
+  experiment is a shape the rename spike did not measure: review whose it is
+  first;
 - if either of the last two answers with an object: the name is taken, and
   what holds it is reviewed first.
 
 Never test a name with a create call: `experiments create-experiment` at an
-existing name answers with that experiment's id and exit 0 (spike S8). If the
-first already prints `/Shared/mip-lead-scoring`, the rename is done (the
-last two then answer with this experiment): go on to the proof.
+existing name answers with that experiment's id and exit 0 (the rename
+spike). If the first already prints `/Shared/mip-lead-scoring`, the rename
+is done (the last two then answer with this experiment): go on to the proof.
 
 **Rename.**
 
@@ -506,24 +510,26 @@ four permission counts equal the ones read first. `last_update_time` does not
 move on a rename, so it proves nothing. The final proof is step 6b: its
 preflight lists no `renamed` for `experiments.mip_lead_scoring`.
 
-**If the proof fails, stop: do not go on to step 7.** `same_id` false, or a
-`name` that is not exactly `/Shared/mip-lead-scoring`, means the governed
-name answers with another experiment, or the rename did not take. Only these
-reads show which experiment the governed name answers with: a rename onto a
-name another experiment holds is refused with exit 1 (spike S9, Refusals
-below), but a create call at an existing name returns that experiment's id
-with exit 0 (spike S8), so no exit code alone proves it. Permission counts
-that differ mean the legacy folder carried grants of its own, so the move
+**If the proof fails, stop: do not go on to step 6b or 7.** `same_id`
+false, or a `name` that is not exactly `/Shared/mip-lead-scoring`, means the
+governed name answers with another experiment, or the rename did not take.
+Only these reads show which experiment the governed name answers with: a
+rename onto a name another experiment holds is refused with exit 1 (the
+experiment bind spike, 2026-11-13, docs/deployment.md "Owed live
+confirmations"; Refusals below), but a create call at an existing name
+returns that experiment's id with exit 0 (the rename spike), so no exit code
+alone proves it. Permission counts that differ mean the legacy folder
+carried grants of its own, so the move
 changed who can reach the experiment: rename back (Rollback, below) and
 review those grants with their owners before renaming again.
 
 **Refusals:** exit 1 with `ALREADY_EXISTS` (`Node named 'mip-lead-scoring'
 already exists`): something took the name since the read. Nothing changed;
-review what holds it. Both holders are measured: a folder (spike S8), and
-another experiment (spike S9: HTTP 409, `ALREADY_EXISTS`, reason
-`NAME_CONFLICT`, both experiments unchanged). The read still comes first, so
-a taken name is found without a mutating call. A permission error: run it as
-the legacy owner, who created the experiment.
+review what holds it. Both holders are measured: a folder (the rename
+spike), and another experiment (the experiment bind spike: HTTP 409,
+`ALREADY_EXISTS`, reason `NAME_CONFLICT`, both experiments unchanged). The
+read still comes first, so a taken name is found without a mutating call. A
+permission error: run it as the legacy owner, who created the experiment.
 
 **Rollback:** the rename back, to the name the first read printed:
 

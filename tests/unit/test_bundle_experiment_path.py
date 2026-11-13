@@ -82,7 +82,7 @@ def test_the_declared_name_is_one_level_under_shared() -> None:
 def test_the_experiment_declares_no_artifact_location_and_no_trace_location() -> None:
     """Either location would plan a recreate of an adopted experiment, refused only after the handovers.
 
-    Spike S9 (CLI v1.10.0, throwaway objects): the plan right after a bind is
+    The experiment bind spike (CLI v1.10.0, throwaway objects): the plan right after a bind is
     ``skip`` while the declaration holds no ``artifact_location`` (the remote's is
     skipped as a backend default), and a declared ``artifact_location`` plans
     ``recreate`` (reason ``immutable``). The CLI's v1.10.0 lifecycle rules also

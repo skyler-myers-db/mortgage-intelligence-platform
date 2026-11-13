@@ -3877,8 +3877,9 @@ jobs, pipeline, dashboards) on CLI v1.10.0 is unconfirmed: an unsupported
 kind fails its bind, and the run undoes the binds before it.
 
 The adopted MLflow experiment's bind and post-bind plan are measured, on
-throwaway objects (spike S9, CLI v1.10.0, 2026-11-13): a one-resource bundle
-that declares the experiment as `databricks.yml` does (direct engine,
+throwaway objects (the experiment bind spike, CLI v1.10.0, 2026-11-13; not
+the GitHub protections spike S8 below): a one-resource bundle that
+declares the experiment as `databricks.yml` does (direct engine,
 production mode, the target's `mip_client` tag preset, a `name` and nothing
 else). After the owner's rename (the cutover runbook's step 3b) its name
 equals the declared one, so the release has no experiment rename left to
