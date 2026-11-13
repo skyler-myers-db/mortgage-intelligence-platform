@@ -19,6 +19,7 @@
 BUNDLE_PLAN_REPORT_JSON=""
 BUNDLE_PLAN_PUBLIC_JSON=""
 BUNDLE_PLAN_REPORT_AFTER_EDIT=0
+BUNDLE_PLAN_REPORT_PUBLISHED=""
 
 # --phase adopt and --phase unadopt (wave 7f) publish install_state_adopt's
 # private report create-only to the same path, under GitHub Actions only: the
@@ -29,7 +30,9 @@ BUNDLE_PLAN_REPORT_AFTER_EDIT=0
 # apply's when it reaches the apply; neither has a public half. After the
 # apply (BUNDLE_PLAN_REPORT_AFTER_EDIT=1) a failed write never changes the
 # run's verdict: the state edits stand as the tool reported them, and the
-# report stays on the runner only.
+# report stays on the runner only. A publish that succeeded sets
+# BUNDLE_PLAN_REPORT_PUBLISHED to the report's name for the run's closing line
+# (plan_report_write_note).
 publish_plan_report() {
   case "${DEPLOY_PHASE:-}" in
     plan|adopt|unadopt) ;;
@@ -66,6 +69,18 @@ publish_plan_report() {
     fi
     echo "${RED}[deploy] the full plan report could not be written to the deployer's plan-reports folder; no governed resource was changed.${RST}" >&2
     exit 2
+  fi
+  BUNDLE_PLAN_REPORT_PUBLISHED="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}.json"
+}
+
+# What a run that ends at its adopt or unadopt plan changed, for its closing
+# line. The published report is its one write (create-only, GitHub Actions
+# only), never a governed resource; without it the run wrote nothing.
+plan_report_write_note() {
+  if [[ -n "${BUNDLE_PLAN_REPORT_PUBLISHED:-}" ]]; then
+    echo "no governed resource was changed (its one write, under GitHub Actions only, is the create-only report in the deployer's plan-reports folder as ${BUNDLE_PLAN_REPORT_PUBLISHED})"
+  else
+    echo "nothing was changed"
   fi
 }
 

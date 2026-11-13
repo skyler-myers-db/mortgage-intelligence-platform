@@ -17,7 +17,9 @@
 # (the deferred owner attestation's substitute) and the run continues to the
 # lease. A dry run prints both commands and stops before the lease. A run that
 # ends at the plan publishes its private report (publish_plan_report, CI only:
-# the deployer's plan-reports folder), before adopt-live's plan can refuse.
+# the deployer's plan-reports folder), before adopt-live's plan can refuse;
+# that create-only report is then the run's one write, and its closing line
+# says so (plan_report_write_note) instead of "read-only".
 run_adopt_phase_plan() {
   local phase="${1:?adopt phase is required}"
   local report_json
@@ -35,7 +37,7 @@ run_adopt_phase_plan() {
   if ! run "$PYTHON" -m tools.databricks.install_state_adopt plan \
       --phase "$phase" --report-out "$report_json" "${ack_args[@]}"; then
     publish_plan_report
-    echo "${RED}[deploy] the ${phase} plan refused before the lease; its full report, which names resources and stays private, is ${report_json}. Nothing was changed.${RST}" >&2
+    echo "${RED}[deploy] the ${phase} plan refused before the lease; its full report, which names resources and stays private, is ${report_json}; $(plan_report_write_note).${RST}" >&2
     exit 2
   fi
   [[ "$DRY_RUN" -eq 1 ]] || echo "  ${phase} plan report (private): ${report_json}"
@@ -43,7 +45,9 @@ run_adopt_phase_plan() {
   [[ "${#ack_args[@]}" -ne 0 ]] || publish_plan_report
   run_adopt_live_plan "$phase"
   if [[ "${#ack_args[@]}" -eq 0 ]]; then
-    echo "${GRN}[deploy] ${phase} plan complete: read-only, stopped before the lease; nothing was changed. Review it, then re-run with MIP_ADOPT_PLAN_ACK=<its sha256> exported in the shell.${RST}"
+    local read_only="read-only, "
+    [[ -z "${BUNDLE_PLAN_REPORT_PUBLISHED:-}" ]] || read_only=""
+    echo "${GRN}[deploy] ${phase} plan complete: ${read_only}stopped before the lease; $(plan_report_write_note). Review it, then re-run with MIP_ADOPT_PLAN_ACK=<its sha256> exported in the shell.${RST}"
     exit 0
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then

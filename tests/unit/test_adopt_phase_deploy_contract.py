@@ -262,7 +262,9 @@ def _drive(
         'run_adopt_live_plan() { echo "adopt-live-planned"; }\nrun_adopt_live_apply() { :; }\n'
         # The report publish (wave 7f) is the real function, over a recording publisher.
         "BUNDLE_PLAN_REPORT_JSON=''\nBUNDLE_PLAN_PUBLIC_JSON=''\nBUNDLE_PLAN_REPORT_AFTER_EDIT=0\n"
+        "BUNDLE_PLAN_REPORT_PUBLISHED=''\n"
         + function("publish_plan_report")
+        + function("plan_report_write_note")
         + function(name)
         + f"{name} {phase}\n"
     )
@@ -300,7 +302,7 @@ def test_without_an_ack_the_plan_ends_the_run_read_only_before_the_lease(tmp_pat
     result, recorded = _drive(tmp_path, "run_adopt_phase_plan", ack="", tool_rc=0)
 
     assert result.returncode == 0, result.stderr
-    assert "adopt plan complete: read-only, stopped before the lease" in result.stdout
+    assert "adopt plan complete: read-only, stopped before the lease; nothing was changed." in result.stdout
     assert "reached-the-lease" not in result.stdout
     argv = _argv(recorded)
     assert argv[:3] == ["plan", "--phase", "adopt"] and "--ack-plan" not in argv
@@ -327,6 +329,7 @@ def test_a_refused_plan_exits_2_before_the_lease(tmp_path: Path) -> None:
 
     assert result.returncode == 2 and "reached-the-lease" not in result.stdout
     assert "the adopt plan refused before the lease" in result.stderr
+    assert result.stderr.rstrip().endswith("; nothing was changed."), "outside GitHub Actions the run wrote nothing"
 
 
 @pytest.mark.parametrize(("tool_rc", "rc"), ((0, 0), (2, 2), (3, 3), (1, 2)))
@@ -367,6 +370,17 @@ def test_a_run_that_ends_at_the_plan_publishes_its_report_once(
         assert result.stdout.index("plan_report_publish publish") < result.stdout.index("adopt-live-planned"), (
             "published before adopt-live's plan can refuse"
         )
+    # The published report is the run's one write: its closing line says so, never "read-only".
+    wrote = (
+        "no governed resource was changed (its one write, under GitHub Actions only, is the create-only "
+        "report in the deployer's plan-reports folder as 4242-2.json)"
+    )
+    closing = (result.stdout if tool_rc == 0 else result.stderr).rstrip().splitlines()[-1]
+    assert wrote in closing and "nothing was changed" not in closing and "read-only" not in closing
+    if tool_rc == 0:
+        assert f"[deploy] {phase} plan complete: stopped before the lease; {wrote}. Review it" in closing
+    else:
+        assert f"[deploy] the {phase} plan refused before the lease;" in closing
 
 
 def test_an_acked_plan_that_passes_leaves_the_publish_to_the_apply(tmp_path: Path) -> None:
@@ -412,6 +426,9 @@ def test_outside_github_actions_or_without_a_report_nothing_is_published(tmp_pat
     assert local.returncode == run_id_only.returncode == empty.returncode == 2
     assert _published(tmp_path / "local") == [] and _published(tmp_path / "run-id-only") == []
     assert _published(tmp_path / "empty") == []
+    if name == "run_adopt_phase_plan":
+        for run in (local, run_id_only, empty):
+            assert run.stderr.rstrip().endswith("; nothing was changed."), "a run that published nothing wrote nothing"
     assert "no adopt report to publish: the tool wrote none" in empty.stdout
 
 

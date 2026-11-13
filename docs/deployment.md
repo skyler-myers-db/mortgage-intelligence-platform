@@ -3849,7 +3849,10 @@ states and one GET by id per legacy object, and refuses, before the lease:
 It prints the plan's sha256. That digest is the exact acknowledgement: the
 owner attestation is deferred (review mode `single_maintainer_audited`), so a
 mutating run needs `MIP_ADOPT_PLAN_ACK=<sha256>` exported in the shell (never
-`.env.local`). Without it the run ends there, read-only. With it the run takes
+`.env.local`). Without it the run ends there with no governed resource
+changed: under GitHub Actions its one write is the create-only private report
+(below), which its closing line names; elsewhere it writes nothing. With it
+the run takes
 the signed lease and runs `install_state_adopt apply`, which recomputes the
 plan immediately before the first state edit, refuses with nothing changed
 unless the digest is the acknowledged one, asserts the lease before every

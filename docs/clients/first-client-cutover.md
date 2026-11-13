@@ -1065,7 +1065,10 @@ to bind, 2 planned creates, no delete, recreate or instance change, the
 dashboards `pinned_permanent`, and
 `s7_default_source: not_settable`. Keep the adopt-live plan's
 `deployment_sha256`: it is the `supersedes_deployment` selector should a
-supersede ever be needed.
+supersede ever be needed. Read-only here, and in every read-only adopt or
+unadopt dispatch below, means no governed resource changes: the run's one
+write is its private report, create-only in the deployer's plan-reports folder
+as `<run id>-<attempt>.json`, which its closing line names.
 
 **10B-2, the adoption.**
 
