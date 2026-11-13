@@ -5,7 +5,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, createMemoryRouter } from 'react-router';
+import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildLeadQueueExportFilters,
@@ -14,6 +15,7 @@ import {
 } from './lead-queue.filters';
 import type { SegmentCode } from '../types';
 import type { LeadExportContext } from '../components/mortgage/LeadTable';
+import type { LeadTableView } from '../components/mortgage/LeadTable.columns';
 
 /** A ranked row; the stubbed LeadTable reads only what the route hands it. */
 const ONE_LEAD = { borrower_id: 'B-0123456789ABC' } as never;
@@ -48,7 +50,8 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 /** The props the route last handed the (stubbed) LeadTable. */
-const tableProps = vi.hoisted(() => ({ current: null as null | { exportContext?: LeadExportContext } }));
+type StubTableProps = { exportContext?: LeadExportContext; onViewChange?: (view: LeadTableView) => void };
+const tableProps = vi.hoisted(() => ({ current: null as null | StubTableProps }));
 
 const appMocks = vi.hoisted(() => ({ canAccessAdmin: true }));
 
@@ -93,7 +96,7 @@ vi.mock('../components/FootprintProvider', () => {
 });
 
 vi.mock('../components/mortgage/LeadTable', () => ({
-  LeadTable: (props: { exportContext?: LeadExportContext }) => {
+  LeadTable: (props: StubTableProps) => {
     tableProps.current = props;
     return <div data-testid="lead-table" />;
   },
@@ -576,6 +579,40 @@ describe('LeadQueue filter state', () => {
 
     expect(document.querySelector('[aria-label="Active segment filters"]')).toBeNull();
     expect(document.querySelector('button[aria-label="SEGMENT: All segments"]')).toBeTruthy();
+  });
+
+  /**
+   * The route's VIEW wiring (lead-queue.columns.ts useLeadQueueColumnWrites).
+   * Under the app's data router a URL write is in history at once and in
+   * React one transition later; the VIEW preset must build on the router's
+   * URL, or it drops a write still committing (a HIDE pick made just before).
+   * lead-queue.columnWrites.test pins the hook through a copy of the wiring;
+   * this pins the route's own LeadTable handler.
+   */
+  it('the VIEW preset keeps a URL write that is still committing (data router)', async () => {
+    retryMocks.state.data = { ...retryMocks.state.data, leads: [ONE_LEAD], totalMatching: 1, returnedRows: 1 };
+    const router = createMemoryRouter([{ path: '*', element: <LeadQueue /> }], { initialEntries: ['/lead-queue?state=TX'] });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+    const onViewChange = tableProps.current?.onViewChange;
+    expect(onViewChange).toBeTypeOf('function');
+
+    let gap = '';
+    await act(async () => {
+      // A HIDE pick's write: the router has it; React has not committed it.
+      void router.navigate('/lead-queue?state=TX&hide=segments');
+      gap = router.state.location.search;
+      onViewChange!('sales-ops');
+    });
+    expect(gap).toBe('?state=TX&hide=segments');
+    expect(router.state.location.search).toBe('?state=TX&hide=segments&view=sales-ops');
+    router.dispose();
   });
 });
 
