@@ -95,6 +95,7 @@ from tools.databricks.bundle_plan_lookups import (  # noqa: E402
     prove_full_visibility,
 )
 from tools.databricks.bundle_plan_shape import (  # noqa: E402
+    REVIEWED_CLI_VERSION,
     BundlePlan,
     PlanEntry,
     PlanShapeError,
@@ -127,7 +128,7 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
     {
         "malformed_plan": (
             "the bundle plan JSON is not the shape this gate reviewed (Databricks CLI "
-            "v1.10.0, plan_version 2), so it refuses rather than guess; run the reviewed CLI, "
+            f"v{REVIEWED_CLI_VERSION}, plan_version 2), so it refuses rather than guess; run the reviewed CLI, "
             "or extend tools/databricks/bundle_plan_shape.py from a live capture"
         ),
         "unknown_kind": (
