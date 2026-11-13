@@ -283,3 +283,18 @@ def test_the_owner_steps_set_every_profile_name_in_the_client_environment_only()
     assert carried == bool(re.search(r"`deploy-dev\.yml`\s+passes\s+the\s+historical", steps)), (
         "the runbook says deploy-dev.yml passes the historical keys exactly when it does"
     )
+
+
+def test_a_first_installs_bootstrap_warehouse_is_carried_as_a_secret_only() -> None:
+    """B1: MIP_BOOTSTRAP_WAREHOUSE_ID is identifying, so deploy-dev.yml binds it from secrets alone."""
+
+    name = "MIP_BOOTSTRAP_WAREHOUSE_ID"
+    collect = contexts.collect_env()
+    assert name in contexts.PRIVATE_NAMES and name not in contexts.PUBLIC_NAMES
+    assert collect[f"{contexts.SECRET_PREFIX}{name}"] == f"${{{{ secrets.{name} }}}}"
+    assert f"{contexts.VAR_PREFIX}{name}" not in collect, "never bound from vars by value"
+    assert f"${{{{ vars.{name} && '{name}' || '' }}}}" in collect[contexts.MISFILED_ENV], "a misfiled var refuses"
+    for scope in contexts.repository_scope_env().values():
+        assert f".{name} && '{name}'" in scope, "refused at repository or organization scope"
+    collected = _step(_workflow(), *COLLECT_STEP)["env"]
+    assert collected[f"{contexts.SECRET_PREFIX}{name}"] == f"${{{{ secrets.{name} }}}}"

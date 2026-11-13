@@ -41,6 +41,7 @@ from tools.clients.shapes import (
     PRINCIPAL,
     SECRET_SCOPE,
     SHARE_OBJECT_NAME,
+    SQL_WAREHOUSE_ID,
     STORAGE_ROOT,
     TABLE_PREFIX,
     TITLE,
@@ -127,6 +128,7 @@ FIELD_CLASS: dict[str, FieldClass] = {
     "MIP_UC_CATALOG_STORAGE_ROOT": _I,
     "MIP_DASHBOARD_PARENT_PATH": _I,
     "MIP_LEGACY_BUNDLE_ROOT": _I,
+    "MIP_BOOTSTRAP_WAREHOUSE_ID": _I,
     "MIP_LENDER_IDENTITY_JSON": _I,
     "MIP_ACCEPTED_EXPOSURE_JSON": _I,
     "MIP_UC_INTERIM_OWNER_PAIRS_JSON": _I,
@@ -273,6 +275,7 @@ _SCALAR_SHAPES: dict[str, tuple[re.Pattern[str], str]] = {
         LEGACY_BUNDLE_ROOT,
         "a /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/<leaf> bundle root",
     ),
+    "bootstrap_warehouse_id": (SQL_WAREHOUSE_ID, "a SQL warehouse id (16 lowercase hex characters)"),
     "seed_operator_email": (EMAIL, "an email address"),
 }
 _EMAIL_LISTS = rules.EMAIL_LISTS
@@ -362,6 +365,10 @@ class ClientProfile(BaseModel):
     # An adopted install only (M2-PR6): the root whose bundle state the adopt
     # phase binds from (tools/databricks/install_state_adopt.py).
     legacy_bundle_root: str | None = Field(default=None, alias="MIP_LEGACY_BUNDLE_ROOT")
+    # A first install only (B1): the SQL warehouse its steps borrow until the
+    # bundle apply creates its own (tools/databricks/bundle_state.py
+    # bootstrap-warehouse-id proves it read-only); never read after that.
+    bootstrap_warehouse_id: str | None = Field(default=None, alias="MIP_BOOTSTRAP_WAREHOUSE_ID")
     lender_identity: LenderIdentity | None = Field(default=None, alias="MIP_LENDER_IDENTITY_JSON")
     accepted_exposure: tuple[ExposureEntry, ...] = Field(default=(), alias="MIP_ACCEPTED_EXPOSURE_JSON")
     # The ownership handover's interim owner pairs (M2-PR8): exact, at most 14 days.

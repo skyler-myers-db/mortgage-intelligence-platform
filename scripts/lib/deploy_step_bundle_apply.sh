@@ -197,12 +197,17 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # >>> bundle warehouse: after apply >>>
   # The warehouse the apply left in this deployer's state is the one every
   # later step uses: it must be the one the preflight read, and a first
-  # install switches from its bootstrap warehouse to it here (M1-PR3).
+  # install switches from its bootstrap warehouse to it here (M1-PR3). The
+  # parse registers the id as a runner mask before anything uses it: on a
+  # first install the preflight found no bundle warehouse to mask, and every
+  # later command echo carries this one (B1).
   _APPLIED_WAREHOUSE_ID="$("$PYTHON" -c '
 import json, sys
 
+from tools.clients.redact import emit_mask
+
 warehouse = ((json.load(sys.stdin).get("resources") or {}).get("sql_warehouses") or {}).get("mip_serverless_sql") or {}
-print(str(warehouse.get("id") or "").strip())
+print(emit_mask(str(warehouse.get("id") or "").strip()))
 ' <<< "$BUNDLE_SUMMARY_JSON")"
   if [[ -z "$_APPLIED_WAREHOUSE_ID" || \
         ( "$WAREHOUSE_SOURCE" == "bundle-state" && "$_APPLIED_WAREHOUSE_ID" != "$_GRANTS_WAREHOUSE_ID" ) ]]; then

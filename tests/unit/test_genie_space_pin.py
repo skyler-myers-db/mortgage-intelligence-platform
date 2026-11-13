@@ -15,7 +15,9 @@ called):
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -308,6 +310,30 @@ def test_a_first_create_pins_the_new_id(monkeypatch: pytest.MonkeyPatch) -> None
     # An interrupted run's next pass finds its own space by the pin, not by the title.
     again = _resolve(workspace)
     assert (again.action, again.space_id, again.source) == ("use", "created-space-1", "pin")
+
+
+@pytest.mark.parametrize("in_actions", [True, False], ids=["actions", "local"])
+def test_a_first_create_masks_the_new_id_before_it_prints_it(monkeypatch: pytest.MonkeyPatch, in_actions: bool) -> None:
+    """A created id is new to the run: no pin, record or profile masked it, and the job log is public.
+
+    A first install's release takes this path through deploy-dev.yml (B1); a
+    pinned or acked id is masked where the pin resolves it.
+    """
+
+    patch_rollback_scope(monkeypatch)
+    if in_actions:
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    log = io.StringIO()  # one stream, as the job log is, so the order is the log's own
+    with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+        assert _provision(PinWorkspace(), monkeypatch) == 0
+
+    carrying = [line for line in log.getvalue().splitlines() if "created-space-1" in line]
+    prints = [line for line in carrying if not line.startswith("::")]
+    assert prints[0] == "Resolved space_id: created-space-1" and prints[1].startswith("Deep link:"), carrying
+    if in_actions:
+        assert carrying[0] == "::add-mask::created-space-1", "registered before the first line that prints it"
+    else:
+        assert carrying == prints, "outside Actions nothing is registered"
 
 
 def test_a_first_create_without_the_signing_key_refuses_before_creating(monkeypatch: pytest.MonkeyPatch) -> None:

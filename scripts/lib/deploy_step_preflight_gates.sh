@@ -13,7 +13,7 @@ step "preflight — check .env.local, databricks CLI, venv"
 
 if [[ ! -f .env.local ]]; then
   echo "${RED}[deploy] .env.local missing.${RST}" >&2
-  echo "  copy .env.example to .env.local and fill in the client profile (deploy/clients/example.env); a first install also sets DATABRICKS_WAREHOUSE_ID." >&2
+  echo "  copy .env.example to .env.local and fill in the client profile (deploy/clients/example.env); a first install also sets MIP_BOOTSTRAP_WAREHOUSE_ID." >&2
   exit 2
 fi
 
@@ -147,17 +147,17 @@ fi
 # <<< client live checks <<<
 
 # >>> bundle warehouse >>>
-# Early SQL runs on the warehouse this deployer's bundle state binds
-# (resources.sql_warehouses.mip_serverless_sql, tools/databricks/bundle_state.py;
-# M1-PR3); an operator DATABRICKS_WAREHOUSE_ID naming another refuses. A first
-# install's state binds none until the step-4 apply, so the operator's value bootstraps; neither refuses; a dry run reads none.
-# The adopt phases run no SQL (B1, test_adopt_phases_read_no_warehouse.py): no state read, id unset.
+# Early SQL runs on the warehouse this deployer's bundle state binds (sql_warehouses.mip_serverless_sql, tools/databricks/
+# bundle_state.py; M1-PR3); an operator DATABRICKS_WAREHOUSE_ID naming another refuses. A first install's state binds none
+# until the step-4 apply: the profile's MIP_BOOTSTRAP_WAREHOUSE_ID (proven read-only, B1), else a local operator's value,
+# bootstraps; neither refuses; a dry run reads none. Adopt phases run no SQL (B1): no state read, id unset.
 _OPERATOR_WAREHOUSE_ID="$(deployment_control_value DATABRICKS_WAREHOUSE_ID)"
 BUNDLE_STATE_WAREHOUSE_ID=""
 if [[ "${DEPLOY_PHASE:-}" == "adopt" || "${DEPLOY_PHASE:-}" == "unadopt" ]]; then
   _GRANTS_WAREHOUSE_ID="" WAREHOUSE_SOURCE="none (--phase ${DEPLOY_PHASE} runs no SQL)"
   unset DATABRICKS_WAREHOUSE_ID
 else
+  _PROFILE_BOOTSTRAP_WAREHOUSE="$(deployment_control_value MIP_BOOTSTRAP_WAREHOUSE_ID)"
   if [[ "$DRY_RUN" -eq 0 ]]; then
     echo "${DIM}\$ $PYTHON -m tools.databricks.bundle_state warehouse-id${RST}"
     if ! BUNDLE_STATE_WAREHOUSE_ID="$("$PYTHON" -m tools.databricks.bundle_state warehouse-id)"; then
@@ -170,23 +170,23 @@ else
       echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than this deployer's bundle state binds; unset it (the bundle's own warehouse is used).${RST}" >&2
       exit 2
     fi
-    _GRANTS_WAREHOUSE_ID="$BUNDLE_STATE_WAREHOUSE_ID"
-    WAREHOUSE_SOURCE="bundle-state"
+    _GRANTS_WAREHOUSE_ID="$BUNDLE_STATE_WAREHOUSE_ID" WAREHOUSE_SOURCE="bundle-state"
   elif [[ "$DRY_RUN" -eq 1 ]]; then
-    _GRANTS_WAREHOUSE_ID="${_OPERATOR_WAREHOUSE_ID:-dry-run-bundle-warehouse}"
-    WAREHOUSE_SOURCE="dry-run (bundle state unread)"
+    _GRANTS_WAREHOUSE_ID="${_OPERATOR_WAREHOUSE_ID:-dry-run-bundle-warehouse}" WAREHOUSE_SOURCE="dry-run (bundle state unread)"
+  elif [[ -n "$_PROFILE_BOOTSTRAP_WAREHOUSE" ]]; then
+    check_bootstrap_warehouse "$_PROFILE_BOOTSTRAP_WAREHOUSE" "$_OPERATOR_WAREHOUSE_ID"
+    _GRANTS_WAREHOUSE_ID="$_PROFILE_BOOTSTRAP_WAREHOUSE" WAREHOUSE_SOURCE="first-install-bootstrap"
   elif [[ -n "$_OPERATOR_WAREHOUSE_ID" ]]; then
-    _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID"
-    WAREHOUSE_SOURCE="first-install-bootstrap"
+    _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID" WAREHOUSE_SOURCE="first-install-bootstrap"
   else
-    echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID to a warehouse the deployer can use for the steps before the bundle creates its own.${RST}" >&2
+    echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set the client profile's MIP_BOOTSTRAP_WAREHOUSE_ID to a pro or serverless warehouse the deployer can use for the steps before the bundle creates its own. Only a plan or a release reads that field: the data phase runs on the bundle's own warehouse, which the first release creates (run --phase release first).${RST}" >&2
     exit 2
   fi
-  DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
-  export DATABRICKS_WAREHOUSE_ID
+  [[ -z "$_PROFILE_BOOTSTRAP_WAREHOUSE" ]] || note_bootstrap_warehouse
+  export DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
 fi
 echo "  sql warehouse: ${WAREHOUSE_SOURCE}"
-unset _OPERATOR_WAREHOUSE_ID
+unset _OPERATOR_WAREHOUSE_ID _PROFILE_BOOTSTRAP_WAREHOUSE
 # <<< bundle warehouse <<<
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
