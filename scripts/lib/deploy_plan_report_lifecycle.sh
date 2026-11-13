@@ -18,14 +18,37 @@
 
 BUNDLE_PLAN_REPORT_JSON=""
 BUNDLE_PLAN_PUBLIC_JSON=""
+BUNDLE_PLAN_REPORT_AFTER_EDIT=0
 
+# --phase adopt and --phase unadopt (wave 7f) publish install_state_adopt's
+# private report create-only to the same path, under GitHub Actions only: the
+# bind plan, the post-bind gate, and for a refused plan the parser's message
+# and the document's value-free skeleton, or the CLI's own output
+# (cli_errors), none of which the public log carries. One per run: the plan's
+# when the run ends at the plan (a refusal, or no MIP_ADOPT_PLAN_ACK), the
+# apply's when it reaches the apply; neither has a public half. After the
+# apply (BUNDLE_PLAN_REPORT_AFTER_EDIT=1) a failed write never changes the
+# run's verdict: the state edits stand as the tool reported them, and the
+# report stays on the runner only.
 publish_plan_report() {
-  [[ "${DEPLOY_PHASE:-}" == "plan" && -n "$BUNDLE_PLAN_REPORT_JSON" ]] || return 0
+  case "${DEPLOY_PHASE:-}" in
+    plan|adopt|unadopt) ;;
+    *) return 0 ;;
+  esac
+  [[ -n "$BUNDLE_PLAN_REPORT_JSON" ]] || return 0
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  would publish: the public summary to the step summary, the full report to the deployer's plan-reports folder (CI only)"
+    if [[ -n "$BUNDLE_PLAN_PUBLIC_JSON" ]]; then
+      echo "  would publish: the public summary to the step summary, the full report to the deployer's plan-reports folder (CI only)"
+    else
+      echo "  would publish: the private ${DEPLOY_PHASE} report to the deployer's plan-reports folder (CI only)"
+    fi
     return 0
   fi
-  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && \
+  if [[ "${DEPLOY_PHASE:-}" != "plan" && ! -s "$BUNDLE_PLAN_REPORT_JSON" ]]; then
+    echo "  no ${DEPLOY_PHASE} report to publish: the tool wrote none (its refusal is above)"
+    return 0
+  fi
+  if [[ -n "$BUNDLE_PLAN_PUBLIC_JSON" && -n "${GITHUB_STEP_SUMMARY:-}" ]] && \
      ! "$PYTHON" -m tools.databricks.plan_report_publish summary --public "$BUNDLE_PLAN_PUBLIC_JSON" --out "$GITHUB_STEP_SUMMARY"; then
     echo "${RED}[deploy] the plan's public summary could not be written; no governed resource was changed.${RST}" >&2
     exit 2
@@ -37,6 +60,10 @@ publish_plan_report() {
       --client "$CLIENT_KEY" \
       --run-id "$GITHUB_RUN_ID" \
       --run-attempt "${GITHUB_RUN_ATTEMPT:-1}"; then
+    if [[ "$BUNDLE_PLAN_REPORT_AFTER_EDIT" -eq 1 ]]; then
+      echo "${YLW}[deploy] the private ${DEPLOY_PHASE} report could not be written to the deployer's plan-reports folder; it stays on the runner, and the ${DEPLOY_PHASE}'s verdict below stands.${RST}" >&2
+      return 0
+    fi
     echo "${RED}[deploy] the full plan report could not be written to the deployer's plan-reports folder; no governed resource was changed.${RST}" >&2
     exit 2
   fi

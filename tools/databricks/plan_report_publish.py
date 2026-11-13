@@ -15,6 +15,12 @@ public, so:
   plan phase's one workspace write, under the deployer's own identity. No
   GitHub artifact ever carries either file.
 
+``--phase adopt`` and ``--phase unadopt`` publish install_state_adopt's
+private report the same way, create-only to the same path (wave 7f; one per
+run, and no public half): the bind plan, the post-bind gate, and a refused
+plan's parser message and value-free skeleton or the CLI's own output
+(scripts/lib/deploy_plan_report_lifecycle.sh).
+
 Exit 0, or 2 on a refusal (named, never a value).
 """
 
