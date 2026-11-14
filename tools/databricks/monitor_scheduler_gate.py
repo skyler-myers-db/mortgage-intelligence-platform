@@ -20,8 +20,11 @@ non-approver scheduler role exists (deferred), so until
 not ``PAUSED`` (an absent one is UNPAUSED), or a ``trigger`` or ``continuous``
 block that is not PAUSED. scripts/deploy.sh runs ``check`` beside the bundle
 plan gate at both of its positions; it only reads (jobs.list and jobs.get).
-Printed lines carry the job key and the reason, never a job id or name.
-Exit 0 passes, 2 refuses.
+The plan is the plan gate's own document, parsed the same way: one the
+reviewed CLI did not make (``cli_version`` not exactly
+``REVIEWED_CLI_VERSION``) refuses here too, since another CLI may spell a
+schedule this check reads as paused. Printed lines carry the job key and the
+reason, never a job id or name. Exit 0 passes, 2 refuses.
 """
 
 from __future__ import annotations

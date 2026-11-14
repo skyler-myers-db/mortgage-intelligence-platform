@@ -26,7 +26,10 @@ would prefix names), a top-level ``include`` or target-level ``variables``
 no reviewed read for. A name field that is neither a literal nor exactly one
 ``${var.<name>}`` this profile or the variable's literal default resolves is
 carried unresolved, so the plan refuses ``unresolved_name`` for that key and
-never guesses a name.
+never guesses a name. No CLI made that declared plan, so its ``cli_version``
+is ``DECLARED_CLI_VERSION`` and the parser holds it to exactly that; the
+reviewed-CLI check of every CLI-made plan (``REVIEWED_CLI_VERSION``) is the
+adopt phase's, in CI.
 
 It prints counts, symbolic keys, each refusal's code and remedy, the bind
 plan document's sha256, the profile ack of the local profile it judged and one
@@ -69,7 +72,12 @@ if str(REPO) not in sys.path:
 
 from tools.databricks import adopt_legacy_map as legacy_map  # noqa: E402
 from tools.databricks.bundle_plan_lookups import KIND_LOOKUPS  # noqa: E402
-from tools.databricks.bundle_plan_shape import BundlePlan, PlanShapeError, parse_plan  # noqa: E402
+from tools.databricks.bundle_plan_shape import (  # noqa: E402
+    DECLARED_CLI_VERSION,
+    BundlePlan,
+    PlanShapeError,
+    parse_plan,
+)
 from tools.databricks.bundle_state import STATE_FILE, BundleStateError, read_state  # noqa: E402
 
 _PREFIX = "[mip-adopt-preflight]"
@@ -152,9 +160,10 @@ def declared_plan(bundle: Any, variables: Mapping[str, str]) -> BundlePlan:
         if unresolved:
             state["vars"] = unresolved
         plan[f"resources.{kind}.{key}"] = {"action": "create", "new_state": state}
-    document = {"plan_version": 2, "cli_version": "", "lineage": "", "serial": 0, "plan": plan}
+    # No CLI made this document, so it says so; the parser holds it to exactly that.
+    document = {"plan_version": 2, "cli_version": DECLARED_CLI_VERSION, "lineage": "", "serial": 0, "plan": plan}
     try:
-        return parse_plan(json.dumps(document))
+        return parse_plan(json.dumps(document), expected_cli_version=DECLARED_CLI_VERSION)
     except PlanShapeError:
         raise DeclaredNameError("resource_key_shape") from None
 
