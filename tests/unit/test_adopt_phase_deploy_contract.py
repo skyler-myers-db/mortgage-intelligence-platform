@@ -38,6 +38,8 @@ ADOPT_PATH = (
     REPO / "tools" / "databricks" / "adopted_source_copy.py",
     REPO / "tools" / "databricks" / "app_rollback_record_v7.py",
     REPO / "tools" / "databricks" / "operation_ack.py",
+    # The owner's read-only preflight of the bind plan (cutover step 6c): GETs and a private report.
+    REPO / "tools" / "databricks" / "adopt_preflight.py",
 )
 PLAN_START, PLAN_END = "# >>> adopt phase: plan >>>", "# <<< adopt phase: plan <<<"
 APPLY_START, APPLY_END = "# >>> adopt phase: apply >>>", "# <<< adopt phase: apply <<<"

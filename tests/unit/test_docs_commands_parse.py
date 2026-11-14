@@ -28,7 +28,10 @@ is checked against the real thing it names, offline:
   profile field of the right class, a secret never on the command line.
 * ``databricks ...``: one of the reviewed owner commands (start the App, a
   read, or the owner's own short-lived Lakebase token), always naming the
-  owner's CLI profile; never a deploy or a stop.
+  owner's CLI profile; never a deploy or a stop. One rename is reviewed too,
+  the legacy MLflow experiment's (cutover step 3b): by its id, to the name
+  databricks.yml declares or back to the documented legacy shape, and to no
+  other name.
 * ``PGPASSWORD="$(databricks ...)" ... psql ...``: the legacy owner's Lakebase
   connection, with its values local to ``psql`` and the token from the owner's
   CLI (a reviewed ``databricks`` command whose body fields the SDK's call
@@ -97,6 +100,8 @@ PLACEHOLDERS: dict[str, str] = {
     "lakebase-instance": "acme-app-state",
     "lakebase-database": "acme_app",
     "read-write-dns": "instance.database.example",
+    "legacy-experiment-id": "424242",
+    "user": "someone",
 }
 PRIVATE_DIR = "private-dir"
 
@@ -105,6 +110,18 @@ _ENV_PREFIX = re.compile(r"[A-Z_][A-Z0-9_]*=\S*")
 # The only environment a documented command may set: the owner's CLI profile.
 ALLOWED_ENV = frozenset({"DATABRICKS_CONFIG_PROFILE"})
 DEPLOY_PHASES = frozenset({"plan", "release", "data", "adopt", "unadopt"})
+# Cutover step 3b's reads of the legacy MLflow experiment and of the name it is renamed to:
+# each takes the experiment's id, or the name databricks.yml declares, and nothing else.
+EXPERIMENT_READS = {
+    ("experiments", "get-experiment"): "id",
+    ("experiments", "get-permissions"): "id",
+    ("experiments", "get-by-name"): "declared",
+    ("workspace", "get-status"): "declared",
+}
+# Step 3b's one mutation: the owner's rename, forward to the declared name or back to the
+# legacy shape (the pre-2026-07-17 declaration under the CLI's development-mode prefix).
+EXPERIMENT_RENAME = ("experiments", "update-experiment")
+LEGACY_EXPERIMENT_NAME = "/Shared/mip/[dev someone] lead-scoring"
 # The reviewed owner CLI commands: the raw start (break-glass, cutover step 10A), reads,
 # and the owner's own short-lived Lakebase token (cutover step 8's psql connection).
 DATABRICKS_COMMANDS = frozenset(
@@ -115,6 +132,7 @@ DATABRICKS_COMMANDS = frozenset(
         ("apps", "get-deployment"),
         ("database", "get-database-instance"),
         ("database", "generate-database-credential"),
+        *EXPERIMENT_READS,
     }
 )
 # The legacy owner's psql connection: values local to psql, never a LAKEBASE_* override.
@@ -295,6 +313,10 @@ RUNNERS: dict[str, Callable[[list[str], pytest.MonkeyPatch], None]] = {
     "tools.clients.estate_inventory": _parse_only("tools.clients.estate_inventory"),
     "tools.clients.genie_pin_review": _injected("tools.clients.genie_pin_review", workspace_factory=_stop),
     "tools.databricks.estate.cli": _estate,
+    # The owner's read-only adopt preflight (cutover step 6c): stopped at its profile read.
+    "tools.databricks.adopt_preflight": _injected(
+        "tools.databricks.adopt_preflight", profile=_stop, workspace_factory=_stop
+    ),
     "tools.databricks.app_deployment_lease": _parse_only("tools.databricks.app_deployment_lease"),
     "tools.databricks.app_rollback_secret_scope": _rollback_scope_check,
     "tools.databricks.quiesce_window": _injected("tools.databricks.quiesce_window", workspace_factory=_stop),
@@ -412,11 +434,42 @@ def _check_gh_environment_write(argv: list[str]) -> None:
 # --------------------------------------------------------------- databricks, make
 
 
+def _declared_experiment_name() -> str:
+    bundle = yaml.safe_load(_read("databricks.yml"))
+    return str(bundle["resources"]["experiments"]["mip_lead_scoring"]["name"])
+
+
+def _experiment_target(kind: str) -> str:
+    return PLACEHOLDERS["legacy-experiment-id"] if kind == "id" else _declared_experiment_name()
+
+
+def _check_experiment_rename(argv: list[str], tail: str) -> None:
+    """The owner's rename of the legacy experiment: by its id, to a reviewed name, as the owner, unpiped."""
+
+    assert not tail, f"the rename prints nothing and pipes into nothing: {tail}"
+    assert argv[3:4] == [PLACEHOLDERS["legacy-experiment-id"]], f"the rename names the legacy experiment's id: {argv}"
+    rest = argv[4:]
+    assert len(rest) % 2 == 0, rest
+    flags = dict(zip(rest[::2], rest[1::2], strict=True))
+    assert len(flags) == len(rest) // 2, f"a flag given twice: {rest}"
+    assert set(flags) <= {"--new-name", "-p", "-o"} and flags.get("-o", "json") == "json", rest
+    assert flags.get("-p") == PLACEHOLDERS["owner-profile"], argv
+    reviewed = {_declared_experiment_name(), LEGACY_EXPERIMENT_NAME}
+    assert flags.get("--new-name") in reviewed, f"the rename is to the declared name, or back: {flags.get('--new-name')}"
+
+
 def _check_databricks(argv: list[str], tail: str) -> None:
     assert argv[0] == "databricks", argv
+    command = (argv[1], argv[2]) if len(argv) > 2 else ()
+    if command == EXPERIMENT_RENAME:
+        _check_experiment_rename(argv, tail)
+        return
     assert tuple(argv[1:3]) in DATABRICKS_COMMANDS, f"not a reviewed owner command: {argv[:3]}"
     assert "-p" in argv and argv[argv.index("-p") + 1] == PLACEHOLDERS["owner-profile"], argv
     assert not tail or tail.startswith("jq "), tail
+    if command in EXPERIMENT_READS:
+        target = _experiment_target(EXPERIMENT_READS[command])
+        assert argv[3:4] == [target], f"{' '.join(command)} reads the legacy experiment or the declared name: {argv}"
 
 
 def _check_psql(command: str, private_dir: Path) -> None:
@@ -498,6 +551,11 @@ def test_the_runbooks_show_each_kind_of_command() -> None:
     commands = [command for _, command in documented_commands()]
     for prefix in ("python -m tools.clients", "python -m tools.databricks", "./scripts/deploy.sh", "gh workflow run deploy-dev.yml", "gh workflow run nightly.yml", "gh secret set", "databricks apps start", " psql ", "make "):
         assert any(prefix in command for command in commands), prefix
+    # Cutover step 3b: the one rename, and each of its reads.
+    for prefix in ("databricks experiments update-experiment", *(f"databricks {' '.join(read)} " for read in EXPERIMENT_READS)):
+        assert any(command.startswith(prefix) for command in commands), prefix
+    # Cutover step 6c: the owner's read-only adopt preflight.
+    assert any("python -m tools.databricks.adopt_preflight" in command for command in commands)
 
 
 def test_the_command_of_record_parses_wherever_it_is_named() -> None:
@@ -555,6 +613,28 @@ def test_the_parse_check_refuses_a_flag_the_tool_lacks(private_dir: Path, monkey
         "./scripts/deploy.sh -t client --phase freeze --dry-run",
         "gh secret set MIP_CLIENT --env <client>-validate",
         "databricks apps deploy <app-name> -p <owner-profile>",
+        # The experiment rename (cutover step 3b): the declared name or the legacy shape, by id, as the owner.
+        "databricks experiments update-experiment <legacy-experiment-id> --new-name /Shared/mip-lead-scoring-2 -p <owner-profile>",
+        'databricks experiments update-experiment <legacy-experiment-id> --new-name "/Shared/mip/[dev <user>] mip-lead-scoring" -p <owner-profile>',
+        "databricks experiments update-experiment <legacy-experiment-id> --new-name /Shared/mip-lead-scoring",
+        "databricks experiments update-experiment <legacy-experiment-id> --new-name /Shared/mip-lead-scoring -p another-profile",
+        "databricks experiments update-experiment /Shared/mip-lead-scoring --new-name /Shared/mip-lead-scoring -p <owner-profile>",
+        "databricks experiments update-experiment <legacy-experiment-id> --new-name /Shared/mip-lead-scoring -p <owner-profile> | jq .",
+        "databricks experiments update-experiment <legacy-experiment-id> --new-name /Shared/mip-lead-scoring -p <owner-profile> --json '{}'",
+        "databricks experiments update-experiment <legacy-experiment-id> -p <owner-profile>",
+        # Its reads name the legacy experiment's id or the declared name, never another object.
+        "databricks experiments get-experiment 777 -p <owner-profile> -o json",
+        "databricks experiments get-by-name /Shared/another-experiment -p <owner-profile> -o json",
+        "databricks workspace get-status /Users/<legacy-owner-email> -p <owner-profile> -o json",
+        "databricks experiments get-permissions <legacy-experiment-id> -o json",
+        # No delete, no create (a create at an existing name answers with that experiment's id), no permission write.
+        "databricks experiments delete-experiment <legacy-experiment-id> -p <owner-profile>",
+        "databricks experiments create-experiment /Shared/mip-lead-scoring -p <owner-profile>",
+        "databricks experiments set-permissions <legacy-experiment-id> -p <owner-profile>",
+        "databricks workspace delete /Shared/mip -p <owner-profile>",
+        # The adopt preflight is read-only: it has no apply and takes no acknowledgement.
+        "python -m tools.databricks.adopt_preflight --apply",
+        "python -m tools.databricks.adopt_preflight --ack-plan <sha256>",
     )
     for command in bad:
         with pytest.raises((AssertionError, ProfileRefusal)):
