@@ -221,6 +221,9 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
         "MIP_ACK_METASTORE_APP_GRANTS",
         # tools/clients/publisher_freeze.py: the thaw of one signed freeze marker (wave 7c).
         "MIP_ACK_FREEZE_THAW",
+        # An owner's break-glass start over an open quiesce window (wave 7c): the
+        # release's window plan and repin --from-owner-start recompute its digest.
+        "MIP_ACK_OWNER_START_REPIN",
     }
     # ...and each has its reader where the run looks for it (a literal snippet per env).
     for env, (path, snippet) in READERS.items():
@@ -255,6 +258,7 @@ READERS = {
     "MIP_ACK_METASTORE_APP_GRANTS": ("tools/databricks/metastore_app_grants.py", 'ACK_ENV = "MIP_ACK_METASTORE_APP_GRANTS"'),
     # No scripts/deploy.sh phase reads it: deploy-dev.yml's own thaw step does (wave 7c).
     "MIP_ACK_FREEZE_THAW": ("tools/clients/publisher_freeze.py", 'ACK_ENV = "MIP_ACK_FREEZE_THAW"'),
+    "MIP_ACK_OWNER_START_REPIN": ("tools/databricks/quiesce_window_recovery.py", 'ACK_ENV = "MIP_ACK_OWNER_START_REPIN"'),
 }
 
 

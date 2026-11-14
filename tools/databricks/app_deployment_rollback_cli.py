@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shlex
+import sys
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
@@ -149,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
     # this run's lease; the start, blue and the tree digest come from the
     # signed journal, never from an argument or the unsigned marker.
     parser.add_argument("--from-deadman", action="store_true")
+    # repin --from-owner-start: the owner's break-glass start over an open
+    # window, the same way, and only with its exact owner_start_repin digest
+    # ack, read from MIP_ACK_OWNER_START_REPIN (never a flag, never inferred).
+    parser.add_argument("--from-owner-start", action="store_true")
     args = parser.parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()
     if not token:
@@ -186,6 +191,37 @@ def main(argv: list[str] | None = None) -> int:
                 signed_blue,
                 gateway_endpoint=endpoint,
             )
+    elif args.action == "repin" and args.from_owner_start:
+        if args.from_deadman or args.repin_to or args.expected_rollback_deployment_id or args.expected_tree_sha256:
+            parser.error("--from-owner-start reads the start, blue and the tree from the signed journal")
+        from tools.databricks.app_deployment_owner_start_repin import (
+            OwnerStartRepinRefused,
+            repin_owner_start,
+        )
+        from tools.databricks.quiesce_window_recovery import ACK_ENV
+
+        try:
+            repin_owner_start(
+                workspace,
+                app_name=args.app_name,
+                scope=args.scope,
+                base_url=args.base_url,
+                bearer_token=token,
+                deployment_lease_id=args.deployment_lease_id or "",
+                deployment_source_git_sha=args.deployment_source_git_sha or "",
+                acknowledgement=os.environ.get(ACK_ENV, ""),
+                applied_app_resources=reviewed_resources_file(args.app_resource_payload)
+                if args.app_resource_payload
+                else None,
+            )
+        except OwnerStartRepinRefused as exc:
+            print(f"[mip-owner-start-repin] REFUSED {exc.code}: {exc}", file=sys.stderr)
+            return 2
+        if args.out_env is not None:
+            repinned = verified_signed_last_good_contract(
+                workspace, app_name=args.app_name, scope=args.scope
+            )
+            _write_binding_env(args.out_env, repinned, gateway_endpoint=repinned.gateway_endpoint)
     elif args.action == "repin" and args.from_deadman:
         if args.repin_to or args.expected_rollback_deployment_id or args.expected_tree_sha256:
             parser.error("--from-deadman reads the start, blue and the tree from the signed journal")

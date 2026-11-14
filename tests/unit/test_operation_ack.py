@@ -41,6 +41,9 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
         "no_rollback_for": "MIP_ACK_NO_ROLLBACK_FOR",
         # The core release's pre-activation proof and tier-b restore read it (M2-PR7b).
         "restore_unverified_frontend": "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND",
+        # The release's window plan and its repin --from-owner-start read it (wave 7c);
+        # the window library's refusal names it.
+        "owner_start_repin": "MIP_ACK_OWNER_START_REPIN",
     }
     shell = "".join(
         path.read_text(encoding="utf-8") for path in sorted((REPO / "scripts").rglob("*.sh"))
@@ -73,6 +76,8 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
             "dispatch deploy-dev.yml with phase=thaw and the dispatch input operation_acks "
             "freeze_thaw=<its sha256>",
         ),
+        ("owner_start_repin", "the deploy-dev.yml input operation_acks owner_start_repin=<its sha256>"),
+        ("owner_start_repin", "exports MIP_ACK_OWNER_START_REPIN=<its sha256> for that run only"),
     ],
 )
 def test_a_missing_ack_names_the_route_that_purpose_is_really_handed_in_by(

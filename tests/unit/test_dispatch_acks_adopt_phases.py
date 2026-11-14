@@ -53,6 +53,8 @@ READ_BY = {
     "accepted_exposure_plan": ("MIP_ACK_ACCEPTED_EXPOSURE_PLAN", {"plan", "release", "adopt", "unadopt"}),
     # B3: the core release's unverified-frontend ack (its prediction, step 0a, the proof, tier b).
     "restore_unverified_frontend": ("MIP_ACK_RESTORE_UNVERIFIED_FRONTEND", {"release"}),
+    # Wave 7c: an owner's break-glass start over an open window; a plan prints it, a release carries it.
+    "owner_start_repin": ("MIP_ACK_OWNER_START_REPIN", {"release"}),
     "data_ledger_supersede": ("MIP_ACK_DATA_LEDGER_SUPERSEDE", {"data"}),
     "data_ledger_rerun": ("MIP_ACK_DATA_LEDGER_RERUN", {"data"}),
     # The metastore owner's attestation (spike S0(b′)): never data, whose run never reads it.
@@ -241,6 +243,26 @@ def test_adopt_lives_acks_are_carried_byte_for_byte_and_its_tool_refuses_another
         require_ack(purpose, plan, exported)
     assert refused.value.code == "ack_mismatch"
     assert require_ack(purpose, plan, acks.operation_exports(f"{purpose}={ack_digest(purpose, plan)}", phase)[env])
+
+
+def test_the_owner_start_ack_rides_a_release_only_and_its_tool_refuses_another_plans_digest() -> None:
+    """Wave 7c: a plan prints the digest and carries none; the release's tool recomputes it exactly."""
+
+    plan = {"version": 1, "window_sha256": "a" * 64, "start_deployment_id": "deployment-placeholder"}
+    other = {**plan, "start_deployment_id": "another-deployment-placeholder"}
+    env = "MIP_ACK_OWNER_START_REPIN"
+    assert acks.OPERATION_ACKS["owner_start_repin"] == acks.OperationAck(env, frozenset({"release"}))
+    pair = f"owner_start_repin={ack_digest('owner_start_repin', plan)}"
+    assert acks.operation_exports(pair, "release") == {env: ack_digest("owner_start_repin", plan)}
+    for phase in ("plan", "data", "adopt", "unadopt"):
+        assert _refusal(pair, phase) == [f"operation_acks: owner_start_repin is never read by --phase {phase}"]
+    carried = acks.operation_exports(f"owner_start_repin={ack_digest('owner_start_repin', other)}", "release")[env]
+    with pytest.raises(AckRefused) as refused:
+        require_ack("owner_start_repin", plan, carried)
+    assert refused.value.code == "ack_mismatch", "the carrier never rewrites a value, and never checks one"
+    for given in ("adopt_live", "supersede", "unadopt", "restore_unverified_frontend"):
+        with pytest.raises(AckRefused):
+            require_ack("owner_start_repin", plan, ack_digest(given, plan))
 
 
 def test_an_adopt_live_digest_given_as_supersede_or_the_reverse_is_refused() -> None:

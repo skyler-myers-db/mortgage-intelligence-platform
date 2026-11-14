@@ -10,7 +10,10 @@ has no active (or pending) deployment; a FAILED deployment stays active and
 moves the default source; ``update`` never moves it and ``create_update``
 rejects its mask. Knobs cover every way a start can differ from blue: another
 source, a tampered snapshot, a dropped env, a FAILED start, a deployment that
-never shows, a second new one with it.
+never shows, a second new one with it. A deployment shows what spike S7
+recorded of one: env NAMES only (never a value or a ``value_from``), mode
+SNAPSHOT, no command, no git source, and as its creator the caller that made
+it (``FakeApps.caller``: the deployer, or the owner for a break-glass start).
 
 ``Estate`` also holds the workspace files (the release folder, the snapshots,
 the window journal) and the secret scope holding the signed rollback record,
@@ -58,6 +61,9 @@ RELEASE = "/Workspace/Users/deployer/.bundle/mip/client/app-src/aaaaaaaaaaaa-bbb
 OTHER_SOURCE = "/Workspace/Users/deployer/.bundle/mip/client/files"
 BLUE_ID = "deployment-blue"
 BLUE_ARTIFACT = f"/Workspace/Users/app-sp/src/{BLUE_ID}"
+# Synthetic callers: the CI deployer every governed call runs as, and the owner's own login.
+DEPLOYER_CALLER = "deployer-caller"
+OWNER_CALLER = "owner-caller"
 SOURCE_FILES = {
     "app.yaml": b"command: [python, -m, backend.runtime]\n",
     "backend/runtime.py": b"print('blue')\n",
@@ -132,14 +138,20 @@ def deployment(
     env_names: list[str],
     state: str = "SUCCEEDED",
     created: str = "2026-10-01T00:00:00Z",
+    creator: str = DEPLOYER_CALLER,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         deployment_id=deployment_id,
         source_code_path=source,
         deployment_artifacts=SimpleNamespace(source_code_path=artifact),
+        # Names only, as S7 measured (env_keys ['name']): a deploy's literal
+        # values and value_from bindings never show in get_deployment.
         env_vars=[SimpleNamespace(name=name, value=None, value_from=None) for name in env_names],
         status=SimpleNamespace(state=state),
         mode="SNAPSHOT",
+        command=None,
+        git_source=None,
+        creator=creator,
         create_time=created,
         update_time=created,
     )
@@ -172,6 +184,8 @@ class FakeApps:
     updates: int = 0
     # The App's resource bindings: app-level, so a start or a deploy keeps them.
     resources: list[dict[str, Any]] = field(default_factory=list)
+    # Who makes the next start or deploy (a deployment's creator, S7-1a).
+    caller: str = DEPLOYER_CALLER
     # Its description, and what each update did (measured_app_updates, spike S2).
     description: str = ""
     update_ledger: UpdateLedger = field(default_factory=UpdateLedger)
@@ -322,8 +336,9 @@ class FakeApps:
         names = newest if self.behaviour.carry_env else ["DATABRICKS_WAREHOUSE_ID"]
         created = f"2026-10-02T00:00:{self.starts:02d}Z"
         self._hidden[new_id] = deployment(
-            new_id, source=source, artifact=artifact, env_names=names, state="IN_PROGRESS", created=created
-        )
+            new_id, source=source, artifact=artifact, env_names=names, state="IN_PROGRESS", created=created,
+            creator=self.caller,
+        )  # fmt: skip
         if self.behaviour.twin:
             twin = f"{new_id}-twin"
             self._hidden[twin] = deployment(
@@ -375,6 +390,7 @@ class FakeApps:
             artifact=artifact,
             env_names=[str(item["name"]) for item in payload["env_vars"]],
             created=f"2026-10-03T00:00:{self.deploys:02d}Z",
+            creator=self.caller,
         )
         self.active_id = new_id
         self.compute = "ACTIVE"
@@ -454,7 +470,12 @@ class Estate:
     @property
     def workspace(self) -> SimpleNamespace:
         return SimpleNamespace(
-            apps=self.apps, secrets=self.secrets, workspace=self.files, jobs=self.jobs
+            apps=self.apps,
+            secrets=self.secrets,
+            workspace=self.files,
+            jobs=self.jobs,
+            # Every governed call is the deployer's; the owner's start is ``apps.caller``.
+            current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name=DEPLOYER_CALLER)),
         )
 
 
