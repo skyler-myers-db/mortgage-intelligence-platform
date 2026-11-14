@@ -30,9 +30,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import yaml
-
 import pytest
+import yaml
 
 from tests.fixtures import bundle_plan_fixtures
 from tools.databricks import bundle_plan_gate, bundle_plan_shape
