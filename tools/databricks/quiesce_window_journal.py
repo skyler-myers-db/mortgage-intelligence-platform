@@ -15,15 +15,25 @@ read, under the held lease:
 ``absent|closed`` -> ``window_open`` (before the stop) -> ``window_starting``
 (before ``apps start``) -> ``window_started`` (the start's deployment id) ->
 ``window_proven`` (that deployment is blue) -> ``closed`` (after the re-pin).
-``window_starting`` is the intent, journaled with ``start_baseline_ids``: the
-App's deployment ids listed right before ``apps start`` (version 2). A start
-whose deployment id was never journaled reads as started, and a rerun finds
-it as the one id outside that baseline (the start's id shows only about 100 s
-later, spike S7) instead of starting again. Any failure after the start call
-stops the App again and writes ``window_refused``. A version 1 journal (no
-baseline) still reads; its ``window_starting`` resumes to a refusal. A contract window
+``window_open`` journals ``start_baseline_ids``: the App's deployment ids
+listed right before the stop (version 2), and ``window_starting``, the
+intent, keeps them. A start whose deployment id was never journaled reads as
+started, and a rerun finds it as the one id outside that baseline (the
+start's id shows only about 100 s later, spike S7) instead of starting again.
+Any failure after the start call stops the App again and writes
+``window_refused``. A version 1 journal (no baseline) still reads; its
+``window_starting`` resumes to a refusal. A contract window
 (``blue_restorable`` false) goes ``window_open`` -> ``closed`` only once the
 activated green is the signed record and the App's active deployment.
+
+Two closes belong to the next run alone, each after its own re-pin:
+``window_starting`` -> ``closed`` with ``closed_by: deadman_repin`` (the
+dead-man's restart), and any open restorable state -> ``closed`` with
+``closed_by: owner_start_repin`` and the re-pinned deployment (an owner's
+break-glass start, re-pinned only with its exact digest ack:
+tools/databricks/app_deployment_owner_start_repin.py). That second close is
+the only exit ``window_refused`` and ``window_started`` have besides the
+window's own; a contract window never takes it.
 """
 
 from __future__ import annotations
@@ -70,6 +80,10 @@ TRANSITIONS = {
     "window_proven": frozenset({"closed"}),
     "window_refused": frozenset(),
 }
+# The open states an owner-start re-pin may close (restorable windows only).
+OWNER_START_CLOSABLE = frozenset(
+    {"window_open", "window_starting", "window_started", "window_proven", "window_refused"}
+)
 FIELDS = frozenset(
     {
         "version",
@@ -204,6 +218,23 @@ def _deadman_close(current: dict[str, Any] | None, changes: dict[str, Any]) -> b
     )
 
 
+def _owner_start_close(current: dict[str, Any] | None, changes: dict[str, Any]) -> bool:
+    """Any open restorable state -> ``closed`` is the owner-start re-pin's alone.
+
+    Only with ``closed_by: owner_start_repin`` and the deployment the signed
+    record was re-pinned onto; never a contract window, whose blue cannot run.
+    """
+
+    return (
+        current is not None
+        and current.get("blue_restorable") is True
+        and state_of(current) in OWNER_START_CLOSABLE
+        and changes.get("state") == "closed"
+        and changes.get("closed_by") == "owner_start_repin"
+        and bool(str(changes.get("repinned_deployment_id") or "").strip())
+    )
+
+
 def read_unverified(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
     """The journal as stored, signature NOT verified: only for a human record (M0-PR9).
 
@@ -241,7 +272,12 @@ def write(
     if current != expected:
         raise RuntimeError("quiesce-window journal changed since it was read")
     target = str(changes.get("state") or "")
-    if target not in TRANSITIONS[state_of(current)] and not _deadman_close(current, changes):
+    owner_close = _owner_start_close(current, changes)
+    if (
+        target not in TRANSITIONS[state_of(current)]
+        and not _deadman_close(current, changes)
+        and not owner_close
+    ) or (changes.get("closed_by") == "owner_start_repin" and not owner_close):
         raise RuntimeError("quiesce-window journal transition is not allowed")
     base: dict[str, Any] = {name: "" for name in FIELDS}
     base.update(app_name=app_name, reasons=[], blue_restorable=False, start_baseline_ids=[])

@@ -17,11 +17,13 @@ from types import SimpleNamespace
 import pytest
 
 from tools.databricks.quiesce_window_plan import (
+    OWNER_START_REFUSALS,
     REASON_NAMES,
     REASONS,
     STEP_BUDGET_S,
     WindowFacts,
     body_sha256,
+    owner_start_recovery,
     window_plan,
 )
 
@@ -345,3 +347,159 @@ def test_applicable_resolves_the_rebase_against_the_first_install_journal(
 
     assert f"MIP_QUIESCE_WINDOW_REBASE={rebase}\n" in out.read_text(encoding="utf-8")
     assert read == (["mip-app"] if requested == "1" else []), "the journal is read only on request"
+
+
+# --- an owner's break-glass start over an open window (wave 7c) ----------------------------
+
+OWNER_DIGEST = "d" * 64
+CANDIDATE = replace(BLUE, journal_state="window_refused", owner_start_state="candidate", owner_start_sha256=OWNER_DIGEST)
+# The digests origin/main computed for these facts before the owner-start fields existed.
+PINNED_DIGESTS = {
+    (): "e671bdfbe4bd0362dc5114840cb27a5dce9ca5fb27ff486f2ddfde9b88999525",
+    ("WR1", "WR3"): "95ab5aa52f2a167c9180c1fb1d2a5b5a1fb90e1522af9038948383304033e44d",
+    REASONS: "7bc0360fcc1f6de0c10450d294398e279546a3c7ff7bc1b0732de845d855f43c",
+}
+
+
+def _owner_plan(facts: WindowFacts, position: str, owner_ack: str, window_ack: str = "") -> object:
+    return window_plan(
+        facts, position=position, acknowledgement=window_ack, owner_start_acknowledgement=owner_ack
+    )
+
+
+def test_an_owner_start_passes_the_open_journal_only_before_the_lease_with_its_exact_ack() -> None:
+    acked = _owner_plan(CANDIDATE, "pre-lease", OWNER_DIGEST)
+    assert acked.code == "none" and not acked.refusals and acked.owner_start_ack == "matched"
+    summary = acked.public_summary()
+    assert summary["owner_start_recovery"] is True and summary["deadman_recovery"] is False
+    assert (summary["owner_start"], summary["owner_start_sha256"]) == ("candidate", OWNER_DIGEST)
+    assert owner_start_recovery(CANDIDATE, position="pre-lease", acknowledgement=f" {OWNER_DIGEST}\n")
+
+    # Under the lease the recovery has closed the journal, or the window refuses: never at pre-apply.
+    recheck = _owner_plan(CANDIDATE, "pre-apply", OWNER_DIGEST)
+    assert recheck.refusals == ("window_journal_open",) and recheck.public_summary()["owner_start_recovery"] is False
+    assert not owner_start_recovery(CANDIDATE, position="pre-apply", acknowledgement=OWNER_DIGEST)
+
+    for given, state in (
+        ("", "absent"),
+        ("0" * 64, "mismatch"),
+        (OWNER_DIGEST.upper(), "mismatch"),
+        (OWNER_DIGEST[:63], "mismatch"),
+        (OWNER_DIGEST + "d", "mismatch"),
+        ("é" * 64, "mismatch"),
+    ):
+        refused = _owner_plan(CANDIDATE, "pre-lease", given)
+        assert refused.refusals == ("window_journal_open",) and refused.owner_start_ack == state, given
+        assert refused.public_summary()["owner_start_sha256"] == OWNER_DIGEST, "the plan still prints the digest to ack"
+    # The window's own ack is another purpose: it never opens the journal's gate.
+    crossed = _owner_plan(CANDIDATE, "pre-lease", "", window_ack=OWNER_DIGEST)
+    assert crossed.refusals == ("window_journal_open",)
+
+
+@pytest.mark.parametrize(
+    "facts",
+    (
+        *(replace(CANDIDATE, owner_start_state=code, owner_start_sha256="") for code in ("absent", *OWNER_START_REFUSALS)),
+        replace(CANDIDATE, owner_start_sha256=""),
+        replace(CANDIDATE, owner_start_sha256="not-a-digest"),
+        # A digest beside a code that is not ``candidate`` is never one to acknowledge.
+        *(replace(CANDIDATE, owner_start_state=code) for code in ("absent", "owner_start_ambiguous", "owner_start_none")),
+    ),
+    ids=lambda facts: f"{facts.owner_start_state}:{facts.owner_start_sha256[:6] or 'no-digest'}",
+)
+def test_only_a_candidate_with_a_digest_can_be_acknowledged(facts: WindowFacts) -> None:
+    for given in ("", OWNER_DIGEST, facts.owner_start_sha256):
+        plan = _owner_plan(facts, "pre-lease", given)
+        assert plan.refusals == ("window_journal_open",), (facts.owner_start_state, given)
+        summary = plan.public_summary()
+        assert summary["owner_start_recovery"] is False
+        # The summary carries a digest only for a candidate: nothing else is ever one to ack.
+        candidate = facts.owner_start_state == "candidate"
+        assert summary["owner_start_sha256"] == (facts.owner_start_sha256 if candidate else "")
+
+
+def test_a_closed_or_absent_journal_needs_no_owner_start_ack() -> None:
+    for state in ("absent", "closed"):
+        plan = _owner_plan(replace(BLUE, journal_state=state), "pre-lease", OWNER_DIGEST)
+        assert plan.code == "none" and plan.owner_start_ack == "not_required"
+        assert plan.public_summary()["owner_start_recovery"] is False
+
+
+def test_the_owner_start_fields_never_move_a_window_digest() -> None:
+    for reasons, digest in PINNED_DIGESTS.items():
+        plain = _facts(*reasons)
+        assert window_plan(plain, position="pre-lease", acknowledgement="").sha256 == digest, reasons
+        marked = replace(
+            plain,
+            journal_state="window_refused",
+            deadman_state="deadman_skipped",
+            owner_start_state="candidate",
+            owner_start_sha256=OWNER_DIGEST,
+            owner_start_creator="other",
+        )
+        for position in ("pre-lease", "pre-apply"):
+            assert _owner_plan(marked, position, OWNER_DIGEST).sha256 == digest, (reasons, position)
+            assert _owner_plan(marked, position, OWNER_DIGEST).canonical == window_plan(
+                plain, position=position, acknowledgement=""
+            ).canonical
+
+
+def test_a_recovering_owner_start_that_also_needs_a_window_still_needs_the_windows_own_ack() -> None:
+    facts = replace(_facts("WR3"), journal_state="window_open", owner_start_state="candidate", owner_start_sha256=OWNER_DIGEST)
+    unacked = _owner_plan(facts, "pre-lease", OWNER_DIGEST)
+    assert unacked.refusals == ("window_unacked",), "the journal passes; the new window is its own ack"
+    acked = _owner_plan(facts, "pre-lease", OWNER_DIGEST, window_ack=unacked.sha256)
+    assert acked.code == "window" and not acked.refusals and acked.public_summary()["owner_start_recovery"] is True
+
+
+@pytest.mark.parametrize(
+    "unreviewed",
+    (
+        {"owner_start_state": "deployment-start-PLACEHOLDER"},
+        {"deadman_state": "deadman_restarted by owner@lender.example"},
+        {"owner_start_creator": "owner@lender.example"},
+    ),
+    ids=("owner-start", "dead-man", "creator"),
+)
+def test_an_unreviewed_recovery_code_never_reaches_a_public_summary(unreviewed: dict[str, str]) -> None:
+    plan = _owner_plan(replace(CANDIDATE, **unreviewed), "pre-lease", "")
+    with pytest.raises(ValueError, match="unreviewed recovery code"):
+        plan.public_summary()
+
+
+def test_the_owner_start_summary_carries_codes_and_the_digest_only() -> None:
+    plan = _owner_plan(replace(CANDIDATE, deadman_state="deadman_skipped", owner_start_creator="other"), "pre-lease", "")
+    public = json.dumps(plan.public_summary(), sort_keys=True)
+    assert "PLACEHOLDER" not in public and "/Workspace" not in public and "@" not in public
+    summary = plan.public_summary()
+    assert {key: summary[key] for key in ("journal_state", "deadman_state", "owner_start", "owner_start_creator", "owner_start_ack")} == {
+        "journal_state": "window_refused",
+        "deadman_state": "deadman_skipped",
+        "owner_start": "candidate",
+        "owner_start_creator": "other",
+        "owner_start_ack": "absent",
+    }
+    assert "deployment-blue-PLACEHOLDER" in json.dumps(plan.full(), sort_keys=True), "ids stay in the private plan"
+
+
+def test_the_plan_prints_the_owner_start_route_as_codes_and_the_digest(capsys: pytest.CaptureFixture[str]) -> None:
+    from tools.databricks import quiesce_window
+
+    candidate = replace(CANDIDATE, deadman_state="deadman_skipped", owner_start_creator="other")
+    quiesce_window._print_plan(_owner_plan(candidate, "pre-lease", "").public_summary(), refused=True)
+    out = capsys.readouterr()
+    assert (
+        "owner start over the open window: candidate (journal window_refused, dead-man deadman_skipped, creator other); "
+        f"re-pin it on a release with operation_acks owner_start_repin={OWNER_DIGEST}"
+    ) in out.out
+    assert "REFUSED window_journal_open" in out.err
+
+    quiesce_window._print_plan(_owner_plan(candidate, "pre-lease", OWNER_DIGEST).public_summary(), refused=False)
+    assert "repin --from-owner-start" in capsys.readouterr().out
+
+    ambiguous = replace(candidate, owner_start_state="owner_start_ambiguous", owner_start_sha256="")
+    quiesce_window._print_plan(_owner_plan(ambiguous, "pre-lease", "").public_summary(), refused=True)
+    assert "the open window has no owner start a release can re-pin: owner_start_ambiguous (" in capsys.readouterr().out
+
+    quiesce_window._print_plan(window_plan(BLUE, position="pre-lease", acknowledgement="").public_summary(), refused=False)
+    assert "owner start" not in capsys.readouterr().out, "an install with no open window prints nothing new"

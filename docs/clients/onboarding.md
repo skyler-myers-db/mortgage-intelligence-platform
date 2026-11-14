@@ -307,6 +307,12 @@ Add, only when the plan printed them:
   exit 3 before reading it (section 5); the owner attests the kept App
   alongside `--post-first-install`, and the resumed release carries the ack
   (without it, it refuses `metastore_authority` before the lease);
+- `owner_start_repin=<sha256>` in the same `operation_acks` input (release
+  only): an earlier run ended inside its quiesce window and the owner started
+  the App by hand. A plan prints the digest, and the release that carries it
+  re-pins that start before anything else (docs/deployment.md, "Owner
+  break-glass"; without it the plan and the release refuse
+  `window_journal_open` before the lease);
 - `-f expected_active_deployment_sha256=<sha256>`: the active deployment the
   plan printed (release only), so the run refuses before its lease if the App
   moved.

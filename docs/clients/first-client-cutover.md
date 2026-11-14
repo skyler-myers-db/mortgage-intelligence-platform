@@ -93,9 +93,11 @@ What is left is no code change:
 - **The owner gives two things:** the metastore owner's attestation of the
   App's metastore privileges (S0(b′)) for every adopt, plan, unadopt and
   release run, and a clean rollback-scope check (step 7).
-- **One follow-up stops nothing:** an owner break-glass re-pin over an open
-  quiesce window (the end of this section). The CI-signed freeze and thaw
-  marker is on `main` (wave 7c): steps 6b and 13.
+- **No follow-up is left in this list:** both that it named are closed on
+  `main` (wave 7c): a release re-pins an owner's break-glass start over an
+  open quiesce window, with the exact `owner_start_repin` digest a plan prints
+  (step 12's rollback; docs/deployment.md, "Owner break-glass"). The CI-signed
+  freeze and thaw marker is on `main` (wave 7c): steps 6b and 13.
 
 No step from 6 on has run live. A refusal that the two walks below did not
 predict is a new blocker: stop where it appears.
@@ -183,13 +185,13 @@ and 12: the window's digest moving after plan #3, `main` moving after plan #3
 start, an attestation past its 29 days, a Genie turn over budget, and the
 release postflight's run_as check.
 
-One smaller gap is noted at its step, and it does not stop the cutover: an open
-quiesce window that the owner restarts by hand stays refused
-(docs/deployment.md, "Owner break-glass"). It is a follow-up: a reviewed owner
-break-glass re-pin over an open window journal. The other gap this section
-named is closed (wave 7c): the freeze marker needs a signing key no shell
-holds (step 1), so CI signs it (`phase=freeze`, step 6b) and its thaw
-(`phase=thaw`, the end of step 13).
+No smaller gap is left at its step: wave 7c closed both that this section
+named. The freeze marker needs a signing key no shell holds (step 1), so CI
+signs it (`phase=freeze`, step 6b) and its thaw (`phase=thaw`, the end of
+step 13). An open quiesce window that the owner restarts by hand no longer
+stays refused: the next release re-pins that start under its lease, only with
+the owner's exact `owner_start_repin` ack (docs/deployment.md, "The release
+that re-pins an owner start").
 
 ## Decisions taken (the runbook's defaults)
 
@@ -252,7 +254,10 @@ holds (step 1), so CI signs it (`phase=freeze`, step 6b) and its thaw
   and adopt-live refuses `health_sha_not_on_main`. If the owner rewrites first,
   an emergency redeploy of a rewritten `main` commit comes before 10A, and the
   source check runs in a clone fetched after the rewrite.
-- **Owner break-glass for an open window**: a raw `apps start`
+- **Owner break-glass for an open window**: one raw `apps start`, on a
+  `STOPPED` App, after the window's run has ended; never a cancel of a live
+  run, never a second start, never on a contract window. The next release
+  re-pins that start with the exact `owner_start_repin` digest a plan prints
   (docs/deployment.md, "Owner break-glass").
 
 ## Steps at a glance
@@ -321,7 +326,10 @@ the run's page. Approve only the run you dispatched, after reading its inputs.
    catalog and the metastore; the Lakebase instance, its sync catalog and its
    synced tables, through their control-plane reads; the job, pipeline, warehouse,
    experiment and dashboard settings; serving-endpoint and secret-scope ACLs;
-   the Genie space's serialized spec diffed against the repo spec.
+   the Genie space's serialized spec diffed against the repo spec; and the
+   quiesce-window journal's state, which reads `absent` (no governed window
+   has run here; an open one would be an owner break-glass case before any
+   release, docs/deployment.md, "Owner break-glass").
 
    **Not in the read-only pass: the Postgres side.** The database, relation
    and function owners (`datdba`, `relowner`, `proowner`) and
@@ -338,6 +346,7 @@ the run's page. Approve only the run you dispatched, after reading its inputs.
 ```bash
 databricks apps get <app-name> -p <owner-profile> -o json | jq '{compute: .compute_status.state, active: (.active_deployment != null), pending: (.pending_deployment != null)}'
 databricks apps list-deployments <app-name> -p <owner-profile>
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.quiesce_window status --unverified --app-name <app-name>
 ```
 
 **Proof:** the snapshot is hashed; the newest deployment's env-name set has no
@@ -1239,10 +1248,14 @@ is `SUCCEEDED` and the newest of any state, and `default_is_active_source` is
 true. Then measure, read-only, what spike S7's follow-up needs (#334's
 stranded-start check compares env values, which Databricks may redact): for the
 new start's deployment and for the previous newest one (both ids from
-`list-deployments`, kept in your terminal), record only these counts:
+`list-deployments`, kept in your terminal), record only these counts, and one
+boolean for the new start: whether its `creator` is the user who started it
+(`<owner-user-name>`). An owner-start plan prints a creator class (`deployer`,
+`other`, `unknown`; step 12's rollback), and this says whether that class
+means anything here:
 
 ```bash
-databricks apps get-deployment <app-name> <deployment-id> -p <owner-profile> -o json | jq '{env_vars: ((.env_vars // []) | length), with_a_value: ([(.env_vars // [])[] | select((.value // "") != "")] | length)}'
+databricks apps get-deployment <app-name> <deployment-id> -p <owner-profile> -o json | jq '{env_vars: ((.env_vars // []) | length), with_a_value: ([(.env_vars // [])[] | select((.value // "") != "")] | length), creator_is_the_starter: (.creator == "<owner-user-name>")}'
 ```
 
 Also now, with the App up: one real Genie turn (BUDGET_EXCEEDED means the owner
@@ -1666,10 +1679,52 @@ disagreed: stop and report it.
 
 **Rollback:** before activation, blue keeps serving (`blue_serving`). Inside
 the window, the run starts and re-pins blue, or the dead-man restarts it at the
-deadline and the next run re-pins it (`repin --from-deadman`). If the outage
-cannot wait for the dead-man: the owner break-glass (docs/deployment.md, "Owner
-break-glass"). After activation, the tier-b restore of the adopted copy from the
-record.
+deadline and the next run re-pins it (`repin --from-deadman`). After
+activation, the tier-b restore of the adopted copy from the record.
+
+**If the outage cannot wait for the dead-man: the owner break-glass**
+(docs/deployment.md, "Owner break-glass", whose five rules these are). Never
+cancel a live run inside its window: a cancel kills the runner within ten
+seconds, long before its EXIT trap could start and re-pin blue. Once the run
+has ended, wait until the compute is `ACTIVE` or `STOPPED` (never `STARTING`)
+and read the journal:
+
+```bash
+databricks apps get <app-name> -p <owner-profile> -o json | jq -r .compute_status.state
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.quiesce_window status --unverified --app-name <app-name>
+```
+
+Start only a `STOPPED` App, once, and never a contract window (`blue
+restorable False`). A journal that reads `window_starting` over an `ACTIVE`
+compute needs no start: the dead run's own start is serving. Only then, in its
+own paste (never pasted with the reads):
+
+```bash
+databricks apps start <app-name> -p <owner-profile>
+```
+
+Then tell the agent that you started it. Right before the release, dispatch a plan; it
+refuses `window_journal_open` before the lease (read-only) and prints `owner
+start over the open window: candidate (...)` with `owner_start_repin=<sha256>`,
+and the window's own sha256 when run 1 still needs its window. Then dispatch
+the release at the same commit with that digest:
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f operation_acks="accepted_exposure_plan=<sha256> metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="owner_start_repin=<sha256> quiesce_window=<sha256> accepted_exposure_plan=<sha256> restore_unverified_frontend=<sha256> metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+```
+
+The release can take the lease only once the dead run's lease has expired,
+four hours after its last heartbeat. The digest names the dead-man's marker
+state, which changes at its deadline (`absent` becomes `deadman_skipped`): an
+`owner_start_unacked` refusal prints the digest to use, so plan again and
+dispatch at once. Under the lease, before step 0a's fail-closed arm, the run
+re-pins the owner's start with the window's own proofs and closes the journal
+(`repin --from-owner-start`), then continues as step 12 does; the frontend ack
+is plan #3's while `main` has not moved. Any refusal (`owner_start_...`)
+exits 2 with the App left serving. What stays refused, for good: a second
+start (`owner_start_ambiguous`), a contract window, and a start of a folder
+that no longer holds blue's tree (`owner_start_unproven`).
 
 ## Step 13. Post-release verification
 

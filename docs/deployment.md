@@ -710,13 +710,23 @@ itself; freeze again while the cutover is still open.
 ### Owner break-glass: a raw `apps start`
 
 Owner-only, with the owner's own CLI profile for the client's workspace
-(`<owner-profile>`; never an agent's decision). `apps start` creates a new
+(`<owner-profile>`; never an agent's decision, and an agent never infers that
+the owner started the App: the owner says so). `apps start` creates a new
 SNAPSHOT deployment of the App's current `default_source_code_path` bytes,
 with the newest deployment's env-name set (spike S7); it never deploys other
-source. Read the window journal first, read-only (codes and booleans only):
+source. Read the window journal and the App's compute state first, read-only
+(codes and booleans only):
 
 ```bash
 DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.quiesce_window status --unverified --app-name <app-name>
+databricks apps get <app-name> -p <owner-profile> -o json | jq -r .compute_status.state
+```
+
+Then start only a `STOPPED` App, and only when the journal is one the bullets
+below allow (never a contract window). The start is its own paste, never
+pasted with the reads:
+
+```bash
 databricks apps start <app-name> -p <owner-profile>
 ```
 
@@ -730,15 +740,46 @@ databricks apps start <app-name> -p <owner-profile>
   path: the dead-man starts blue at the job's deadline, within its start
   budget, and the next governed run re-pins that start (`repin
   --from-deadman`). Break glass only when the outage cannot wait. The raw start
-  serves the App again, but it is not a governed restore: no proof ran, the
-  window's journal stays open and no dead-man restart is recorded, so every
-  later governed run refuses `window_journal_open` before its lease. On `main`
-  no tool re-pins an owner start or closes that journal, so "the next run
-  re-pins" is not yet true for this case: the governed path stays blocked
-  until a reviewed follow-up adds that re-pin. Record the start (when, which
-  deployment, why) for it. A dead-man still armed then finds the App no longer
-  its stopped blue at its deadline, records `deadman_skipped` and starts
-  nothing.
+  serves the App again, but it is not a governed restore: no proof ran and the
+  window's journal stays open, so every later governed run refuses
+  `window_journal_open` before its lease until one release re-pins that start
+  with the owner's exact digest ack ("The release that re-pins an owner
+  start", below). A dead-man still armed then finds the App no longer its
+  stopped blue at its deadline, records `deadman_skipped` and starts nothing.
+  The rules, in this order:
+
+  1. **Never cancel a live run inside a window.** A GitHub cancel sends
+     SIGINT, SIGTERM 7.5 s later and kills the process tree 2.5 s after that.
+     The EXIT trap's start, proof and re-pin take minutes, so a cancelled run
+     does not restore blue: it leaves `window_starting` or `window_started`,
+     often with a start in flight. The run's own close, its watchdog and the
+     dead-man bound it. Let it end.
+  2. **After the run has ended, wait until the compute is `ACTIVE` or
+     `STOPPED`, never `STARTING`,** then read the status line above. Never
+     start a `STARTING` App: a second start leaves two deployments nobody
+     journaled (`owner_start_ambiguous`), which has no governed exit. If the
+     journal reads `window_starting` and the compute is `ACTIVE`, the dead
+     run's own start is serving: start nothing, and go to rule 4, whose plan
+     names that start as the candidate.
+  3. **Start once**, with the command above, and never on a contract window
+     (next bullet). Tell the agent that you started it, when and why.
+  4. **Dispatch a plan right before the release** (`-f phase=plan`). It
+     refuses `window_journal_open` before the lease, read-only, and prints
+     `owner start over the open window: candidate (journal <state>, dead-man
+     <state>, creator <class>); re-pin it on a release with operation_acks
+     owner_start_repin=<sha256>`. That digest names the window (its plan
+     digest and its lease), its deployment baseline, the dead-man's marker
+     state and the one deployment. The marker state is in it and changes at
+     the dead-man's deadline (`absent` becomes `deadman_skipped`), so a digest
+     printed before the deadline is refused after it: plan again.
+  5. **Dispatch the release with that digest** in `operation_acks`, at the
+     dead run's commit when its window was a WR1 (its bundle payload is the
+     bindings blue restarted on). It can take the lease only after the dead
+     run's lease has expired, four hours after its last heartbeat
+     (`LEASE_TTL`), unless that run released it.
+
+  The two dispatch lines, and everything the release proves and refuses, are
+  under "The release that re-pins an owner start" below.
 - **Never break glass on a contract window** (the window plan's
   `blue_restorable` false, the dead-man's `deadman_left_stopped`): blue's code
   would serve the migrated schema. That outage is the acknowledged one; escalate
@@ -757,6 +798,114 @@ databricks apps start <app-name> -p <owner-profile>
   printed both digests
   ([docs/clients/first-client-cutover.md](clients/first-client-cutover.md),
   10B, "Supersede").
+
+### The release that re-pins an owner start
+
+The plan that prints the digest, then the release that carries it (rules 4
+and 5 above). This plan stops at `window_journal_open` inside the pre-lease
+plan gate, so it prints only the `owner_start_repin` digest and the window's
+own sha256: it never reaches the active deployment's digest or the
+frontend-ack prediction, which a completed plan prints after that gate. The
+release also carries what it carried before: the window's own
+`quiesce_window` digest when the plan still predicts a window, and the
+`restore_unverified_frontend` ack when its blue needs one, from the last plan
+that completed (in the first-client cutover, plan #3's while `main` has not
+moved). It carries no `expected_active_deployment_sha256`: the App now serves
+the owner's start, which the `owner_start_repin` digest already names. A local
+release hands the digest in as the one-run export `MIP_ACK_OWNER_START_REPIN`
+(shell only, never a `.env.local` line).
+
+```bash
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=plan -f operation_acks="accepted_exposure_plan=<sha256> metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=release -f owner_attestation=<profile-ack> -f operation_acks="owner_start_repin=<sha256> accepted_exposure_plan=<sha256> metastore_app_grants=<sha256>" -f acknowledge_single_maintainer_break_glass=true
+```
+
+**How an owner start is recognised**
+(`tools/databricks/quiesce_window_recovery.py`, read-only). `quiesce_window
+open` journals the App's deployment ids with `window_open`, listed after its
+last blue re-check and right before the stop (`start_baseline_ids`; the window
+is refused if blue is not among them). A deployment is new when it is outside
+that baseline, and known when the journal names it as the run's own start or
+the dead-man's marker names it as its start. The candidate is the one
+deployment that is new and not known, when all of this holds: the window is
+restorable; the App is `ACTIVE` with nothing pending and serves that
+deployment; it is the App's newest deployment of any state and SUCCEEDED; its
+source is blue's restore source, and so is the App's default source; and it
+has the shape of a start against the deployment it copied (mode SNAPSHOT, no
+git source, the same command, the same env rows as `get_deployment` shows
+them). The plan's public lines carry codes and the digest only.
+
+**Why the ack is always required.** That shape check cannot see an env value
+or a `value_from`: spike S7 measured that `get_deployment` returns env NAMES
+only. An `apps deploy` of blue's folder that keeps blue's env names and
+changes a literal value or re-points a `value_from` therefore reads exactly
+like a start, and a start made after it copies that env config. No API read
+tells the two apart. The `owner_start_repin` digest is the owner's statement
+that the deployment the App serves is their raw start and nothing else, for
+this window and this deployment; it is never inferred, and a tool never
+supplies it. The printed creator class (`deployer`, `other`, `unknown`) is
+information for the reader, outside the digest and the decision.
+
+**What the release does.** Before the lease its window plan classifies the
+open journal again and passes it only when `MIP_ACK_OWNER_START_REPIN` (the
+`operation_acks` pair `owner_start_repin=<sha256>`, admitted in the release
+phase only) equals the candidate's digest; the public line says
+`owner_start_recovery`. Under the lease, first in step 0a and before the
+fail-closed arm and the treatment quiesce, `app_deployment_rollback repin
+--from-owner-start` (`app_core_rollback repin --from-owner-start` for a v7
+core blue) classifies once more, requires the same exact digest, requires
+blue's restore folder to keep the journal's full-tree digest, and runs the
+tier's own re-pin with the dead-man re-pin's proofs: the record names blue;
+the deployment's `/src/` snapshot has the journal's digest and its env-name
+set is the record's; it is current; the live bindings are the record's or
+exactly this run's bundle payload; health holds. It signs the record's next
+version (`predecessor_deployment_id` blue) and closes the journal
+(`closed_by: owner_start_repin`, `repinned_deployment_id` the owner's start;
+a governed start the dead run journaled keeps its place as
+`start_deployment_id`). It starts, stops, deploys and updates nothing. The
+release then continues from step 0a; a window it still needs keeps its
+pre-lease `quiesce_window` ack at the pre-apply recheck, as after a dead-man
+re-pin.
+
+**What stays refused.** Every refusal leaves the App serving what it serves
+and the journal open, and exits 2 before the fail-closed arm with the lease
+released. Until the record's new version is saved, the record is unchanged
+too; a health failure after that save leaves it re-pinned, and the same ack
+then resumes at the journal close. A candidate that is gone by step 0a (the
+App went down, or a second start landed, after the pre-lease plan matched the
+ack) is refused there too: an `owner_start_repin` ack over an open journal
+reaches `repin --from-owner-start` whatever the status reads (only a dead-man
+restart the App serves keeps `repin --from-deadman`), and that tool classifies
+again and exits with its code. The run never goes on into step 0a over it.
+
+| Code | What it means | The exit |
+| --- | --- | --- |
+| `owner_start_unacked` | the ack is missing, malformed or another plan's; the line prints the digest | review, then dispatch the release with it |
+| `owner_start_contract_window` | a contract window: blue cannot run on the migrated schema | none here; escalate |
+| `owner_start_no_baseline` | the journal holds no baseline with blue in it: a window journaled before this baseline existed | none (no such window exists on an install whose windows all opened after this change) |
+| `owner_start_not_running` | the App is not `ACTIVE`, or something is pending, or nothing is active | wait for `ACTIVE`; a `STOPPED` App is rule 3 |
+| `owner_start_none` | nothing new appeared: the App serves blue or the dead run's own journaled start (`window_started`, `window_proven`) | none yet: resuming a dead run's own window is a separate follow-up |
+| `owner_start_ambiguous` | more than one deployment nobody journaled or marked (a second start, a start beside the dead-man's unreadable one), a new one the App does not serve, or a listing with an unreadable entry | none: nothing can tell which one the owner means |
+| `owner_start_not_current` | the new deployment is not the newest, not SUCCEEDED, or not from blue's restore source | none for that deployment |
+| `owner_start_not_a_start` | its mode, git source, command or env rows are not a start's | none for that deployment |
+| `owner_start_marker_unreadable` | the dead-man's marker is not this window's or cannot be read | repair is the owner's (the lease root) |
+| `owner_start_deadman` | the App serves the dead-man's own restart | nothing to do: `repin --from-deadman` re-pins it with no ack |
+| `owner_start_no_window` | no window is open | nothing to re-pin |
+| `owner_start_unproven` | blue's restore folder changed since the window opened, or is gone | none: the start snapshotted other bytes than blue |
+| the re-pin's own codes | `start_tree_digest`, `start_env_names`, a binding or health refusal, a record that no longer names blue | as for the window's own re-pin |
+
+**While the run is still alive.** The run's own `quiesce_window start`
+refuses `window_start_baseline_moved`, before any journal write, start or
+stop, unless the App is still the stopped App the window left: compute
+`STOPPED`, nothing pending, and no deployment outside the journaled baseline.
+A start's deployment id is invisible for about 100 s while the compute is
+`STARTING` (spike S7), so the compute state, not the listing, catches an
+owner start in flight. Only new ids count: a deployment that left the listing
+never keeps a stopped App from its start. The window then stays open with the
+App as the owner left it, which is the break-glass case above. Before this
+guard the run took a fresh baseline that already held the owner's start,
+started a running App and stopped the owner's start again when its own start
+could not be read.
 
 ## App Python dependencies: the deps-digest line
 
@@ -3277,9 +3426,12 @@ binding update, WR2 before the role convergence, WR3 before the migration):
 it re-validates the plan and the ack, admits it against the job budget,
 re-proves blue is the App's last deployment, arms the dead-man (M0-PR9,
 below), admits and re-proves blue once more, journals `window_open`
-(`<lease root>/<app>.quiesce-window.json`, signed) and then stops the App,
-identity-pinned. It closes right after the
-Lakebase migration: journal `window_starting`, then `apps start`; wait for
+(`<lease root>/<app>.quiesce-window.json`, signed) with the App's deployment
+ids (the baseline an owner's break-glass start is later told apart by) and
+then stops the App, identity-pinned. It closes right after the
+Lakebase migration: refuse unless the App is still the stopped App the window
+left (`window_start_baseline_moved`; "Owner break-glass"), journal
+`window_starting`, then `apps start`; wait for
 **the deployment the start created** (never "active changed"); require
 SUCCEEDED; prove its source is blue's restore source, that folder's full-tree
 digest is unchanged, its `/src/` snapshot has the same digest and its env-name
@@ -3369,9 +3521,9 @@ creates a new SNAPSHOT deployment from the current bytes of
 the start response nor a GET right after it shows that deployment: the
 compute turns ACTIVE after 96-108 s (a trivial App), and only then does the
 new id show, about 1 s as `pending_deployment`, then as `active_deployment`.
-So `start` lists the App's deployment ids first, journals them with
-`window_starting` (journal version 2), starts without waiting and polls, at
-most every 5 s, for exactly one id outside that list (two refuse
+So the window journals the App's deployment ids with `window_open` (journal
+version 2; `window_starting` keeps them), and `start` starts without waiting
+and polls, at most every 5 s, for exactly one id outside that list (two refuse
 `start_ambiguous`, none `start_timeout`); a resumed start finds it against the
 journaled list. A STOPPED App's GET has no `active_deployment`, and a FAILED
 deployment becomes active and moves the default source, so blue is current
@@ -3582,13 +3734,21 @@ run retries a transient failure (a re-pin already signed resumes at the
 journal close). A WR1 window restarted on the dead runner's applied bindings
 re-pins only from that same commit, whose bundle payload is exactly those
 bindings: re-run the dead window's commit, then roll forward. An App no longer
-serving the dead-man's start (stopped or restarted by hand) needs the owner
-break-glass (under the emergency recipe). Any other open journal still refuses before the lease
-(`window_journal_open`): a contract window the dead-man left stopped, a start
-it could not prove, or a dead-man that has not reached its deadline. That is
-the owner break-glass case: a raw `apps start` with the owner's U2M profile
-("Owner break-glass: a raw `apps start`", under the emergency recipe, which
-also says what the next governed run does after one today).
+serving the dead-man's start (stopped or restarted by hand) is no longer the
+dead-man's path: the plan reads its marker as `deadman_superseded` and refuses
+before the lease, where it used to pass and then refuse under every lease.
+One that stops serving it between that plan and step 0a still reaches
+`repin --from-deadman` there, which refuses it before the fail-closed arm.
+Any other open journal still refuses before the lease
+(`window_journal_open`). A start the dead-man could not prove, or a dead-man
+that has not reached its deadline, is the owner break-glass case: a raw `apps
+start` with the owner's U2M profile ("Owner break-glass: a raw `apps start`",
+under the emergency recipe), which one release then re-pins with the owner's
+exact `owner_start_repin` digest ack ("The release that re-pins an owner
+start"). A contract window the dead-man left stopped is never one: blue's code
+would serve the migrated schema, so the owner never breaks glass on it and
+escalates instead, and an owner start over it is never re-pinned
+(`owner_start_contract_window`).
 
 **The workflow.** `deploy-dev.yml`'s deploy job (M1-PR7) first records
 `MIP_JOB_DEADLINE_EPOCH` from its phase's own timeout, and a step after the
@@ -5765,7 +5925,11 @@ satisfies another:
   adopt, unadopt; never data, which never pins and skips the probes),
   `restore_unverified_frontend` (release: the core release's pre-lease
   prediction, step 0a, the pre-activation proof and the tier-b restore read
-  it; a plan prints it, B3), `data_ledger_supersede` and `data_ledger_rerun`
+  it; a plan prints it, B3), `owner_start_repin` (release: an owner's
+  break-glass start over an open quiesce window, which the release's window
+  plan and its `repin --from-owner-start` both recompute; a plan prints it
+  and carries none, since a plan closes no journal: "Owner break-glass"),
+  `data_ledger_supersede` and `data_ledger_rerun`
   (data),
   `metastore_app_grants` (plan, adopt, unadopt, release; never data, whose
   run never reads it: "Metastore authority"), `freeze_thaw` (thaw only: the

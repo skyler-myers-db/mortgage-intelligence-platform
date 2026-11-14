@@ -109,6 +109,11 @@ OPERATION_ACKS: dict[str, OperationAck] = {
     # (tools/databricks/activation_prediction.py). no_rollback_for has no
     # carrier on purpose: it would drop blue's only rollback in one field.
     "restore_unverified_frontend": OperationAck("MIP_ACK_RESTORE_UNVERIFIED_FRONTEND", frozenset({"release"})),
+    # An owner's break-glass start over an open quiesce window: the release's
+    # pre-lease window plan and its repin --from-owner-start both recompute the
+    # plan and need it exact. --phase plan prints the digest and carries none:
+    # a plan closes no journal (tools/databricks/quiesce_window_recovery.py).
+    "owner_start_repin": OperationAck("MIP_ACK_OWNER_START_REPIN", frozenset({"release"})),
     "data_ledger_supersede": OperationAck("MIP_ACK_DATA_LEDGER_SUPERSEDE", frozenset({"data"})),
     "data_ledger_rerun": OperationAck("MIP_ACK_DATA_LEDGER_RERUN", frozenset({"data"})),
     # The metastore owner's attestation of the App's metastore privileges (spike
