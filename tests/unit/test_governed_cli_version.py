@@ -149,6 +149,14 @@ def test_the_deployment_doc_names_the_cli_the_governed_job_installs() -> None:
     assert f"{GATE_REFUSES}, so the pin is proven on the plan the binary actually made" in text
     assert f"`cli_version` to exactly `{REVIEWED_CLI_VERSION}` (no `v` prefix, padding, suffix or other release)" in text
     assert f'`REFUSED malformed_plan bundle.plan (cli_version "1.7.0", reviewed "{REVIEWED_CLI_VERSION}")`' in text
+    # Where: before the lease first, and again under it.
+    assert (
+        "first before the lease (pre-lease, and the adopt or unadopt plan), and again under it "
+        "(pre-apply, and apply's recompute)"
+    ) in text
+    assert "only the `run the reviewed CLI` half applies here (no parser follow-up clears it)" in text
+    assert "The monitor scheduler gate's line carries that remedy too." in text
+    assert "`bind_failed: PlanShapeError during the binds (malformed_plan ...)`" in text
 
 
 def test_the_runbook_cli_pin_row_says_the_gate_refuses_another_cli() -> None:
@@ -158,9 +166,27 @@ def test_the_runbook_cli_pin_row_says_the_gate_refuses_another_cli() -> None:
     row = rows[0]
     assert "holds that pin equal to the parser's `REVIEWED_CLI_VERSION`" in row
     assert f"{GATE_REFUSES}: the parser, the plan gate's pre-lease and pre-apply check" in row
-    assert f"each hold it to exactly `{REVIEWED_CLI_VERSION}` before the lease" in row
+    assert (
+        f"each hold it to exactly `{REVIEWED_CLI_VERSION}`, first before the lease "
+        "(pre-lease, and the adopt or unadopt plan: `REFUSED malformed_plan bundle.plan"
+    ) in row
+    assert "exit 2, nothing changed) and again under it (pre-apply, and apply's recompute)" in row
+    assert "only its `run the reviewed CLI` half applies here: no parser follow-up clears it" in row
     assert f'(cli_version "1.7.0", reviewed "{REVIEWED_CLI_VERSION}")' in row
     assert "A move to another CLI re-runs S10 on it before step 7." in row
+
+
+def test_the_runbook_10b_refusal_names_the_reviewed_cli_remedy_and_the_post_bind_class() -> None:
+    text = " ".join(RUNBOOK.read_text(encoding="utf-8").split())
+
+    assert (
+        f'`[mip-adopt] REFUSED malformed_plan bundle.plan (cli_version "<found>", reviewed "{REVIEWED_CLI_VERSION}")`'
+        ", exit 2. It prints the same `malformed_plan` remedy, but only its `run the reviewed CLI` half applies: "
+        "no parser follow-up clears it"
+    ) in text
+    assert "`[mip-adopt] REFUSED bind_failed: PlanShapeError during the binds (malformed_plan <kind>.<key> (<field class>))`" in text
+    # The half the docs quote is the printed remedy's.
+    assert "; run the reviewed CLI, or extend" in bundle_plan_gate.REMEDIES["malformed_plan"]
 
 
 @pytest.mark.parametrize("found", ("", "v1.10.0", "1.10.0 ", "1.10.0-dev", "1.10.1", "1.7.0"))

@@ -5848,10 +5848,13 @@ key.
   binary actually made: the parser holds the document's `cli_version` to
   exactly `1.10.0` (no `v` prefix, padding, suffix or other release), and so
   do the plan gate's pre-lease and pre-apply check, the adopt and unadopt
-  plan and the monitor scheduler gate, before the lease. The public line
-  names both versions, `REFUSED malformed_plan bundle.plan (cli_version
-  "1.7.0", reviewed "1.10.0")`, with the `malformed_plan` remedy: run the
-  reviewed CLI.
+  plan and the monitor scheduler gate: first before the lease (pre-lease, and
+  the adopt or unadopt plan), and again under it (pre-apply, and apply's
+  recompute). The public line names both versions, `REFUSED malformed_plan
+  bundle.plan (cli_version "1.7.0", reviewed "1.10.0")`, with the
+  `malformed_plan` remedy, of which only the `run the reviewed CLI` half
+  applies here (no parser follow-up clears it). The monitor scheduler gate's
+  line carries that remedy too.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, freeze and thaw 15, and its first step turns that into
   `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout
