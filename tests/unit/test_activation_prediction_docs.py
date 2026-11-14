@@ -5,7 +5,10 @@ docs/deployment.md is where a refusal's remedy is looked up, so their claims
 are pinned to the code: which verdicts the no-rollback ack defers (three, not
 every one the prediction can refuse), which verdicts ``env-names`` prints and
 which of them lets the cutover go on, and what the Blockers section says still
-blocks the first-client cutover once B3 is on main.
+blocks the first-client cutover once B3 is on main. The runbook's step 4 names
+every profile field whose env name the comparison can add or lack, and step 6
+says what ``lacks`` and ``adds`` each ask of the profile, pinned to the real
+payload builder in the shell a plan has at its live checks.
 """
 
 from __future__ import annotations
@@ -17,10 +20,23 @@ from typing import Any
 import pytest
 
 from tests.fixtures import rollback_records as rr
-from tests.unit.test_activation_prediction import INPUTS, LEASE, NAMES, _predict, _world, builder
+from tests.fixtures.client_profiles import IDENTITY_IDS, core_tier_profile, env_file_text
+from tests.fixtures.live_workspace import LiveWorkspace
+from tests.unit.test_activation_prediction import (
+    INPUTS,
+    LEASE,
+    NAMES,
+    _predict,
+    _workspace,
+    _world,
+    builder,
+)
+from tests.unit.test_settings_d0_env_parity import D0_NAMES, D0_OPERATOR_INPUTS, _d0_operator_config
+from tools.clients import profile as views
+from tools.clients.environment import RawProfile, resolve
 from tools.databricks import activation_prediction as ap
+from tools.databricks import app_deploy_payload, core_blue
 from tools.databricks import app_rollback_record_contract as contract
-from tools.databricks import core_blue
 
 REPO = Path(__file__).resolve().parents[2]
 DEFERRED = {"unverified_frontend_unacked", "no_rollback_proof", "frontend_ack_unpredictable"}
@@ -160,3 +176,88 @@ def test_the_blockers_section_says_plainly_that_no_code_gap_is_left_and_that_no_
     assert "## Step 12. Release (run 1) **Who:** CI." in runbook
     release = runbook[runbook.index("## Step 12. Release (run 1)") : runbook.index("## Step 13.")]
     assert "metastore_app_grants=<sha256> restore_unverified_frontend=<sha256>" in release
+
+
+# --- step 4's optional fields and step 6's remedy (the snapshot's gap g1) -----------------------
+
+APPROVERS = "MIP_APPROVER_IDENTITIES"
+# The names the emergency recipe's D0 set holds only because its shell set them.
+D0_PROFILE_SET = ("MIP_ADMIN_EMAILS", "MIP_APPROVER_EMAILS", APPROVERS)
+
+
+def test_step_4_names_every_field_the_env_name_comparison_can_lack_or_add_and_step_6_says_what_to_do() -> None:
+    runbook = _flat("docs/clients/first-client-cutover.md")
+    step_4 = runbook[runbook.index("## Step 4. Bootstrap") : runbook.index("## Step 5.")]
+    optional = step_4[step_4.index("**Optional fields, and blue's env names.**") : step_4.index("**Commands,** in this order:")]
+    for name in (*views.OPTIONAL_PAYLOAD_ENV_NAMES, APPROVERS, "MIP_ADMIN_IDENTITIES"):
+        assert f"`{name}`" in optional, f"step 4 does not name {name}"
+    assert set(D0_PROFILE_SET) <= set(D0_NAMES), "the emergency recipe's set holds the three step 4 points at"
+    assert not (set(views.OPTIONAL_PAYLOAD_ENV_NAMES) - set(D0_PROFILE_SET)) & set(D0_NAMES)
+    assert APPROVERS not in views.OPTIONAL_PAYLOAD_ENV_NAMES and APPROVERS not in ap.GOVERNED_DERIVED_NAMES
+    assert "MIP_ADMIN_IDENTITIES" in ap.GOVERNED_DERIVED_NAMES, "the one identity list the deploy derives"
+    for words in (
+        "exported only when the profile sets them",
+        "is reported `lacks <name>`",
+        "is left out of the rebuild, so it is harmless",
+        f"`{APPROVERS}`: no deploy step derives it (unlike `MIP_ADMIN_IDENTITIES`)",
+        "Unset while the live set holds it: `lacks`. Set while the live set lacks it: `adds` (it is never left out)",
+        "`MIP_LENDER_IDENTITY_JSON`, `MIP_LENDER_IDENTITY_SHA256`",
+        "presenter mode on (`MIP_PRESENTER_MODE`)",
+        "a `LAKEBASE_DATABASE` other than the default",
+        "a non-canonical Cotality source (`MIP_COTALITY_SOURCE_*`)",
+        "Salesforce bindings on",
+        "Name parity is not value parity",
+    ):
+        assert words in optional, words
+    step_6 = runbook[runbook.index("## Step 6. Plan #1") : runbook.index("## Step 7.")]
+    differs = step_6[step_6.index("`env-name parity DIFFERS") : step_6.index("`env-name parity is LEASE-BOUND")]
+    assert "`lacks <name>`: the live set holds a name this profile does not produce: set the profile field of that name" in differs
+    assert "`adds <name>`: the profile produces a name the live install never had: unset that field or undo that choice" in differs
+    assert "Names only: a value is never compared." in differs and "never start step 7 around it" in differs
+
+
+@pytest.mark.parametrize(
+    ("profile", "live_names", "expected"),
+    (
+        pytest.param({}, set(D0_NAMES), "env-name parity holds", id="every-name-the-live-set-holds-is-set"),
+        pytest.param({"MIP_ADMIN_EMAILS": None}, set(D0_NAMES), "(adds none; lacks MIP_ADMIN_EMAILS)", id="an-unset-role-email-lacks"),
+        pytest.param({APPROVERS: None}, set(D0_NAMES), f"(adds none; lacks {APPROVERS})", id="unset-approver-identities-lacks"),
+        pytest.param({}, set(D0_NAMES) - {APPROVERS}, f"(adds {APPROVERS}; lacks none)", id="set-approver-identities-adds"),
+        pytest.param({}, set(D0_NAMES) - {"MIP_ADMIN_EMAILS"}, "env-name parity holds", id="a-set-optional-name-is-left-out"),
+    ),
+)
+def test_the_real_builder_lacks_and_adds_exactly_as_step_4_says(
+    profile: dict[str, str | None],
+    live_names: set[str],
+    expected: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The deploy path's rebuild: ``.env.local`` is the profile and the shell holds its deploy controls."""
+
+    _d0_operator_config(monkeypatch, tmp_path)  # no builder input from this machine
+    for name in D0_OPERATOR_INPUTS:  # nor the emergency recipe's own shell
+        monkeypatch.delenv(name, raising=False)
+    rr.signing_env(monkeypatch)
+    monkeypatch.setattr(contract, "assert_owned_app_rollback_scope", lambda *_a, **_kw: None)
+    values = core_tier_profile(**profile)
+    env_local = tmp_path / "profile.env.local"
+    env_local.write_text(env_file_text(values), encoding="utf-8")
+    monkeypatch.setattr(app_deploy_payload, "ENV_LOCAL", env_local)
+    controls = views.deploy_controls(resolve(RawProfile(values=values)))
+    for name, value in controls.items():  # resolve_client_profile exports these
+        monkeypatch.setenv(name, value)
+    # The profile sets every optional name: only the ones the live set holds may ride the rebuild.
+    assert {name for name in views.OPTIONAL_PAYLOAD_ENV_NAMES if name in controls} - live_names
+    assert APPROVERS not in controls or APPROVERS not in profile
+    world = _world(tmp_path / "world", names=sorted(live_names))
+    world.secrets.values.clear()  # before an adoption: no record
+    live = LiveWorkspace(values, identity_ids=IDENTITY_IDS)
+
+    code = ap.main(["env-names"], workspace_factory=lambda: _workspace(live, world.apps))
+
+    printed = capsys.readouterr()
+    assert expected in printed.out + printed.err, printed.err
+    assert (code == 0) is (expected == "env-name parity holds")
+    assert ("env-name parity DIFFERS" in printed.err) is (code == 2)

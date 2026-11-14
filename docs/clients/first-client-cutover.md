@@ -30,6 +30,8 @@ This page names no client value. Every one is a placeholder:
 | `<catalog>` | the governed catalog, `MIP_DEFAULT_CATALOG` (`mip`) |
 | `<legacy-owner>` | the identity that deployed the legacy install and owns it today |
 | `<legacy-root>` | its bundle root, `MIP_LEGACY_BUNDLE_ROOT` (`/Workspace/Users/<legacy-owner>/.bundle/mortgage-intelligence-platform/<leaf>`) |
+| `<legacy-experiment-id>` | the id the legacy bundle state binds for `experiments.mip_lead_scoring` (step 1's snapshot holds it; step 6c's private report names it under that key) |
+| `<user>` | the short user name in the CLI's development-mode prefix (`[dev <user>] `) that the legacy install's names carry |
 | `<private-dir>` | a mode-0700 directory outside the checkout for reports and journals |
 | `<sha256>`, `<profile-ack>` | a digest the named read-only plan printed |
 
@@ -50,6 +52,11 @@ journals the tools write name resources: keep them in `<private-dir>`.
   updates and the `MIP_SALESFORCE_BINDINGS` switch) included. Steps 10 to 12
   need both. Wave 7 (#343 to #349) closed the code gaps listed below; no known
   one remains.
+- **Step 1's read-only snapshot is taken** (an agent, 2026-11-12). It found
+  the legacy MLflow experiment still under the name the bundle declared before
+  2026-07-17, in another folder than today's declaration (step 3b), and both
+  legacy serving endpoint names answering does-not-exist (step 3). The freeze
+  message and the Genie turn of step 1 are still the owner's.
 
 ## Blockers on main (code follow-ups, not runbook steps)
 
@@ -67,6 +74,22 @@ What is left is no code change:
   its owner to the CI deployer (S0(b)), and that this profile rebuilds blue's
   env-name set (`env-name parity holds`, B3). If either fails, stop before
   step 7: that failure is then a code follow-up.
+- **The owner renames one legacy resource (step 3b).** Step 1's snapshot
+  (2026-11-12) predicted, from the code and the live name and with no bundle
+  plan run, that 10B-1's bind plan would refuse `renamed` on
+  `experiments.mip_lead_scoring`: before the lease and with nothing changed,
+  but after both handovers. The legacy MLflow experiment still carries the
+  name the bundle declared before 2026-07-17, in another folder and under
+  another base name than today's declaration. That is the install's own
+  state, not a code gap: the bind plan binds the bundle's name only, so the
+  owner gives the experiment that name.
+- **The owner runs a read-only preflight of the bind plan (step 6c).** Nothing
+  before 10B-1 ran the adopt bind plan, which is why that refusal stayed
+  unseen until a snapshot derived it by hand. `tools.databricks.adopt_preflight`
+  computes the plan's name and existence checks for all 16 keys, as the
+  owner, before step 7; it also proves step 3b. The same step runs 10B-0's
+  Genie review early, so a holder the owner-equivalent probe would refuse at
+  10B-1, an inherited one included, is settled before the sequence starts.
 - **The owner gives two things:** the metastore owner's attestation of the
   App's metastore privileges (S0(b′)) for every adopt, plan, unadopt and
   release run, and a clean rollback-scope check (step 7).
@@ -80,7 +103,8 @@ No step from 6 on has run live. A refusal that the two walks below did not
 predict is a new blocker: stop where it appears.
 **Do not start step 7 until plan #1 (step 6) has answered S0(b) and reports
 blue's env-name parity holding, step 7's read-only
-rollback-scope check is clean, and the owner can take
+rollback-scope check is clean, step 3b is done, step 6c's preflight is
+clear and its Genie review counts no unapproved holder, and the owner can take
 S0(b′)'s attestation (below):** steps 7 to 12
 run as one sequence inside a 14-day window (step 7), and a sequence started
 while 10B or 12 cannot run leaves the install half handed over.
@@ -122,7 +146,9 @@ post-bind plan and adopt-live's bundle summary bind the same match, and
 adopt-live signs the v7 record that pins the space. **No known code gap is
 left on 10B's path:** 10B-1 ends with the adopt plan's and adopt-live's
 digests, and 10B-2 runs to the signed record. What can still refuse is the
-install's own state, each named at 10B: an App rollback scope that already
+install's own state, each named at 10B: a legacy object whose live name is
+not the bundle's (`renamed`: the MLflow experiment, until step 3b), an App
+rollback scope that already
 exists (before the first adoption it is another deployer's, and a pin or
 rollback record in it is signed with another key than step 4's, so the step-0
 pin check refuses `the governed Genie space pin could not be read` and prints
@@ -199,6 +225,12 @@ that re-pins an owner start").
   immutable (spike S4), so `MIP_DASHBOARD_PARENT_PATH` names that folder for
   good. The alternative, a one-time recreate that loses the dashboards' ids,
   URLs and published history, is the owner's choice only.
+- **The legacy MLflow experiment takes the bundle's name**, by the owner's
+  rename before step 7 (step 3b). Unlike a dashboard's folder, an experiment
+  moves in place and keeps its id (the experiment rename spike, step 3b), so
+  nothing is pinned in the profile, and the bind plan's name rule stays as
+  strict as it is: it binds
+  the bundle's name, or its development-mode form in the same folder.
 - **The App start before step 10** is the owner's raw `apps start` (step 10A).
 - **Until 10B, no emergency ship from a commit `main` does not hold.** This
   rule, not adopt-live, keeps a branch ship out. adopt-live refuses
@@ -233,14 +265,16 @@ that re-pins an owner start").
 
 | Step | What | Who | State |
 |---|---|---|---|
-| 1 | Freeze and snapshot | agent (read-only), owner | ready |
+| 1 | Freeze and snapshot | agent (read-only), owner | snapshot taken 2026-11-12; the freeze message and the Genie turn are the owner's |
 | 2 | Owner decisions | owner | mostly decided (above) |
 | 3 | Supervisor rename and App `CAN_QUERY` revokes | owner | **done 2026-11-06** |
+| 3b | Rename the legacy MLflow experiment | owner | ready; do and prove before step 7 |
 | 4 | Bootstrap: identities, environments, profile | owner | ready |
 | 5 | Profile attestation | owner | deferred; the exact profile ack stands in |
 | 6 | Plan #1 | CI | ready |
 | 6b | Freeze the emergency recipe (the CI-signed marker) | CI | after 6 (needs its profile ack) |
-| 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers (it starts the 14-day sequence) |
+| 6c | Owner preflights (read-only): the bind plan, the Genie space's holders | owner | after 3b, 4 and 6; before 7 |
+| 7 | Unity Catalog ownership handover | owner | **wait** for step 6's two answers, step 3b and step 6c (it starts the 14-day sequence) |
 | 8 | Lakebase ownership handover | owner | **wait** (part of that sequence) |
 | 9 | Plan #2 | CI | **wait** (part of that sequence) |
 | 10 | Start the App (10A), then adopt (10B) | owner, CI | needs the S0(b′) attestation |
@@ -290,13 +324,25 @@ the run's page. Approve only the run you dispatched, after reading its inputs.
    committed), hashed: the App's deployments (ids, states, source paths, the
    newest one's env-name set) and its ACL; the legacy bundle state's 16 keys;
    Unity Catalog owners and grants on the governed catalog, the Lakebase sync
-   catalog and the metastore; the Lakebase owners and roles (`datdba`,
-   `relowner`, `proowner`, `pg_auth_members`); the job, pipeline, warehouse,
+   catalog and the metastore; the Lakebase instance, its sync catalog and its
+   synced tables, through their control-plane reads; the job, pipeline, warehouse,
    experiment and dashboard settings; serving-endpoint and secret-scope ACLs;
    the Genie space's serialized spec diffed against the repo spec; and the
    quiesce-window journal's state, which reads `absent` (no governed window
    has run here; an open one would be an owner break-glass case before any
    release, docs/deployment.md, "Owner break-glass").
+
+   **Not in the read-only pass: the Postgres side.** The database, relation
+   and function owners (`datdba`, `relowner`, `proowner`) and
+   `pg_auth_members` need a database login, and the instance role list
+   (`database list-database-instance-roles`) has to ask Postgres too. During
+   the 2026-11-12 snapshot a suspended Lakebase compute resumed, and suspended
+   itself again after its 30-minute timeout, with nothing else changed. That
+   role list is the likeliest cause, not a proven one: the control-plane reads
+   of the instance, its catalog and its synced tables moved nothing. So leave
+   the role list out of this pass. Step 8's owner tool (`lakebase_handover
+   --preconditions`, then `--plan`) reads the Postgres side with the legacy
+   owner's own login.
 
 ```bash
 databricks apps get <app-name> -p <owner-profile> -o json | jq '{compute: .compute_status.state, active: (.active_deployment != null), pending: (.pending_deployment != null)}'
@@ -324,7 +370,14 @@ each in the client profile (step 4), never in git:
   the reviewed third-party principal that holds `CAN_MANAGE` on the governed
   Genie space, and the space's creator, which holds a direct `CAN_MANAGE` from
   creation, for as long as it keeps that grant (unless the creator is the
-  deployer, which the probe approves anyway). Without them the pre-stop
+  deployer, which the probe approves anyway). Also every user or group that
+  holds `CAN_MANAGE` or `CAN_EDIT` on the space by inheritance from the
+  folder it lives in: a space in a user's home folder gives that user
+  `CAN_MANAGE` through the folder. That grant is on no creator line and
+  cannot be removed on the space itself, yet the probe judges it like a direct
+  one. Settle this list before step 6: step 6c's review counts it without any
+  CI run, and a change after step 7 changes the profile ack inside the 14-day
+  window. Without them the pre-stop
   owner-equivalent probe refuses (docs/deployment.md, "Pre-stop probes"). The
   Genie API names no creator, so this list, not a count, is what names it:
   10B-0's review counts every holder this list (with the approved owners, the
@@ -375,7 +428,149 @@ Supervisor under a reserved name; in the core tier they skip the Supervisor
 clauses. The owner-equivalent probe passes for the catalog and the governed
 space once step 2's approved principals are in the profile.
 
-**Rollback:** rename back and re-grant from the step-1 snapshot.
+**Rollback:** rename the Supervisor back, if it still exists, and re-grant
+the App's `CAN_QUERY` from the before-ACLs on each object that still exists.
+An endpoint that no longer exists has no ACL: there is nothing to re-grant
+on, and nothing is recreated to carry a grant. Both legacy serving endpoint
+names answered does-not-exist in the step-1 snapshot (2026-11-12), so the
+re-grant half has no object left to grant on here; the snapshot did not read
+the Supervisor object, so the rename back still applies if it exists. Run 1
+(core tier) reads neither endpoint, and bringing an agentic surface back is
+step 18's provisioning, never a restore of the legacy one.
+
+## Step 3b. Rename the legacy MLflow experiment to its governed name
+
+**Who:** the owner, as the legacy owner, with their own profile (an agent only
+on the owner's explicit go-ahead).
+
+**Why.** Adoption binds by name. The bundle names its one MLflow experiment
+`/Shared/mip-lead-scoring` (`resources.experiments.mip_lead_scoring`, one level
+under `/Shared`, which every workspace has). It has declared three names:
+`/Shared/mip/lead-scoring` until 2026-07-17, then `/mip-lead-scoring` at the
+workspace root, and today's since 2026-10-27. An install first deployed
+before 2026-07-17, by the development-mode target of that time, holds the
+experiment in that sub-folder under the CLI's development-mode prefix:
+`/Shared/mip/[dev <user>] lead-scoring`. The bind plan accepts the bundle's
+name, or its development-mode form in the **same folder**. This one differs
+in folder and in base name from both later declarations, so 10B-1 would
+refuse `renamed` on `experiments.mip_lead_scoring`: before the lease, nothing
+changed, but after steps 7 and 8. Step 1's snapshot (2026-11-12) predicted
+that refusal from the code and the live name; no bundle plan has run. Nothing
+in this repository reads the experiment by name (no App env name, job,
+pipeline or tool), so the remedy is the name a fresh install has. Code
+outside the repository that logs to the old path is the owner's to know of:
+after the rename, a `set_experiment` call with that path would create a new
+experiment there, and log to it.
+
+The experiment rename spike (its own spike, not the GitHub protections spike
+S8 of step 6) measured the rename on a throwaway experiment of the same
+shape (CLI v1.10.0, 2026-11-13): it is accepted across folders; the
+experiment keeps its id, artifact location and lifecycle stage; its tags
+stay, except the system
+tag `mlflow.experiment.sourceName`, which follows the name; and the rename
+back restores the first state. Its permissions were the same before and after
+**under one condition**: every grant on that experiment was inherited, from
+`/Shared` and the workspace root, which the new location shares, and the
+sub-folder had no ACL of its own. A direct grant on the experiment, and a
+grant inherited from the legacy folder itself, were not measured. The reads
+below count the grants before and after: a direct grant stops this step
+before the rename, and counts that differ after it stop the cutover.
+
+**Preconditions:** step 1. `<legacy-experiment-id>` is the id the legacy bundle
+state binds for `experiments.mip_lead_scoring` (the snapshot holds it; step
+6c's private report names it too, if you run that first: it then refuses
+`renamed` on this key, as predicted). No
+session deploys from the legacy root (step 1's freeze). Nothing here needs
+step 4. **Run every command of this step from a directory outside the
+checkout** (`cd` to one first), so no bundle context can choose the host:
+the rename spike measured each call that way, and the emergency recipe
+requires the same of a raw CLI mutation (docs/deployment.md).
+
+**Read first (read-only).**
+
+```bash
+databricks experiments get-experiment <legacy-experiment-id> -p <owner-profile> -o json | jq '{name: .experiment.name, stage: .experiment.lifecycle_stage, artifact_location: .experiment.artifact_location}'
+databricks experiments get-permissions <legacy-experiment-id> -p <owner-profile> -o json | jq '{holders: (.access_control_list | length), direct: ([.access_control_list[].all_permissions[] | select(.inherited != true)] | length), inherited: ([.access_control_list[].all_permissions[] | select(.inherited == true)] | length), sources: ([.access_control_list[].all_permissions[].inherited_from_object[]?] | unique | length)}'
+databricks experiments get-by-name /Shared/mip-lead-scoring -p <owner-profile> -o json
+databricks workspace get-status /Shared/mip-lead-scoring -p <owner-profile> -o json
+```
+
+The first prints the legacy name, `active` and the artifact location: keep
+all three in your terminal (the name, exactly as printed, is the rollback's).
+The second prints four counts and no principal: keep them too. The third and
+the fourth each fail with does-not-exist (`Experiment at '...' does not
+exist.`, `Path (...) doesn't exist.`): the governed name is free. **Stop**:
+
+- if the first prints `deleted` (the bind plan would refuse `missing`), or a
+  name of another shape (read why before renaming anything);
+- if the second prints a `direct` count other than 0. A direct grant on the
+  experiment is a shape the rename spike did not measure: review whose it is
+  first;
+- if either of the last two answers with an object: the name is taken, and
+  what holds it is reviewed first.
+
+Never test a name with a create call: `experiments create-experiment` at an
+existing name answers with that experiment's id and exit 0 (the rename
+spike). If the first already prints `/Shared/mip-lead-scoring`, the rename
+is done (the last two then answer with this experiment): go on to the proof.
+
+**Rename.**
+
+```bash
+databricks experiments update-experiment <legacy-experiment-id> --new-name /Shared/mip-lead-scoring -p <owner-profile>
+```
+
+It prints nothing and exits 0. Repeating it changes nothing.
+
+**Proof (read-only).**
+
+```bash
+databricks experiments get-experiment <legacy-experiment-id> -p <owner-profile> -o json | jq '{name: .experiment.name, stage: .experiment.lifecycle_stage, artifact_location: .experiment.artifact_location}'
+databricks experiments get-by-name /Shared/mip-lead-scoring -p <owner-profile> -o json | jq '{same_id: (.experiment.experiment_id == "<legacy-experiment-id>")}'
+databricks experiments get-permissions <legacy-experiment-id> -p <owner-profile> -o json | jq '{holders: (.access_control_list | length), direct: ([.access_control_list[].all_permissions[] | select(.inherited != true)] | length), inherited: ([.access_control_list[].all_permissions[] | select(.inherited == true)] | length), sources: ([.access_control_list[].all_permissions[].inherited_from_object[]?] | unique | length)}'
+```
+
+The same id answers with `name` exactly `/Shared/mip-lead-scoring`, `active`,
+and the artifact location of the first read; `same_id` is `true`; and the
+four permission counts equal the ones read first. `last_update_time` does not
+move on a rename, so it proves nothing. The final proof is step 6c: its
+preflight lists no `renamed` for `experiments.mip_lead_scoring`.
+
+**If the proof fails, stop: do not go on to step 6c or 7.** `same_id`
+false, or a `name` that is not exactly `/Shared/mip-lead-scoring`, means the
+governed name answers with another experiment, or the rename did not take.
+Only these reads show which experiment the governed name answers with: a
+rename onto a name another experiment holds is refused with exit 1 (the
+experiment bind spike, 2026-11-13, docs/deployment.md "Owed live
+confirmations"; Refusals below), but a create call at an existing name
+returns that experiment's id with exit 0 (the rename spike), so no exit code
+alone proves it. Permission counts that differ mean the legacy folder
+carried grants of its own, so the move
+changed who can reach the experiment: rename back (Rollback, below) and
+review those grants with their owners before renaming again.
+
+**Refusals:** exit 1 with `ALREADY_EXISTS` (`Node named 'mip-lead-scoring'
+already exists`): something took the name since the read. Nothing changed;
+review what holds it. Both holders are measured: a folder (the rename
+spike), and another experiment (the experiment bind spike: HTTP 409,
+`ALREADY_EXISTS`, reason `NAME_CONFLICT`, both experiments unchanged). The
+read still comes first, so a taken name is found without a mutating call. A
+permission error: run it as the legacy owner, who created the experiment.
+
+**Rollback:** the rename back, to the name the first read printed:
+
+```bash
+databricks experiments update-experiment <legacy-experiment-id> --new-name "/Shared/mip/[dev <user>] lead-scoring" -p <owner-profile>
+```
+
+Roll back only to abandon the cutover: the bind plan refuses the legacy name.
+Nothing else renames the experiment. `phase=unadopt` unbinds keys and the
+handover reverts move owners, so after a rollback of steps 7 to 10 the
+experiment keeps the governed name until the owner renames it back, and the
+legacy bundle state still resolves it, because it binds the id. After step 12
+the bundle manages the experiment under the governed name: do not rename it
+back then. This step never deletes the legacy folder, and whatever else that
+folder holds is not this install's to move or remove.
 
 ## Step 4. Bootstrap: identities, environments, profile
 
@@ -401,6 +596,34 @@ secret scopes, Genie title and Supervisor name. Also, for an adopted install:
   (identifying: `.env.local` and the environment secret);
 - `MIP_UC_METASTORE_OWNER`, `MIP_UC_APPROVED_OWNER_PRINCIPALS`,
   `MIP_GENIE_MANAGER_PRINCIPALS`, `MIP_ACCEPTED_EXPOSURE_JSON` (step 2).
+
+**Optional fields, and blue's env names.** Plan #1 compares names: the
+env-name set this profile rebuilds against the live App's newest deployment's
+(step 6). So the profile must set every optional field whose env name the
+live set holds, and make no choice that adds a name the live set lacks:
+
+- exported only when the profile sets them: `MIP_ADMIN_EMAILS`,
+  `MIP_APPROVER_EMAILS`, `MIP_AUDITOR_EMAILS`, `MIP_AUDITOR_IDENTITIES`,
+  `MIP_ADMIN_GROUP_NAME` and `MIP_APPROVER_GROUP_NAME`. One the live set holds
+  and the profile leaves unset is reported `lacks <name>`. One the profile
+  sets and the live set lacks is left out of the rebuild, so it is harmless;
+- `MIP_APPROVER_IDENTITIES`: no deploy step derives it (unlike
+  `MIP_ADMIN_IDENTITIES`), so its env name exists only when the profile sets
+  the field. Unset while the live set holds it: `lacks`. Set while the live
+  set lacks it: `adds` (it is never left out);
+- choices that add a name: a customer install's pinned lender record
+  (`MIP_LENDER_IDENTITY_JSON`, `MIP_LENDER_IDENTITY_SHA256`), presenter mode on
+  (`MIP_PRESENTER_MODE`), a `LAKEBASE_DATABASE` other than the default, a
+  non-canonical Cotality source (`MIP_COTALITY_SOURCE_*`), and Salesforce
+  bindings on.
+
+An install the emergency recipe deployed holds `MIP_ADMIN_EMAILS`,
+`MIP_APPROVER_EMAILS` and `MIP_APPROVER_IDENTITIES` whenever the recipe's
+shell set them (its 32-name set holds all three): read the newest
+deployment's env **names** in the step-1 snapshot and set each matching
+field to the value the install ran with. Name
+parity is not value parity: the platform redacts env values, plan #1 never
+reads one, and a wrong value under a right name passes it.
 
 **Commands,** in this order:
 
@@ -577,9 +800,14 @@ summary with no such section is not `holds` either (stop and read the log):
   step 7;
 - `env-name parity DIFFERS: ... (adds <names>; lacks <names>)`: **stop.**
   Step 12 could not rebuild blue's restore payload, and a mismatch found after
-  step 7 leaves the install half handed over. Fix the profile field the names
-  point at (an optional role name blue lacks is already left out) and re-run
-  plan #1, or report it as a code follow-up; never start step 7 around it;
+  step 7 leaves the install half handed over. `lacks <name>`: the live set
+  holds a name this profile does not produce: set the profile field of that
+  name (step 4, "Optional fields, and blue's env names"). `adds <name>`: the
+  profile produces a name the live install never had: unset that field or
+  undo that choice (step 4 lists them; an optional role name blue lacks is
+  already left out). Then re-run `github_environment` and plan #1. Names
+  only: a value is never compared. Anything the two lists do not explain is a
+  code follow-up; never start step 7 around it;
 - `env-name parity is LEASE-BOUND: ... the set holds
   MIP_APP_DEPLOYMENT_LEASE_ID`: **stop.** The names rebuild, but the newest
   deployment was made under a deployment lease (by `scripts/deploy.sh`), not
@@ -674,6 +902,85 @@ dispatch this step again.
 **Rollback:** the thaw (step 13's dispatch, with the printed pair). Nothing is
 deleted.
 
+## Step 6c. Owner preflights (read-only): the bind plan's names, and the Genie space's holders
+
+**Who:** the owner, with their own profile. **Preconditions:** step 4 (the
+profile and its local `MIP_IDENTITY_IDS_JSON` pins), step 3b, and plan #1
+(step 6) for the profile ack it prints. Run both again right before step 7 if
+days have passed.
+
+Nothing before 10B-1 runs the adopt bind plan or the pre-stop probes in their
+adopt mode, and 10B-1 comes after both ownership handovers. These two reads
+measure, before step 7, what the owner can measure of them. A refusal found
+here costs a re-run; found at 10B-1 it leaves the install half handed over.
+
+**1. The bind plan's name and existence checks.**
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.databricks.adopt_preflight --report-out <private-dir>/adopt-preflight.json
+```
+
+It computes the adopt plan as 10B-1 does (the legacy state under
+`MIP_LEGACY_BUNDLE_ROOT`, this deployer's state, one GET by id per legacy
+object, the same refusal codes), with one difference: the name each key must
+have comes from `databricks.yml` and the profile, not from a bundle CLI plan,
+which only the CI deployer runs. Run it in a checkout of the `main` commit
+the adopt dispatches will run: the names are that checkout's. It prints
+counts, symbolic keys, refusal codes, two digests and one verdict, never a
+name or an id; the full document, which names resources, goes to the private
+report (mode 0600). Go on only if:
+
+- it ends `verdict: clear`: 16 legacy keys would bind, 2 expected creates, no
+  refusal;
+- **the profile ack it prints equals the one plan #1 printed**
+  (`owner_attestation=<profile-ack>`, step 6). It is the ack of the local
+  profile the preflight judged (`.env.local` and this shell). If the two
+  differ, the GitHub Environment's profile is not this one, and a `clear`
+  says nothing about the names CI will use: reconcile the two
+  (`github_environment`, step 4), dispatch plan #1 again and run this again.
+
+A refusal is one of the bind plan's own codes (10B, Refusals):
+
+- `renamed` on `experiments.mip_lead_scoring`: step 3b is not done;
+- `renamed` on the App, the Lakebase instance or the sync catalog: the profile
+  does not carry the live install's name (step 4). The live object is never
+  renamed;
+- `dashboard_parent_moved`, or `unresolved_name` on a dashboard:
+  `MIP_DASHBOARD_PARENT_PATH` is not the dashboards' live folder (step 4);
+- `missing`, `foreign_bound`, `bound_elsewhere`, `duplicate_id`,
+  `legacy_key_unknown`, `deployer_state_orphan`, `malformed_state`,
+  `legacy_state_missing`: the legacy state and the estate disagree. Stop and
+  read the private report;
+- `read_failed`, or `verdict: not measured` (a read that failed, which shows
+  its error class only; a CLI profile on another workspace than the client
+  profile; a `databricks.yml` shape the reader does not resolve names from):
+  fix the cause and run it again. Not measured is not clear.
+
+It does not measure the CI deployer's own reads (the deployer first reads the
+legacy root, as a workspace admin, at 10B-1), the bundle CLI's plan (10B-1's
+is the first governed one), the pre-stop probes or adopt-live's checks of the
+running App. Keep the `bind plan document sha256` it prints: 10B-1's adopt
+plan sha256 is expected to equal it while the legacy state, the objects and
+their names are unchanged. The `adopt_plan` ack comes from 10B-1's own output
+only, never from this preflight; if the two digests differ, read why before
+10B-2.
+
+**2. The Genie space's holders.** 10B-0's review needs no CI run for its
+counts (only its digest comparison waits for 10B-0's log). Run it now, and
+settle the approvals before the plan whose profile ack the sequence carries:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.genie_pin_review --app-name <app-name> --genie-space-name "<genie-space-title>"
+```
+
+with the three profile values exported for that one command, as in 10B-0. Go
+on only if the title count is 1, the unapproved count is 0 and no reviewed
+manager is with neither (10B-0 explains each count). If an approval changes,
+re-run `github_environment`, plan #1 and the first preflight: the profile,
+and so its ack, changed.
+
+**Rollback:** read-only.
+
 ## Step 7. Unity Catalog ownership handover
 
 **Who:** the owner, as the legacy owner (an agent only on the owner's explicit
@@ -702,6 +1009,14 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 - The App's rollback scope does not exist yet (the check below). A scope an
   earlier deployer left stops 10B-0 at the Genie pin check with no pin plan to
   ack, and by then UC and Lakebase are handed over.
+- Step 3b is done and proven: the legacy MLflow experiment carries the
+  bundle's name. Until it does, 10B-1's bind plan refuses `renamed` on
+  `experiments.mip_lead_scoring`, after the handovers.
+- Step 6c's preflight ends `verdict: clear`, and prints the profile ack plan
+  #1 printed. A refusal it predicts stops 10B-1 after the handovers.
+- Step 6c's Genie review shows one title match, an unapproved count of 0 and
+  no reviewed manager with neither. An unapproved holder, direct or
+  inherited, stops 10B-1 at the owner-equivalent probe, after the handovers.
 
 **The rollback-scope check (read-only).** As the owner:
 
@@ -777,7 +1092,9 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.handover_uc_ow
 ```
 
 The first prints the revert plan's digest; the second applies exactly it. The
-legacy owner can also reclaim ownership as metastore owner.
+legacy owner can also reclaim ownership as metastore owner. The reverts move
+owners only: the experiment keeps the name step 3b gave it (step 3b,
+Rollback).
 
 ## Step 8. Lakebase ownership handover
 
@@ -1034,29 +1351,49 @@ DATABRICKS_CONFIG_PROFILE=<owner-profile> python -m tools.clients.genie_pin_revi
 It prints counts and one digest, never an id or a principal name
 (`tools/clients/genie_pin_review.py`): how many spaces carry the governed title
 (the pin check pins only exactly one, so anything else is a stop); how many
-principals hold a direct `CAN_MANAGE` on that one and whether the owner is one
-of them; how many of the reviewed managers are among the holders and how many
-holders are outside that list; how many principals with `CAN_EDIT` or
-`CAN_MANAGE` on the space, direct or inherited, the pre-stop owner-equivalent
-probe does not approve (counted by the probe's own functions); and the pin plan
-sha256 recomputed from that space, its holders and the profile's deployer. Go
-on only if:
+principals hold a direct `CAN_MANAGE` on that one, and whether the caller is
+one of them or holds `CAN_EDIT` or `CAN_MANAGE` by inheritance only; how many
+of the reviewed managers are among the direct holders, how many direct
+holders are outside that list, how many reviewed managers hold their grant
+another way (by inheritance, or a direct `CAN_EDIT`) and how many hold
+neither; how many principals with `CAN_EDIT` or `CAN_MANAGE` on the space,
+direct or inherited, the pre-stop owner-equivalent probe does not approve
+(counted by the probe's own functions), and how many of those hold it by
+inheritance only; and the pin plan sha256 recomputed from that space, its
+direct holders and the profile's deployer. Go on only if:
 
 - the title count is 1;
 - the recomputed `pin plan sha256` equals the CI log's. Only then did CI see
   this space, these holders and that deployer: a stranger in the creator's
   place counts the same but gives another digest;
-- the holder count equals the masked entries on the CI creator line, and every
-  reviewed manager is among the holders;
-- no principal is outside the probe's approved principals. 10B-1 refuses each
-  one (`[mip-prestop] REFUSED: owner_equivalent`) before the lease. A count
-  never says who a holder is, so a creator the list leaves out counts like a
-  stranger: approve the reviewed one in `.env.local` (step 2), re-run
+- the holder count equals the masked entries on the CI creator line. That
+  line lists the **direct** `CAN_MANAGE` holders only: an inherited holder is
+  never on it;
+- **the unapproved count is 0.** This is the count that decides 10B-1: every
+  principal with `CAN_EDIT` or `CAN_MANAGE` on the space that the probe does
+  not approve, direct or inherited. 10B-1 refuses each one (`[mip-prestop]
+  REFUSED: owner_equivalent`) before the lease. A space that lives in a
+  user's home folder gives that user `CAN_MANAGE` through the folder: that
+  user is no direct holder (for the owner the review says `the caller is one:
+  no`, and that the caller holds one by inheritance only), is on no creator
+  line, and is refused all the same until approved. A count never says who a
+  holder is, so a creator or a folder owner the list leaves out counts like a
+  stranger. For a direct grant: approve the reviewed principal in
+  `.env.local` (step 2), or remove its grant with its owner's consent. An
+  inherited grant cannot be removed on the space itself: approve that exact
+  principal, or move the space out of that folder, or have the folder's owner
+  remove the grant there. After a change to the list, re-run
   `github_environment --plan` and `--apply --ack-plan <sha256>` so the deploy
-  reads it, and take the new profile ack from a plan dispatch (the profile
-  changed); or remove its grant with its owner's consent. Then review again.
-  If the owner created the space, the review says the caller is one of the
-  holders, and the owner's own user is then the creator to approve.
+  reads it, take the new profile ack from a plan dispatch (the profile
+  changed), and review again. If the owner created the space, the review
+  says the caller is one of the direct holders, and the owner's own user is
+  then the creator to approve;
+- no reviewed manager is without a grant on the space (`with neither: 0`). A
+  reviewed manager need not be a direct holder: `1 of 2` among the direct
+  holders beside `another way (by inheritance, or a direct CAN_EDIT): 1` is
+  the home-folder case, and it passes. A reviewed manager that holds nothing
+  is an approval nobody uses, and it would admit that principal later
+  without a review: remove it.
 
 The digest binds that candidate, those holders and the deployer: if a holder
 changes before 10B-1, 10B-1 refuses `the ack names another plan`; review again.
@@ -1078,7 +1415,10 @@ stops before the lease. adopt-live's plan line names the 40-hex `git_sha` it
 resolved, which starts with the source check's sha12. Expect 16 legacy keys
 to bind, 2 planned creates, no delete, recreate or instance change, the
 dashboards `pinned_permanent`, and
-`s7_default_source: not_settable`. Keep the adopt-live plan's
+`s7_default_source: not_settable`. The adopt plan's sha256 is expected to
+equal step 6c's preflight digest; if it does not, the legacy state, an object
+or a name moved since, or CI saw another estate: read why before 10B-2. Keep
+the adopt-live plan's
 `deployment_sha256`: it is the `supersedes_deployment` selector should a
 supersede ever be needed. Read-only here, and in every read-only adopt or
 unadopt dispatch below, means no governed resource changes: the run's one
@@ -1145,7 +1485,14 @@ from none)` on the check's `plan:` line. Then the bind plan's own codes, each
 printed: `missing`, `renamed`, `foreign_bound`,
 `bound_elsewhere`, `duplicate_id`, `deployer_state_orphan`,
 `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
-`state_mismatch`, `malformed_state`, `read_failed`; post-bind gate:
+`state_mismatch`, `malformed_state`, `read_failed` (`renamed` on
+`experiments.mip_lead_scoring` means step 3b was skipped or rolled back:
+nothing changed, the owner renames as step 3b says, and 10B-1 is dispatched
+again with steps 7 and 8 left as they are; `renamed` on the App, the Lakebase
+instance or the sync catalog means the profile does not carry the live
+install's name, step 4, and the live object is never renamed; step 6c's
+preflight predicts each of the plan's name and existence codes before step
+7); post-bind gate:
 `instance_change`, `create_set_mismatch`, `dashboard_recreate`,
 `dashboard_move`, `rename_collision`; adopt-live: `deployment_unstable`,
 `env_names_not_proxyless`, `bindings_invalid`, `bindings_differ`,
@@ -1250,7 +1597,10 @@ gh workflow run deploy-dev.yml --ref main -f client=<client> -f phase=adopt -f o
 
 **Rollback:** dispatch `phase=unadopt`, read-only first (it prints its unbind
 plan's sha256 and adopt-live's `unadopt` plan sha256), then acked: the exact
-unbind plus a tombstone record version. Nothing is deleted. Both carry
+unbind plus a tombstone record version. Nothing is deleted. Nothing is
+renamed either: the experiment keeps its governed name (step 3b), and the
+legacy bundle state still resolves it, because it binds the id; rename it
+back (step 3b, Rollback) only to abandon the cutover. Both carry
 `metastore_app_grants` for the unadopt's pre-stop probes (S0(b′)).
 
 ```bash

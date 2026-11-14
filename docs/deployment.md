@@ -2606,8 +2606,10 @@ emergency recipe gates on.
    it with `tools.clients.genie_pin_review` (read-only, counts and one digest
    only): it recomputes the plan's sha256 from the profile's
    `MIP_IDENTITY_IDS_JSON.deployer`, which must equal the CI log's, and counts
-   the grantees the pre-stop owner-equivalent probe would refuse on that space
-   (the cutover runbook's 10B-0).
+   the grantees the pre-stop owner-equivalent probe would refuse on that
+   space, direct or inherited (an inherited grant, such as the one a space in
+   a user's home folder gives that user, is on no creator line and cannot be
+   removed on the space itself; the cutover runbook's 10B-0 and step 6c).
 4. **More than one.** Refused as ambiguous.
 
 **The adopt phases (B4(c)).** Adopting an existing install (below) binds the
@@ -3992,8 +3994,16 @@ states and one GET by id per legacy object, and refuses, before the lease:
   experiment included);
 - `renamed`: the live name is neither the bundle's name for the key nor its
   development-mode form (`[dev <user>] <name>`, on an experiment path's
-  basename); an App, a Lakebase instance or catalog must keep its name, since
-  it is named by its id;
+  basename, in the same folder); an App, a Lakebase instance or catalog must
+  keep its name, since it is named by its id, so there the remedy is the
+  profile's name, never another name for the live object. A key whose bundle
+  name changed after the legacy install was deployed refuses here as well:
+  the MLflow experiment of an install first deployed before 2026-07-17, when
+  the bundle declared it in a sub-folder (`/Shared/mip/lead-scoring`; then
+  `/mip-lead-scoring`, and `/Shared/mip-lead-scoring` since 2026-10-27). The
+  map never accepts another folder or base name, which would bind whatever
+  the legacy state names: the owner renames the live object to the bundle's
+  name before the adoption (the cutover runbook's step 3b);
 - `foreign_bound`: a job or pipeline whose bundle deployment metadata names
   another root than the legacy root or the deployer's;
   `bound_elsewhere` (the deployer's state binds the key to another object, or
@@ -4085,12 +4095,64 @@ mask. A live adopt or unadopt phase is CI-only, like the plan phase; locally,
 `--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`; with it,
 adopt-live's own ack must be exported too) prints the steps and stops before
 the lease. The expected run on client #1 binds 16 keys and
-plans exactly 2 creates (the two jobs the legacy install never had).
+plans exactly 2 creates (the two jobs the legacy install never had), once its
+legacy MLflow experiment carries the bundle's name (the cutover runbook's
+step 3b: until the owner's rename, the bind plan refuses that key `renamed`
+before the lease).
+
+**The owner's preflight (read-only, before the handovers).**
+`tools.databricks.adopt_preflight` computes the same plan with the owner's
+own CLI profile and no bundle CLI: the names come from `databricks.yml` and
+the client profile's bundle variables. It refuses to vouch for a bundle shape
+that would let the CLI plan other keys or names than it reads: a client
+target that is not production mode or that sets a name prefix, a top-level
+`include`, target-level `variables`, or a kind without a reviewed read; a
+name the profile does not resolve stays unresolved and refuses that key
+(`unresolved_name`). It prints counts, symbolic keys, the refusal codes
+above, the document's sha256 and the profile ack of the local profile it
+judged, writes the full document to `--report-out` (mode 0600), and exits 0
+only with `verdict: clear`. The profile ack is the value every governed plan
+prints as `owner_attestation=`: a `clear` from a local profile whose ack is
+not the one CI prints says nothing about the names CI will use. It takes no
+lease, binds nothing and is no acknowledgement: `MIP_ADOPT_PLAN_ACK` is the
+digest the adopt phase's own plan prints. It does not measure the CI
+deployer's reads, the CLI's plan, the pre-stop probes or adopt-live (the
+cutover runbook's step 6c).
 
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
-of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
-pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
-unsupported kind fails its bind, and the run undoes the binds before it.
+of every other declared kind (App, Lakebase instance and catalog, warehouse,
+jobs, pipeline, dashboards) on CLI v1.10.0 is unconfirmed: an unsupported
+kind fails its bind, and the run undoes the binds before it.
+
+The adopted MLflow experiment's bind and post-bind plan are measured, on
+throwaway objects (the experiment bind spike, CLI v1.10.0, 2026-11-13; not
+the GitHub protections spike S8 below): a one-resource bundle that
+declares the experiment as `databricks.yml` does (direct engine,
+production mode, the target's `mip_client` tag preset, a `name` and nothing
+else). After the owner's rename (the cutover runbook's step 3b) its name
+equals the declared one, so the release has no experiment rename left to
+apply. The CLI v1.10.0 binary's own lifecycle rules for experiments (read
+offline from the installed binary) ignore `tags` as a local and as a remote
+change, apply a `name` change in place, and recreate only on
+`artifact_location` (a backend default: skipped when the state and the
+configuration hold none and the remote has one) or `trace_location`; the
+declaration sets neither (tests/unit/test_bundle_experiment_path.py). The
+spike measured what those rules predict: `bundle deployment bind` exits 0,
+and a plan right after it shows `skip`, not `recreate`, for an experiment
+whose declaration has no `artifact_location`. Its two changes are both
+skipped: `tags` (reason `terraform_compat`) and `artifact_location` (reason
+`backend_default`). The experiment stayed byte-identical. The bind writes
+the bundle's declared values into the state, never the remote ones, and no
+`artifact_location`. A live name in the same folder under the
+development-mode prefix plans an in-place `update` of the name, never a
+recreate; a declared `artifact_location` plans `recreate` (reason
+`immutable`). An unbind exits 0 and the next plan is `create`; a re-bind
+returns to `skip`. An adopted experiment never receives the `mip_client` tag
+and keeps the `dev` tag its development-mode deploy gave it: the CLI never
+converges an experiment's tags, and nothing in this repository reads either
+tag. Not measured: any CLI version but v1.10.0 (v1.7.0 among them), the CI
+deployer as the caller, the full governed plan, and any apply. A recreate
+refuses at the post-bind gate, and the run undoes the binds.
 
 **Dashboards (attack O9).** Spike S4 measured a dashboard `parent_path` move
 on throwaway resources (CLI v1.10.0, direct engine): `parent_path` is

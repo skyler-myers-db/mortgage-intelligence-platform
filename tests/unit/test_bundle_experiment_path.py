@@ -10,6 +10,12 @@ v1.10.0 by read-only ``bundle validate -p paychex`` runs (the repo bundle's dev
 target, plus a scratch bundle with development, production and no-mode targets);
 ``_cli_presets_name`` mirrors that rewrite and is checked against those renders
 (with a synthetic short name in the dev prefix).
+
+An install deployed under an earlier declaration still holds its experiment
+under that declaration's render, which the adopt map refuses ``renamed``: the
+owner renames it to the name pinned here before the adoption
+(tests/unit/test_adopt_legacy_experiment_name.py;
+docs/clients/first-client-cutover.md, step 3b).
 """
 
 from __future__ import annotations
@@ -71,6 +77,24 @@ def test_the_declared_name_is_one_level_under_shared() -> None:
     declared = _bundle()["resources"]["experiments"]["mip_lead_scoring"]["name"]
 
     assert declared == "/Shared/mip-lead-scoring"
+
+
+def test_the_experiment_declares_no_artifact_location_and_no_trace_location() -> None:
+    """Either location would plan a recreate of an adopted experiment, refused only after the handovers.
+
+    The experiment bind spike (CLI v1.10.0, throwaway objects): the plan right after a bind is
+    ``skip`` while the declaration holds no ``artifact_location`` (the remote's is
+    skipped as a backend default), and a declared ``artifact_location`` plans
+    ``recreate`` (reason ``immutable``). The CLI's v1.10.0 lifecycle rules also
+    recreate on a ``trace_location`` change. The adopt phase's post-bind gate
+    refuses a recreate, and at the cutover's 10B that comes after both ownership
+    handovers (docs/deployment.md, "Owed live confirmations").
+    """
+
+    experiment = _bundle()["resources"]["experiments"]["mip_lead_scoring"]
+
+    for location in ("artifact_location", "trace_location"):
+        assert location not in experiment, location
 
 
 def test_every_target_renders_one_valid_path_directly_under_shared() -> None:
