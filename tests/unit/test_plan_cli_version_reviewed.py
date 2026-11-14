@@ -336,6 +336,40 @@ def test_the_monitor_gate_refuses_another_cli_without_a_live_read() -> None:
         ]
 
 
+def test_the_monitor_gate_prints_the_plan_gates_malformed_remedy_never_pause_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Its line sits beside the plan gate's: a plan no one could read gets malformed_plan's remedy."""
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(_made_by("1.7.0", fx.first_install()), encoding="utf-8")
+
+    assert monitor.main(["check", "--plan", str(plan)], workspace_factory=lambda: None) == 2
+
+    assert capsys.readouterr().err.splitlines() == [
+        f"[mip-monitor-gate] REFUSED jobs.{monitor.JOB_KEY}: the bundle plan could not be read "
+        f"(malformed_plan bundle.plan ({OTHERS['1.7.0']})); {gate.REMEDIES['malformed_plan']}"
+    ]
+    # Any plan the parser refuses is malformed_plan there too.
+    plan.write_text("{", encoding="utf-8")
+    assert monitor.main(["check", "--plan", str(plan)], workspace_factory=lambda: None) == 2
+    assert capsys.readouterr().err.splitlines() == [
+        f"[mip-monitor-gate] REFUSED jobs.{monitor.JOB_KEY}: the bundle plan could not be read "
+        f"(malformed_plan bundle.plan (json)); {gate.REMEDIES['malformed_plan']}"
+    ]
+
+    def broken() -> Any:
+        raise PermissionError("no")
+
+    # A refusal of the job itself keeps the pause remedy.
+    plan.write_text(_made_by(REVIEWED_CLI_VERSION, fx.first_install()), encoding="utf-8")
+    assert monitor.main(["check", "--plan", str(plan)], workspace_factory=broken) == 2
+    assert capsys.readouterr().err.splitlines()[-1] == (
+        f"[mip-monitor-gate] REFUSED jobs.{monitor.JOB_KEY}: its live state could not be read (PermissionError); "
+        f"{monitor._REMEDY}"
+    )
+
+
 # --- the owner's adopt preflight: a declared plan no CLI made ------------------------------------
 
 
