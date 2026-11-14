@@ -3360,14 +3360,25 @@ key the parser does not know refuses as `malformed_plan`. Its public line
 names only the resource and a field class (`malformed_plan jobs.<key>
 (changes)`); the parser's message, which can name a change path and so a
 remote map key, and the document's value-free skeleton
-(`tools/databricks/bundle_plan_skeleton.py`) go to the full report only.
+(`tools/databricks/bundle_plan_skeleton.py`) go to the full report only. A
+plan another CLI made refuses as `malformed_plan` too, before any entry is
+read, since a shape the parser accepts can mean something else there: its
+`cli_version` must be exactly `REVIEWED_CLI_VERSION`, and the public line
+adds the two version strings (`malformed_plan bundle.plan (cli_version
+"1.7.0", reviewed "1.10.0")`; a value outside the version characters prints
+as `(not a version string)`).
 
 `./scripts/deploy.sh -t client --phase plan` runs only the read-only steps
 through the pre-lease gate, predicts each phase's budget, and exits before the
 lease. A live plan phase is CI-only (`plan is CI-only; use --dry-run or make
 bundle-validate`); locally, `--phase plan --dry-run` prints the same steps
 without any Databricks call. `--phase data` runs no bundle plan at all (see
-"Governed run phases" below).
+"Governed run phases" below). A developer whose CLI is not 1.10.0 is refused
+only where a plan is judged: a dry run computes no plan and `make
+bundle-validate` plans nothing (the `>= 1.7.0` floor applies there), while a
+plan from that CLI handed to the gate, by a live run or by hand, refuses
+`malformed_plan bundle.plan (cli_version "<found>", reviewed "1.10.0")`, exit
+2: install the reviewed CLI.
 
 ### Keep blue serving: the one bounded quiesce window (M0-PR8)
 
@@ -4066,7 +4077,9 @@ parser refuses (`PlanShapeError`) the parser's message and the document's
 value-free skeleton (`malformed_plan`). The public line of that refusal names
 only the resource and a field class, `[mip-adopt] REFUSED malformed_plan
 <kind>.<key> (<field class>)`: the message can name a change path, and in a
-post-bind plan a change path can carry a remote map key. Before the binds
+post-bind plan a change path can carry a remote map key. (A plan another CLI
+made adds only the two version strings: `malformed_plan bundle.plan
+(cli_version "<found>", reviewed "1.10.0")`.) Before the binds
 (the plan, or the apply's recompute) it ends the run, exit 2, nothing changed;
 after them it is `bind_failed: PlanShapeError during the binds (malformed_plan
 ...)` with the undo, exit 2 or 3. Under GitHub Actions the deploy publishes
@@ -5830,7 +5843,18 @@ key.
   its `v1.10.0` tag's commit with no `with:`, so the action installs the
   version its own `VERSION` file names. `databricks.yml`'s `>= 1.7.0` is only
   a floor; tests/unit/test_governed_cli_version.py fails if the pin, its tag
-  comment and that constant drift apart.
+  comment and that constant drift apart. The gate now refuses a plan whose
+  `cli_version` is not the reviewed one, so the pin is proven on the plan the
+  binary actually made: the parser holds the document's `cli_version` to
+  exactly `1.10.0` (no `v` prefix, padding, suffix or other release), and so
+  do the plan gate's pre-lease and pre-apply check, the adopt and unadopt
+  plan and the monitor scheduler gate: first before the lease (pre-lease, and
+  the adopt or unadopt plan), and again under it (pre-apply, and apply's
+  recompute). The public line names both versions, `REFUSED malformed_plan
+  bundle.plan (cli_version "1.7.0", reviewed "1.10.0")`, with the
+  `malformed_plan` remedy, of which only the `run the reviewed CLI` half
+  applies here (no parser follow-up clears it). The monitor scheduler gate's
+  line carries that remedy too.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, freeze and thaw 15, and its first step turns that into
   `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. Its checkout

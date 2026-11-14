@@ -50,6 +50,10 @@ report (``malformed_plan``), as the CLI's own output does on a failed call
 report create-only to the deployer's plan-reports folder
 (scripts/lib/deploy_plan_report_lifecycle.sh).
 
+A plan another CLI made refuses so too, before any state read: the parser and
+``compute_plan`` each hold its ``cli_version`` to exactly
+``REVIEWED_CLI_VERSION``; the public line adds both version strings.
+
 Every bundle_env call (each bind and each of the undo's unbinds included)
 re-resolves that title match: the space list, its permissions and the
 deploying identity. A direct CAN_MANAGE holder that changes mid-run makes the
@@ -80,7 +84,12 @@ if str(REPO) not in sys.path:
 from tools.databricks import adopt_legacy_map as legacy_map  # noqa: E402
 from tools.databricks import bundle_env_adopt, bundle_plan_gate  # noqa: E402
 from tools.databricks.bundle_plan_adopt import POSITION, AdoptExpectation  # noqa: E402
-from tools.databricks.bundle_plan_shape import BundlePlan, PlanShapeError, parse_plan  # noqa: E402
+from tools.databricks.bundle_plan_shape import (  # noqa: E402
+    BundlePlan,
+    PlanShapeError,
+    parse_plan,
+    require_reviewed_cli,
+)
 from tools.databricks.bundle_state import STATE_FILE, bound_id, read_state, state_path  # noqa: E402
 
 APP_KEY = "mip_app"
@@ -222,7 +231,7 @@ def _states(workspace: Any, inputs: legacy_map.AdoptInputs) -> tuple[Any, Any]:
 def compute_plan(phase: str, inputs: legacy_map.AdoptInputs, cli: BundleCli, workspace: Any) -> legacy_map.AdoptPlan:
     """The read-only plan: the pre-bind bundle plan, both states and the live objects."""
 
-    bundle = cli.plan()
+    bundle = require_reviewed_cli(cli.plan())
     ours, legacy = _states(workspace, inputs)
     return legacy_map.compute(phase, inputs, bundle, ours, legacy, workspace)
 
@@ -343,8 +352,8 @@ def apply(
         message = str(exc) if isinstance(exc, AdoptRefused) else f"{type(exc).__name__} during the binds"
         malformed = None
         if isinstance(exc, PlanShapeError):
-            # Public: the field class only; the message and skeleton are private.
-            message += f" (malformed_plan {exc.public})"
+            # Public: one class (any subclass) and its public reason; the message and skeleton are private.
+            message = f"PlanShapeError during the binds (malformed_plan {exc.public})"
             malformed = exc.private()
         raise AdoptRefused(code, message, inverse_proven=proven, result=result, malformed=malformed) from exc
     return result

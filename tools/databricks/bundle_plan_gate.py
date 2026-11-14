@@ -6,7 +6,11 @@ App stop (``--position pre-lease``), and again under the lease immediately
 before the non-App bundle apply (``--position pre-apply``), so a plan that
 changed in between is judged again. ``--phase plan`` stops after the first.
 
-The document is parsed fail closed (``bundle_plan_shape``). Each entry's kind
+The document is parsed fail closed (``bundle_plan_shape``), and only a plan
+the reviewed Databricks CLI made is judged: a ``cli_version`` that is not
+exactly ``REVIEWED_CLI_VERSION`` refuses as ``malformed_plan`` on
+``bundle.plan``, naming both version strings, before any lookup (the parser
+refuses it, and ``evaluate`` checks the parsed plan again). Each entry's kind
 must be in ``KIND_LOOKUPS`` (``bundle_plan_lookups``), a closed table built
 from the kinds databricks.yml declares
 (``tests/unit/test_bundle_plan_gate_kinds.py`` pins the two equal). Per entry:
@@ -99,6 +103,7 @@ from tools.databricks.bundle_plan_shape import (  # noqa: E402
     BundlePlan,
     PlanEntry,
     PlanShapeError,
+    cli_version_refusal,
     parse_plan,
 )
 from tools.databricks.deploy_plan_report import (  # noqa: E402
@@ -224,6 +229,10 @@ def evaluate(
 
     if (adopt is None) == (position == bundle_plan_adopt.POSITION):
         raise ValueError("adopt mode is exactly the post-bind position")
+    other_cli = cli_version_refusal(plan.cli_version)
+    if other_cli is not None:
+        # Judged by no other rule and looked up nowhere: its meaning was never reviewed.
+        return malformed_shape(position, app_key, other_cli)
 
     app_resource = f"apps.{app_key}"
     refusals: list[Refusal] = []
@@ -455,7 +464,7 @@ def malformed_shape(position: str, app_key: str, exc: PlanShapeError) -> PlanRep
     return malformed(
         position,
         app_key,
-        exc.field,
+        exc.reason,
         resource=exc.resource,
         message=private["message"],
         skeleton=private["skeleton"],
@@ -508,7 +517,9 @@ def _refusal_line(report: PlanReport, refusal: Refusal) -> str:
         extra = f" ({len(refusal.related)} collisions: {', '.join(refusal.related)})"
     elif refusal.code in PUBLIC_REASON_CODES:
         # These reasons are a field class, a plan field or an error class, never a
-        # value or a change path (a parser message stays in the full report).
+        # value or a change path (a parser message stays in the full report); a
+        # plan from another CLI adds the two version strings, version characters
+        # only (bundle_plan_shape.public_version).
         extra = f" ({refusal.detail.get('reason', '')})"
     remedy = refusal.remedy
     if refusal.code == "instance_update_unacked":

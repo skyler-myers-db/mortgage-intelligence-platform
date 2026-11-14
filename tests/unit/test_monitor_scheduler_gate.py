@@ -182,6 +182,7 @@ def test_a_parser_refusal_prints_its_field_class_never_its_change_path() -> None
     text = json.dumps(
         {
             "plan_version": 2,
+            "cli_version": "1.10.0",
             "plan": {
                 "resources.jobs.mip_ref_seed": {
                     "action": "update",

@@ -20,8 +20,12 @@ non-approver scheduler role exists (deferred), so until
 not ``PAUSED`` (an absent one is UNPAUSED), or a ``trigger`` or ``continuous``
 block that is not PAUSED. scripts/deploy.sh runs ``check`` beside the bundle
 plan gate at both of its positions; it only reads (jobs.list and jobs.get).
-Printed lines carry the job key and the reason, never a job id or name.
-Exit 0 passes, 2 refuses.
+The plan is the plan gate's own document, parsed the same way: one the
+reviewed CLI did not make (``cli_version`` not exactly
+``REVIEWED_CLI_VERSION``) refuses here too, since another CLI may spell a
+schedule this check reads as paused; a plan the parser refuses prints the plan
+gate's ``malformed_plan`` remedy, never "pause it". Printed lines carry the job key and the
+reason, never a job id or name. Exit 0 passes, 2 refuses.
 """
 
 from __future__ import annotations
@@ -53,6 +57,8 @@ _REMEDY = (
     "the monitor scheduler stays PAUSED until a non-approver scheduler role exists "
     "(plan sections 4.3 and 12): pause it, then re-run"
 )
+# A plan the parser refuses (another CLI's included) is the plan gate's malformed_plan.
+_UNREAD_PLAN = "the bundle plan could not be read"
 
 
 def _value(item: Any, name: str) -> Any:
@@ -156,7 +162,7 @@ def check(plan_text: str, *, workspace_factory: Callable[[], Any]) -> list[str]:
         plan = parse_plan(plan_text)
     except PlanShapeError as exc:
         # Public: the field class only; the parser's message can name a change path.
-        return [f"the bundle plan could not be read (malformed_plan {exc.public})"]
+        return [f"{_UNREAD_PLAN} (malformed_plan {exc.public})"]
     reasons = [f"the plan enables it: {reason}" for reason in planned_refusals(plan)]
     try:
         reasons += live_refusals(workspace_factory(), bound_id=_bound_id(plan_text))
@@ -169,6 +175,16 @@ def _workspace() -> Any:
     from tools.databricks.bundle_plan_gate import bound_workspace_client
 
     return bound_workspace_client()
+
+
+def _remedy(reason: str) -> str:
+    """The plan gate's ``malformed_plan`` remedy for a plan the parser refused; else pause it."""
+
+    if not reason.startswith(f"{_UNREAD_PLAN} (malformed_plan "):
+        return _REMEDY
+    from tools.databricks.bundle_plan_gate import REMEDIES
+
+    return REMEDIES["malformed_plan"]
 
 
 def main(argv: list[str] | None = None, *, workspace_factory: Callable[[], Any] = _workspace) -> int:
@@ -184,7 +200,7 @@ def main(argv: list[str] | None = None, *, workspace_factory: Callable[[], Any] 
     else:
         reasons = check(text, workspace_factory=workspace_factory)
     for reason in reasons:
-        print(f"{_PREFIX} REFUSED jobs.{JOB_KEY}: {reason}; {_REMEDY}", file=sys.stderr)
+        print(f"{_PREFIX} REFUSED jobs.{JOB_KEY}: {reason}; {_remedy(reason)}", file=sys.stderr)
     if reasons:
         return 2
     print(f"{_PREFIX} jobs.{JOB_KEY} stays PAUSED, planned and live (read-only check)")

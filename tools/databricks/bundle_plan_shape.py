@@ -42,6 +42,16 @@ public line prints only ``PlanShapeError.public``: the symbolic resource
 (``<kind>.<key>``, or ``bundle.plan`` for the document) and a field class
 from ``FIELD_CLASSES``. Each one also carries the document's value-free
 skeleton (``bundle_plan_skeleton``) for the private report.
+
+A shape this parser accepts can still mean something else when another CLI
+made it, so the document's ``cli_version`` must be exactly
+``REVIEWED_CLI_VERSION`` (no prefix, suffix, padding or other release), right
+after ``plan_version`` and before any entry is read: ``CliVersionRefused``, a
+``PlanShapeError`` whose public reason also names the two version strings
+(``cli_version "1.7.0", reviewed "1.10.0"``; a value outside the version
+characters prints as ``(not a version string)``). The one document no CLI
+made, the owner's adopt preflight's declared plan, says so with
+``DECLARED_CLI_VERSION`` and is held to exactly that.
 """
 
 from __future__ import annotations
@@ -57,8 +67,14 @@ from tools.databricks.bundle_plan_skeleton import skeleton
 
 # The one Databricks CLI version the governed path was reviewed on: this
 # parser, the plan gate and every cutover spike. deploy-dev.yml's setup-cli pin
-# must install exactly it (tests/unit/test_governed_cli_version.py).
+# must install exactly it (tests/unit/test_governed_cli_version.py), and
+# ``parse_plan`` refuses a plan whose ``cli_version`` is any other string.
 REVIEWED_CLI_VERSION = "1.10.0"
+# The ``cli_version`` of a plan document no CLI produced: adopt_preflight's
+# declared plan, built from databricks.yml. No other caller may expect it.
+DECLARED_CLI_VERSION = ""
+# What a public line may print of a version string; anything else is a class.
+_PUBLIC_VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}\Z")
 
 PLAN_VERSION = 2
 ACTIONS = frozenset({"skip", "resize", "update", "update_id", "create", "recreate", "delete"})
@@ -109,10 +125,16 @@ class PlanShapeError(ValueError):
         self.skeleton: dict[str, Any] | None = None
 
     @property
-    def public(self) -> str:
-        """``<resource> (<field class>)``: no change path, no map key, no value."""
+    def reason(self) -> str:
+        """The public reason: the field class (``CliVersionRefused`` adds the two versions)."""
 
-        return f"{self.resource} ({self.field})"
+        return self.field
+
+    @property
+    def public(self) -> str:
+        """``<resource> (<reason>)``: no change path, no map key, no value."""
+
+        return f"{self.resource} ({self.reason})"
 
     def private(self) -> dict[str, Any]:
         """The private report's record: the message and the document's skeleton."""
@@ -124,6 +146,47 @@ class PlanShapeError(ValueError):
             "message": str(self),
             "skeleton": self.skeleton,
         }
+
+
+def public_version(value: str) -> str:
+    """A version string as a public line may print it: quoted, or ``(not a version string)``."""
+
+    return json.dumps(value) if value == "" or _PUBLIC_VERSION.fullmatch(value) else "(not a version string)"
+
+
+class CliVersionRefused(PlanShapeError):
+    """The plan's ``cli_version`` is not exactly the version the parser expects.
+
+    Its public reason names both version strings (harmless: printable version
+    characters only); the private message carries the found value's repr.
+    """
+
+    def __init__(self, found: str, expected: str) -> None:
+        super().__init__(
+            f"cli_version {found[:80]!r} is not {expected!r}, the Databricks CLI version this parser "
+            "was reviewed on: a plan another CLI made can mean something the gates were never reviewed on",
+            field="cli_version",
+        )
+        self.found = found
+        self.expected = expected
+
+    @property
+    def reason(self) -> str:
+        return f"cli_version {public_version(self.found)}, reviewed {public_version(self.expected)}"
+
+
+def _expected(value: str) -> str:
+    """The expected ``cli_version``: the reviewed one, or the declared plan's; a third is a bug."""
+
+    if value not in (REVIEWED_CLI_VERSION, DECLARED_CLI_VERSION):
+        raise ValueError("a plan is expected from the reviewed CLI, or from no CLI at all")
+    return value
+
+
+def cli_version_refusal(found: str, expected: str = REVIEWED_CLI_VERSION) -> CliVersionRefused | None:
+    """``None`` when ``found`` is exactly ``expected``; else the refusal (exact string equality)."""
+
+    return None if found == _expected(expected) else CliVersionRefused(found, expected)
 
 
 @dataclass(frozen=True)
@@ -171,6 +234,15 @@ class BundlePlan:
 
     def entry(self, key: str) -> PlanEntry | None:
         return next((entry for entry in self.entries if entry.key == key), None)
+
+
+def require_reviewed_cli(plan: BundlePlan) -> BundlePlan:
+    """``plan``, or ``CliVersionRefused`` unless the reviewed CLI made it (a governed consumer's own check)."""
+
+    refused = cli_version_refusal(plan.cli_version)
+    if refused is not None:
+        raise refused
+    return plan
 
 
 def canonical_json(value: Any) -> str:
@@ -293,7 +365,7 @@ def _entry(key: str, raw: Any) -> PlanEntry:
     )
 
 
-def _parse(text: str) -> BundlePlan:
+def _parse(text: str, expected_cli_version: str) -> BundlePlan:
     try:
         document = json.loads(
             text, object_pairs_hook=_no_duplicate_keys, parse_constant=_refuse_constant
@@ -306,6 +378,11 @@ def _parse(text: str) -> BundlePlan:
         raise PlanShapeError(
             f"plan_version {version} is not the reviewed version {PLAN_VERSION}", field="plan_version"
         )
+    # Before any entry: a plan another CLI made refuses as that, whatever else it holds.
+    cli_version = _text(top.get("cli_version", ""), "cli_version", "cli_version")
+    refused = cli_version_refusal(cli_version, expected_cli_version)
+    if refused is not None:
+        raise refused
     if "plan" not in top:
         raise PlanShapeError("the plan document has no plan map", field="document")
     if not isinstance(top["plan"], dict):
@@ -318,7 +395,7 @@ def _parse(text: str) -> BundlePlan:
     )
     return BundlePlan(
         plan_version=version,
-        cli_version=_text(top.get("cli_version", ""), "cli_version", "cli_version"),
+        cli_version=cli_version,
         lineage=_text(top.get("lineage", ""), "lineage", "lineage"),
         serial=serial,
         entries=entries,
@@ -326,11 +403,17 @@ def _parse(text: str) -> BundlePlan:
     )
 
 
-def parse_plan(text: str) -> BundlePlan:
-    """Parse ``bundle plan -o json`` output, or raise ``PlanShapeError`` carrying its skeleton."""
+def parse_plan(text: str, *, expected_cli_version: str = REVIEWED_CLI_VERSION) -> BundlePlan:
+    """Parse ``bundle plan -o json`` output, or raise ``PlanShapeError`` carrying its skeleton.
 
+    The document's ``cli_version`` must equal ``expected_cli_version`` exactly:
+    ``REVIEWED_CLI_VERSION`` for every plan a CLI made, ``DECLARED_CLI_VERSION``
+    only for adopt_preflight's declared plan. No third value is accepted.
+    """
+
+    expected = _expected(expected_cli_version)
     try:
-        return _parse(text)
+        return _parse(text, expected)
     except PlanShapeError as exc:
         exc.skeleton = skeleton(text)
         raise
