@@ -352,8 +352,8 @@ def apply(
         message = str(exc) if isinstance(exc, AdoptRefused) else f"{type(exc).__name__} during the binds"
         malformed = None
         if isinstance(exc, PlanShapeError):
-            # Public: the field class only; the message and skeleton are private.
-            message += f" (malformed_plan {exc.public})"
+            # Public: one class (any subclass) and its public reason; the message and skeleton are private.
+            message = f"PlanShapeError during the binds (malformed_plan {exc.public})"
             malformed = exc.private()
         raise AdoptRefused(code, message, inverse_proven=proven, result=result, malformed=malformed) from exc
     return result

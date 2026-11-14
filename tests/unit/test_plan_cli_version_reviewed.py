@@ -313,7 +313,12 @@ def test_a_post_bind_plan_from_another_cli_undoes_the_binds(
     assert _adopt_main(estate, cli, _apply(sha, tmp_path / "report.json")) == 2
 
     err = capsys.readouterr().err
-    assert f"(malformed_plan bundle.plan ({OTHERS['1.7.0']}))" in err
+    # One stable class for every parser refusal (CliVersionRefused included), as both docs print it.
+    assert (
+        f"[mip-adopt] REFUSED bind_failed: PlanShapeError during the binds (malformed_plan bundle.plan ({OTHERS['1.7.0']}))"
+        in err.splitlines()
+    )
+    assert "CliVersionRefused" not in err
     assert "nothing is left changed: every bind this run made was undone" in err
     assert estate.bound() == {}
 
