@@ -18,6 +18,11 @@ the version), then change all of them together:
 
     gh api repos/databricks/setup-cli/git/ref/tags/v<version>
     gh api 'repos/databricks/setup-cli/contents/VERSION?ref=<sha>' --jq .content | base64 -d
+
+The pin says what CI installs; the gate proves what made each plan: a plan
+whose ``cli_version`` is not exactly ``REVIEWED_CLI_VERSION`` refuses before
+the lease (tests/unit/test_plan_cli_version_reviewed.py), and the runbook and
+the deployment doc say so.
 """
 
 from __future__ import annotations
@@ -27,13 +32,22 @@ from pathlib import Path
 
 import yaml
 
+import pytest
+
 from tests.fixtures import bundle_plan_fixtures
 from tools.databricks import bundle_plan_gate, bundle_plan_shape
-from tools.databricks.bundle_plan_shape import PLAN_VERSION, REVIEWED_CLI_VERSION
+from tools.databricks.bundle_plan_shape import (
+    PLAN_VERSION,
+    REVIEWED_CLI_VERSION,
+    CliVersionRefused,
+    parse_plan,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 DEPLOYMENT_DOC = REPO / "docs" / "deployment.md"
+RUNBOOK = REPO / "docs" / "clients" / "first-client-cutover.md"
+GATE_REFUSES = "The gate now refuses a plan whose `cli_version` is not the reviewed one"
 
 # databricks/setup-cli tag v1.10.0 is this commit (a lightweight tag, object
 # type commit), and its VERSION file reads 1.10.0 (verified 2026-11-13).
@@ -133,3 +147,29 @@ def test_the_deployment_doc_names_the_cli_the_governed_job_installs() -> None:
 
     assert f"It installs Databricks CLI {REVIEWED_CLI_VERSION}, the version the plan gate" in text
     assert f"pinned to its `v{REVIEWED_CLI_VERSION}` tag's commit with no `with:`" in text
+    assert f"{GATE_REFUSES}, so the pin is proven on the plan the binary actually made" in text
+    assert f"`cli_version` to exactly `{REVIEWED_CLI_VERSION}` (no `v` prefix, padding, suffix or other release)" in text
+    assert f'`REFUSED malformed_plan bundle.plan (cli_version "1.7.0", reviewed "{REVIEWED_CLI_VERSION}")`' in text
+
+
+def test_the_runbook_cli_pin_row_says_the_gate_refuses_another_cli() -> None:
+    rows = [line for line in RUNBOOK.read_text(encoding="utf-8").splitlines() if line.startswith("| CLI pin (fixed: #355) |")]
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert "holds that pin equal to the parser's `REVIEWED_CLI_VERSION`" in row
+    assert f"{GATE_REFUSES}: the parser, the plan gate's pre-lease and pre-apply check" in row
+    assert f"each hold it to exactly `{REVIEWED_CLI_VERSION}` before the lease" in row
+    assert f'(cli_version "1.7.0", reviewed "{REVIEWED_CLI_VERSION}")' in row
+    assert "A move to another CLI re-runs S10 on it before step 7." in row
+
+
+@pytest.mark.parametrize("found", ("", "v1.10.0", "1.10.0 ", "1.10.0-dev", "1.10.1", "1.7.0"))
+def test_a_plan_any_other_cli_made_is_refused(found: str) -> None:
+    """The pin and the gate name one version: the reviewed one parses, every other string refuses."""
+
+    document = bundle_plan_fixtures.adopted()
+    assert parse_plan(bundle_plan_fixtures.dumps(document)).cli_version == REVIEWED_CLI_VERSION
+    document["cli_version"] = found
+    with pytest.raises(CliVersionRefused):
+        parse_plan(bundle_plan_fixtures.dumps(document))
