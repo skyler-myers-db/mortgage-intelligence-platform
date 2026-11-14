@@ -49,7 +49,9 @@ REPO = Path(__file__).resolve().parents[2]
 NEXT_LEASE = "33333333-3333-4333-8333-333333333333"
 
 
-def _shell(tmp_path: Path, body: str, env: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def _shell(
+    tmp_path: Path, body: str, env: dict[str, str], *, timeout: int = 180
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 
     calls = tmp_path / "calls.log"
@@ -81,7 +83,7 @@ def _shell(tmp_path: Path, body: str, env: dict[str, str]) -> tuple[subprocess.C
         },
         text=True,
         capture_output=True,
-        timeout=180,
+        timeout=timeout,
     )
     return result, [line for line in calls.read_text(encoding="utf-8").splitlines() if line]
 

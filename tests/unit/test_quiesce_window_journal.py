@@ -110,3 +110,80 @@ def test_the_write_asserts_the_lease_before_it_uploads() -> None:
     with pytest.raises(RuntimeError, match="lease lost"):
         journal.write(workspace, app_name=APP_NAME, expected=None, changes=OPEN, assert_lease_held=lost)
     assert journal.read(workspace, app_name=APP_NAME) is None
+
+
+# --- the owner-start close (wave 7c) --------------------------------------------------------
+
+OWNER_CLOSE = {"state": "closed", "closed_by": "owner_start_repin", "repinned_deployment_id": "d-owner"}
+PATHS = {
+    "window_open": ("window_open",),
+    "window_starting": ("window_open", "window_starting"),
+    "window_started": ("window_open", "window_starting", "window_started"),
+    "window_proven": ("window_open", "window_starting", "window_started", "window_proven"),
+    "window_refused": ("window_open", "window_starting", "window_refused"),
+}
+
+
+def _at(workspace: _Workspace, state: str, opened: dict | None = None) -> dict:
+    current = None
+    for step in PATHS[state]:
+        current = _write(workspace, current, (opened or OPEN) if step == "window_open" else {"state": step})
+    assert current is not None
+    return current
+
+
+def test_window_open_journals_the_start_baseline_and_later_states_keep_it() -> None:
+    workspace = _Workspace()
+    current = _at(workspace, "window_refused", {**OPEN, "start_baseline_ids": ["deployment-blue", "deployment-old"]})
+    assert current["start_baseline_ids"] == ["deployment-blue", "deployment-old"]
+    assert set(current) - {"attestation_alg", "attestation_verify_key", "attestation_signature"} == journal.FIELDS
+    assert journal.JOURNAL_VERSION == 2 and "start_baseline_ids" in journal.FIELDS, "the reviewed field set is unchanged"
+
+
+@pytest.mark.parametrize("state", sorted(PATHS))
+def test_an_owner_start_re_pin_closes_every_open_restorable_state(state: str) -> None:
+    assert frozenset(PATHS) == journal.OWNER_START_CLOSABLE
+    workspace = _Workspace()
+    current = _at(workspace, state)
+    for incomplete in (
+        {**OWNER_CLOSE, "repinned_deployment_id": ""},
+        {**OWNER_CLOSE, "repinned_deployment_id": "  "},
+        {key: value for key, value in OWNER_CLOSE.items() if key != "repinned_deployment_id"},
+    ):
+        with pytest.raises(RuntimeError, match="transition is not allowed"):
+            _write(workspace, current, incomplete)
+    closed = _write(workspace, current, OWNER_CLOSE)
+    assert (closed["state"], closed["closed_by"], closed["repinned_deployment_id"]) == ("closed", "owner_start_repin", "d-owner")
+    assert closed["start_deployment_id"] == current["start_deployment_id"], "the governed start's id is kept"
+    with pytest.raises(RuntimeError, match="transition is not allowed"):
+        _write(workspace, closed, OWNER_CLOSE)  # closed is closed
+
+
+@pytest.mark.parametrize("state", ("window_refused", "window_started"))
+@pytest.mark.parametrize("closed_by", ("repin", "deadman_repin", "green_activation", ""))
+def test_no_other_close_leaves_a_refused_or_a_started_window(state: str, closed_by: str) -> None:
+    workspace = _Workspace()
+    current = _at(workspace, state)
+    with pytest.raises(RuntimeError, match="transition is not allowed"):
+        _write(workspace, current, {"state": "closed", "closed_by": closed_by, "repinned_deployment_id": "d-1"})
+    assert journal.read(workspace, app_name=APP_NAME)["state"] == state
+
+
+def test_a_contract_window_never_takes_the_owner_start_close() -> None:
+    # window_open -> closed is a contract window's own transition (green activation), so the
+    # journal must refuse that same move when it claims to be an owner-start re-pin.
+    workspace = _Workspace()
+    contract = _write(workspace, None, {**OPEN, "blue_restorable": False})
+    with pytest.raises(RuntimeError, match="transition is not allowed"):
+        _write(workspace, contract, OWNER_CLOSE)
+    activated = _write(workspace, contract, {"state": "closed", "closed_by": "green_activation"})
+    assert activated["closed_by"] == "green_activation"
+
+
+def test_the_dead_mans_close_is_unchanged() -> None:
+    workspace = _Workspace()
+    starting = _at(workspace, "window_starting")
+    closed = _write(
+        workspace, starting, {"state": "closed", "closed_by": "deadman_repin", "repinned_deployment_id": "d-1"}
+    )
+    assert closed["closed_by"] == "deadman_repin"

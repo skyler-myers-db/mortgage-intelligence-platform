@@ -177,11 +177,14 @@ def test_a_window_runner_killed_after_its_start_resumes_from_the_journaled_basel
 def test_an_intent_without_a_baseline_resumes_to_a_refusal_never_a_guess() -> None:
     estate = _estate()
     opened = _open(estate)
+    # window_open journals the baseline now (wave 7c), and an intent inherits it:
+    # an intent WITHOUT one is a journal written before the baseline existed.
+    assert opened["start_baseline_ids"] == [BLUE_ID]
     journal.write(
         estate.workspace,
         app_name=APP_NAME,
         expected=opened,
-        changes={"state": "window_starting"},
+        changes={"state": "window_starting", "start_baseline_ids": []},
         assert_lease_held=lambda: None,
     )
     estate.apps.start(APP_NAME)

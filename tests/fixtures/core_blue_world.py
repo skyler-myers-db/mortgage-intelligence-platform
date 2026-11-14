@@ -156,6 +156,8 @@ class CoreWorld(World):
     def deployment(self, deployment_id: str) -> SimpleNamespace:
         base = super().deployment(deployment_id)
         base.status.state = self.states.get(deployment_id, base.status.state)
+        # What S7 recorded of a deployment besides its env names: SNAPSHOT, no command.
+        base.mode, base.command, base.git_source = "SNAPSHOT", None, None
         if deployment_id in self.sources:
             base.source_code_path = self.sources[deployment_id]
             base.env_vars = [

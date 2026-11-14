@@ -25,6 +25,11 @@ measured what it does instead:
 
 So this module proves everything from what the API shows:
 
+* ``require_unmoved_baseline`` is the window's guard before its own start:
+  the App must still be the stopped App the window left (STOPPED, nothing
+  pending, no deployment outside the baseline ``window_open`` journaled). The
+  compute state, not the listing, catches an owner's start in flight, whose
+  id is invisible for those 100 s.
 * ``start_app`` lists the App's deployment ids BEFORE the start (the
   baseline; the window journals it so a resume finds the same start), starts
   without waiting and polls, at most every 5 s within
@@ -83,6 +88,8 @@ START_POLL_INTERVAL_S = 10.0
 # in active_deployment and list_deployments after it: poll at most every 5 s.
 START_ID_POLL_INTERVAL_S = 5.0
 TREE_DIGEST_WORKERS = 4
+# The window's own start over an App that is no longer the stopped one it left.
+BASELINE_MOVED = "window_start_baseline_moved"
 _TREE_DOMAIN = "mip-app-source-tree-v1"
 _CHUNK = 1 << 20
 
@@ -142,6 +149,36 @@ def deployment_ids(workspace: Any, *, app_name: str) -> frozenset[str]:
     if any(not deployment_id for deployment_id in ids):
         raise StartProofError("start_unreadable", "a listed deployment has no immutable id")
     return frozenset(ids)
+
+
+def require_unmoved_baseline(
+    workspace: Any, *, app_name: str, journaled: frozenset[str]
+) -> frozenset[str]:
+    """The baseline a window's own start runs against, or ``window_start_baseline_moved``.
+
+    ``journaled`` is the deployment ids ``window_open`` journaled before the
+    stop. The App must still be that stopped App: compute STOPPED, nothing
+    pending, and no deployment outside ``journaled``. A start's id is
+    invisible for about 100 s while the compute is STARTING (spike S7), so a
+    listing alone would miss an owner's break-glass start in flight, the
+    window would start an App that is already starting, and its refusal would
+    stop the owner's start. *Moved* means NEW ids only: a deployment that left
+    the listing never keeps a stopped App from its start, and stays in the
+    baseline. A journal written before the baseline existed (empty) compares
+    no ids and takes the fresh listing, as before. Nothing is written,
+    started or stopped here.
+    """
+
+    listed = deployment_ids(workspace, app_name=app_name)
+    app = workspace.apps.get(app_name)
+    pending = getattr(app, "pending_deployment", None) is not None
+    if _state(app) != "STOPPED" or pending or (journaled and listed - journaled):
+        raise RuntimeError(
+            f"{BASELINE_MOVED}: the App is no longer the stopped App this window left (a start "
+            "is in flight or a deployment landed since the window opened); nothing was written, "
+            "started or stopped, and the window stays open"
+        )
+    return journaled or listed
 
 
 def find_start_deployment(

@@ -46,7 +46,9 @@ case "$*" in
     [[ -z "${FAIL_AWAIT:-}" ]] || exit 1
     printf 'MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
   *"quiesce_window status"*)
-    printf 'MIP_QUIESCE_WINDOW_JOURNAL_STATE=%s\nMIP_QUIESCE_WINDOW_BLUE_RESTORABLE=%s\nMIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID=%s\nMIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue\nMIP_QUIESCE_WINDOW_TREE_SHA256=t\nMIP_QUIESCE_WINDOW_DEADMAN_STATE=%s\n' "${JOURNAL:-window_open}" "${RESTORABLE:-1}" "${START_ID:-}" "${DEADMAN_STATE:-absent}" > "$out" ;;
+    printf 'MIP_QUIESCE_WINDOW_JOURNAL_STATE=%s\nMIP_QUIESCE_WINDOW_BLUE_RESTORABLE=%s\nMIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID=%s\nMIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue\nMIP_QUIESCE_WINDOW_TREE_SHA256=t\nMIP_QUIESCE_WINDOW_DEADMAN_STATE=%s\n' "${JOURNAL:-window_open}" "${RESTORABLE:-1}" "${START_ID:-}" "${DEADMAN_STATE:-absent}" > "$out"
+    # status --recovery (wave 7c) also names the recovery; a test sets RECOVERY to have it written.
+    [[ -z "${RECOVERY:-}" ]] || printf 'MIP_QUIESCE_WINDOW_RECOVERY=%s\n' "$RECOVERY" >> "$out" ;;
   *"quiesce_window assert-serving"*)
     [[ -z "${NOT_SERVING:-}" ]] || exit 1 ;;
   *"quiesce_window applicable"*)

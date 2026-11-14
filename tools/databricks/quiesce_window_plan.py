@@ -75,13 +75,25 @@ the job's remaining budget (``MIP_JOB_DEADLINE_EPOCH`` minus now) covers the
 sum. A plan without a reason has no budget, so its body and digest are the
 ones M0-PR8 computed.
 
+**An earlier window still open.** A run that ended inside its window leaves
+the journal open, and the next plan refuses it (``window_journal_open``)
+unless the pre-lease position can hand it to a recovery that runs under the
+lease before step 0a: the dead-man's restart the App serves
+(``deadman_recovery``, no ack), or an owner's break-glass start
+(``owner_start_recovery``) with its exact ``owner_start_repin`` digest ack
+(``MIP_ACK_OWNER_START_REPIN``; tools/databricks/quiesce_window_recovery.py
+classifies it and says why that ack is never inferred). Neither is part of
+the canonical body, so no window digest moves.
+
 ``public_summary()`` carries codes, counts, booleans and digests only.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -134,9 +146,12 @@ REMEDIES = {
     ),
     "window_migration_refused": "the Lakebase migration plan refused; see its report",
     "window_journal_open": (
-        "an earlier window's journal is still open and no dead-man restart is recorded for "
-        "it: wait for that window's dead-man (M0-PR9), whose restart the next run re-pins "
-        "(repin --from-deadman), or the owner break-glass must close it first"
+        "an earlier window's journal is still open, and neither a dead-man restart the App "
+        "serves nor an acknowledged owner start is recorded for it: wait for that window's "
+        "dead-man (M0-PR9), whose restart the next run re-pins (repin --from-deadman); or, "
+        "after the owner's break-glass start, dispatch the release with the exact "
+        "owner_start_repin digest this plan prints (repin --from-owner-start; "
+        "docs/deployment.md, Owner break-glass)"
     ),
     "window_facts_incomplete": "a fact the window needs could not be read; see the private plan",
     "window_budget_refused": (
@@ -146,6 +161,40 @@ REMEDIES = {
     ),
 }
 ACK_STATES = frozenset({"not_required", "matched", "absent", "mismatch"})
+# An open window's dead-man state as a plan may print it: the marker's own
+# states (jobs/window_deadman.py), a marker that is not the window's or cannot
+# be read, and ``deadman_superseded``, a restart the App no longer serves
+# (tools/databricks/quiesce_window_recovery.py refines it; never a marker state).
+DEADMAN_STATES = frozenset(
+    {
+        "absent",
+        "mismatch",
+        "unreadable",
+        "deadman_restarted",
+        "deadman_superseded",
+        "deadman_start_failed",
+        "deadman_start_timeout",
+        "deadman_start_unreadable",
+        "deadman_left_stopped",
+        "deadman_skipped",
+    }
+)
+# An owner's raw start over an open window (the break-glass), as the recovery
+# classifies it: ``candidate`` is the one deployment a release may re-pin with
+# its exact owner_start_repin ack; every other code is why there is none.
+OWNER_START_REFUSALS = (
+    "owner_start_contract_window",
+    "owner_start_marker_unreadable",
+    "owner_start_no_baseline",
+    "owner_start_not_running",
+    "owner_start_none",
+    "owner_start_ambiguous",
+    "owner_start_not_current",
+    "owner_start_not_a_start",
+)
+OWNER_START_STATES = frozenset({"absent", "candidate", *OWNER_START_REFUSALS})
+OWNER_START_CREATORS = frozenset({"deployer", "other", "unknown"})
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 DESCRIPTION_STATES = frozenset({"equal", "differs"})
 # Conservative per-step budgets in seconds, for the admission (M0-PR9). They
 # are not measurements, and none is shrunk by one: spike S7 measured a trivial
@@ -181,6 +230,11 @@ class WindowFacts:
     journal_state: str = "absent"
     # The open window's dead-man marker state (M0-PR9; a pointer, never proof).
     deadman_state: str = "absent"
+    # An owner start over the open window (quiesce_window_recovery): its code,
+    # a candidate's owner_start_repin digest, and who made it (information only).
+    owner_start_state: str = "absent"
+    owner_start_sha256: str = ""
+    owner_start_creator: str = "unknown"
     binding_state: str = "equal"  # "equal", "diff" or "unresolved"
     binding_lines: tuple[str, ...] = ()
     # The bundle's App description against the live one: a difference is the
@@ -262,6 +316,8 @@ class WindowPlan:
     remedies: Mapping[str, str] = field(default_factory=dict)
     # The job-budget admission (M0-PR9, quiesce_window_budget), when evaluated.
     admission: Mapping[str, Any] = field(default_factory=dict)
+    # The owner_start_repin ack against a candidate's digest (an ACK_STATES value).
+    owner_start_ack: str = "not_required"
 
     @property
     def refused(self) -> bool:
@@ -276,6 +332,14 @@ class WindowPlan:
             raise ValueError("window plan carries an unreviewed reason")
         if self.facts.description_state not in DESCRIPTION_STATES:
             raise ValueError("window plan carries an unreviewed description state")
+        if (
+            self.facts.deadman_state not in DEADMAN_STATES
+            or self.facts.owner_start_state not in OWNER_START_STATES
+            or self.facts.owner_start_creator not in OWNER_START_CREATORS
+            or self.owner_start_ack not in ACK_STATES
+        ):
+            raise ValueError("window plan carries an unreviewed recovery code")
+        candidate = self.facts.owner_start_state == "candidate"
         return {
             "schema": PUBLIC_SCHEMA,
             "position": self.position,
@@ -290,6 +354,14 @@ class WindowPlan:
             "refusals": list(self.refusals),
             "admission": dict(self.admission) or {"state": "not_evaluated"},
             "deadman_recovery": deadman_recovery(self.facts, position=self.position),
+            # An owner start over an open window: codes, and a candidate's digest.
+            "journal_state": self.facts.journal_state,
+            "deadman_state": self.facts.deadman_state,
+            "owner_start": self.facts.owner_start_state,
+            "owner_start_sha256": self.facts.owner_start_sha256 if candidate else "",
+            "owner_start_creator": self.facts.owner_start_creator,
+            "owner_start_ack": self.owner_start_ack,
+            "owner_start_recovery": self.position == "pre-lease" and self.owner_start_ack == "matched",
             # What the binding step applies online (spike S2): never a reason.
             "online_fixups": online_fixups(self.facts, self.reasons),
             "app_role_regrant": list(self.canonical.get("app_role_regrant") or ()),
@@ -470,7 +542,33 @@ def deadman_recovery(facts: WindowFacts, *, position: str) -> bool:
     )
 
 
-def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> WindowPlan:
+def owner_start_ack_state(facts: WindowFacts, acknowledgement: str) -> str:
+    """The owner_start_repin ack against an open window's candidate: an ``ACK_STATES`` value."""
+
+    if facts.journal_state in {"absent", "closed"} or facts.owner_start_state != "candidate":
+        return "not_required"
+    given, digest = acknowledgement.strip(), facts.owner_start_sha256
+    if not given:
+        return "absent"
+    exact = _SHA256.fullmatch(given) and _SHA256.fullmatch(digest) and hmac.compare_digest(given, digest)
+    return "matched" if exact else "mismatch"
+
+
+def owner_start_recovery(facts: WindowFacts, *, position: str, acknowledgement: str) -> bool:
+    """An owner's raw start serves over an earlier open window, and its exact ack was given.
+
+    Only before the lease, like the dead-man's: the re-pin (``repin
+    --from-owner-start``) runs under the lease before step 0a, recomputes the
+    plan there, requires the same digest and closes the journal, so the
+    pre-apply recheck reads it closed or refuses it as still open.
+    """
+
+    return position == "pre-lease" and owner_start_ack_state(facts, acknowledgement) == "matched"
+
+
+def window_plan(
+    facts: WindowFacts, *, position: str, acknowledgement: str, owner_start_acknowledgement: str = ""
+) -> WindowPlan:
     """Decide the window from facts; refuse anything a start-and-re-pin cannot close."""
 
     if position not in POSITIONS:
@@ -487,6 +585,7 @@ def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> W
         "sha256": digest,
         "canonical": body,
         "facts": facts,
+        "owner_start_ack": owner_start_ack_state(facts, owner_start_acknowledgement),
     }
     if not facts.applicable:
         return WindowPlan(
@@ -495,9 +594,10 @@ def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> W
             ack="not_required",
         )
     refusals: list[str] = []
-    if facts.journal_state not in {"absent", "closed"} and not deadman_recovery(
-        facts, position=position
-    ):
+    recovering = deadman_recovery(facts, position=position) or owner_start_recovery(
+        facts, position=position, acknowledgement=owner_start_acknowledgement
+    )
+    if facts.journal_state not in {"absent", "closed"} and not recovering:
         refusals.append("window_journal_open")
     if facts.migration_decision == "refuse":
         refusals.append("window_migration_refused")
