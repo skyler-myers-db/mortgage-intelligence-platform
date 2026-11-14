@@ -3842,6 +3842,10 @@ states and one GET by id per legacy object, and refuses, before the lease:
 - `deployer_state_orphan`, in either phase: a key the deployer's state binds
   and the bundle no longer declares (the pre-bind plan carries it as a delete,
   which names no bundle key);
+- `ambiguous_key` (two bundle resources share one bare key, which `bundle
+  deployment bind` cannot tell apart), `not_an_adopted_install` (the profile
+  names no `MIP_LEGACY_BUNDLE_ROOT`) and `legacy_state_missing` (that root
+  holds no bundle state);
 - `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
   `state_mismatch`, `malformed_state` and `read_failed` (a read error is never
   read as absent).
@@ -3855,8 +3859,8 @@ changed: under GitHub Actions its one write is the create-only private report
 the run takes
 the signed lease and runs `install_state_adopt apply`, which recomputes the
 plan immediately before the first state edit, refuses with nothing changed
-unless the digest is the acknowledged one, asserts the lease before every
-edit and then:
+(exit 2) when that plan refuses (`plan_refused`) or is not the acknowledged
+digest (`ack_mismatch`), asserts the lease before every edit and then:
 
 - **adopt** binds exactly the plan's keys
   (`bundle_env deployment bind <key> <id> -t client --auto-approve`), proves
@@ -3868,14 +3872,18 @@ edit and then:
   dashboard recreate or move (`dashboard_recreate`, `dashboard_move`); and
   every rename's new name looked up with the create's own read-only lookup
   before anything is renamed (`rename_collision`). On any failure after the
-  first bind it unbinds each key the state shows this run bound, in reverse
+  first bind (`state_unverified`: the state does not bind every planned key
+  to its id; `gate_refused`: the post-bind gate refuses; `bind_failed`: any
+  other failure, a failed bind or a post-bind `PlanShapeError` included) it
+  unbinds each key the state shows this run bound, in reverse
   (the App last), and reads the state again to prove it (exit 2); if that
   cannot be proven it exits 3 and the private report names what the state may
   still bind;
 - **unadopt** unbinds each legacy key the deployer's state binds to its legacy
   id, and nothing else: a key the deployer created itself stays bound. It
   unbinds in the reverse of adopt's order, so the App's binding is the last one
-  removed, and stops at the first failure (exit 3).
+  removed, and stops at the first failure (`unbind_failed`, exit 3); a state
+  that still binds a key it unbound refuses `state_unverified` (exit 3).
 
 After an exit 3 from either phase, run `--phase unadopt` (again): its plan
 unbinds whatever legacy keys the state still binds, and its live checks accept
