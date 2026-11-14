@@ -18,7 +18,7 @@ import pytest
 
 from tests.fixtures import bundle_plan_fixtures as fx
 from tools.databricks import bundle_plan_gate as gate
-from tools.databricks.bundle_plan_shape import parse_plan
+from tools.databricks.bundle_plan_shape import DOCUMENT_RESOURCE, parse_plan
 
 INSTANCE = "resources.database_instances.mip_app_state"
 
@@ -118,6 +118,33 @@ def test_an_unreadable_plan_refuses_as_malformed(
     assert "REFUSED malformed_plan bundle.plan" in err
     assert json.loads(report.read_text(encoding="utf-8"))["refusals"][0]["code"] == "malformed_plan"
     assert "public summary" in out
+
+
+def test_a_parser_refusal_is_public_only_as_its_resource_and_field_class(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A change path can carry a remote map key: the message is the full report's alone (wave 7f)."""
+
+    map_key = "zyrplax-remote-map-key"
+    doc = fx.adopted()
+    doc["plan"]["resources.jobs.mip_ref_seed"]["changes"] = {
+        f"tags['{map_key}']": {"action": "skip", "why": "x"}
+    }
+    public = tmp_path / "public.json"
+
+    rc, out, err, report = _main(
+        tmp_path, doc, fx.RecordingWorkspace(), capsys, "--public-out", str(public)
+    )
+
+    assert rc == 2
+    assert "[mip-plan-gate] REFUSED malformed_plan jobs.mip_ref_seed (changes): " in err
+    assert map_key not in out + err + public.read_text(encoding="utf-8")
+    (refusal,) = json.loads(report.read_text(encoding="utf-8"))["refusals"]
+    assert (refusal["code"], refusal["resource"]) == ("malformed_plan", "jobs.mip_ref_seed")
+    assert refusal["detail"]["reason"] == "changes"
+    assert map_key in refusal["detail"]["message"]
+    assert refusal["detail"]["skeleton"]["json"] is True
+    assert gate.PLAN_RESOURCE == DOCUMENT_RESOURCE, "a document-level refusal names the same resource"
 
 
 def test_a_missing_plan_file_refuses(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

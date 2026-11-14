@@ -203,45 +203,95 @@ def test_both_adopt_functions_end_the_run_on_every_path() -> None:
 # --- the two functions, driven ---------------------------------------------------------
 
 
-def _recording_tool(repo: Path, tool_rc: int) -> Path:
-    """A stub ``tools.databricks.install_state_adopt`` that records its argv and exits ``tool_rc``."""
+def _recording_tool(repo: Path, tool_rc: int, *, writes_report: bool = True) -> Path:
+    """A stub ``tools.databricks.install_state_adopt`` that records its argv, writes a report and exits ``tool_rc``."""
 
     package = repo / "tools" / "databricks"
     package.mkdir(parents=True, exist_ok=True)
     for init in (repo / "tools" / "__init__.py", package / "__init__.py"):
         init.write_text("", encoding="utf-8")
     recorded = repo / "argv.json"
+    report = (
+        "out = sys.argv[sys.argv.index('--report-out') + 1]\n"
+        "open(out, 'w').write(json.dumps({'phase': sys.argv[sys.argv.index('--phase') + 1]}))\n"
+        if writes_report
+        else ""
+    )
     (package / "install_state_adopt.py").write_text(
-        f"import json, sys\nopen({str(recorded)!r}, 'w').write(json.dumps(sys.argv[1:]))\nsys.exit({tool_rc})\n",
+        f"import json, sys\nopen({str(recorded)!r}, 'w').write(json.dumps(sys.argv[1:]))\n{report}sys.exit({tool_rc})\n",
+        encoding="utf-8",
+    )
+    return recorded
+
+
+def _recording_publisher(repo: Path, publish_rc: int) -> Path:
+    """A stub ``tools.databricks.plan_report_publish`` that records each argv and the report it was handed."""
+
+    recorded = repo / "published.jsonl"
+    (repo / "tools" / "databricks" / "plan_report_publish.py").write_text(
+        "import json, sys\n"
+        "full = open(sys.argv[sys.argv.index('--full') + 1]).read()\n"
+        f"open({str(recorded)!r}, 'a').write(json.dumps({{'argv': sys.argv[1:], 'full': full}}) + '\\n')\n"
+        f"sys.exit({publish_rc})\n",
         encoding="utf-8",
     )
     return recorded
 
 
 def _drive(
-    tmp_path: Path, name: str, *, ack: str, tool_rc: int, dry_run: int = 0
+    tmp_path: Path,
+    name: str,
+    *,
+    ack: str,
+    tool_rc: int,
+    dry_run: int = 0,
+    gha: bool = False,
+    publish_rc: int = 0,
+    writes_report: bool = True,
+    phase: str = "adopt",
+    run_id: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     repo = tmp_path / "repo"
-    repo.mkdir(exist_ok=True)
-    recorded = _recording_tool(repo, tool_rc)
+    repo.mkdir(parents=True, exist_ok=True)
+    recorded = _recording_tool(repo, tool_rc, writes_report=writes_report)
+    _recording_publisher(repo, publish_rc)
     shell = (
         f"TMPDIR={tmp_path}\n"
         'mktemp() { local f="$TMPDIR/report.$RANDOM"; : > "$f"; printf \'%s\\n\' "$f"; }\n'
         'GRN=""\n'
         'run_with_proof_signing_authority() { "$@"; }\n'
         # adopt-live's own functions are driven in tests/unit/test_adopt_live_deploy_contract.py.
-        "run_adopt_live_plan() { :; }\nrun_adopt_live_apply() { :; }\n"
+        'run_adopt_live_plan() { echo "adopt-live-planned"; }\nrun_adopt_live_apply() { :; }\n'
+        # The report publish (wave 7f) is the real function, over a recording publisher.
+        "BUNDLE_PLAN_REPORT_JSON=''\nBUNDLE_PLAN_PUBLIC_JSON=''\nBUNDLE_PLAN_REPORT_AFTER_EDIT=0\n"
+        "BUNDLE_PLAN_REPORT_PUBLISHED=''\n"
+        + function("publish_plan_report")
+        + function("plan_report_write_note")
         + function(name)
-        + f"{name} adopt\n"
+        + f"{name} {phase}\n"
     )
     env = {
         "MIP_ADOPT_PLAN_ACK": ack,
         "_GRANTS_APP_NAME": "synthetic-app",
         "MIP_APP_DEPLOYMENT_LEASE_ID": "lease-1",
         "SOURCE_GIT_SHA": "0" * 40,
+        "DEPLOY_PHASE": phase,
+        "CLIENT_DEPLOYER": "00000000-0000-4000-8000-00000000d0e1",
+        "CLIENT_KEY": "client-one",
+        "GITHUB_ACTIONS": "true" if gha else "",
+        # The run id alone (run_id, without gha) is not GitHub Actions: the publish guard needs both.
+        "GITHUB_RUN_ID": ("4242" if gha else "") if run_id is None else run_id,
+        "GITHUB_RUN_ATTEMPT": "2",
     }
     result = drive(repo, shell, dry_run=dry_run, env=env, epilogue="echo reached-the-lease\n")
     return result, recorded
+
+
+def _published(tmp_path: Path) -> list[dict[str, object]]:
+    import json
+
+    path = tmp_path / "repo" / "published.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
 
 
 def _argv(recorded: Path) -> list[str]:
@@ -254,7 +304,7 @@ def test_without_an_ack_the_plan_ends_the_run_read_only_before_the_lease(tmp_pat
     result, recorded = _drive(tmp_path, "run_adopt_phase_plan", ack="", tool_rc=0)
 
     assert result.returncode == 0, result.stderr
-    assert "adopt plan complete: read-only, stopped before the lease" in result.stdout
+    assert "adopt plan complete: read-only, stopped before the lease; nothing was changed." in result.stdout
     assert "reached-the-lease" not in result.stdout
     argv = _argv(recorded)
     assert argv[:3] == ["plan", "--phase", "adopt"] and "--ack-plan" not in argv
@@ -281,6 +331,7 @@ def test_a_refused_plan_exits_2_before_the_lease(tmp_path: Path) -> None:
 
     assert result.returncode == 2 and "reached-the-lease" not in result.stdout
     assert "the adopt plan refused before the lease" in result.stderr
+    assert result.stderr.rstrip().endswith("; nothing was changed."), "outside GitHub Actions the run wrote nothing"
 
 
 @pytest.mark.parametrize(("tool_rc", "rc"), ((0, 0), (2, 2), (3, 3), (1, 2)))
@@ -291,6 +342,104 @@ def test_the_apply_ends_the_run_with_the_tools_verdict(tmp_path: Path, tool_rc: 
     assert "reached-the-lease" not in result.stdout
     assert _argv(recorded)[:5] == ["apply", "--phase", "adopt", "--ack-plan", ACK]
     assert _argv(recorded)[7:9] == ["--lease-id", "lease-1"]
+
+
+# --- the private report reaches the deployer's plan-reports folder (wave 7f) ---------------
+
+
+def _publish_argv(report: str) -> list[str]:
+    return [
+        "publish", "--full", report, "--principal", "00000000-0000-4000-8000-00000000d0e1",
+        "--client", "client-one", "--run-id", "4242", "--run-attempt", "2",
+    ]  # fmt: skip
+
+
+# Both phases publish: unadopt is 10B's recovery after an exit 3, and its report names what it unbound.
+@pytest.mark.parametrize("phase", ("adopt", "unadopt"))
+@pytest.mark.parametrize(("ack", "tool_rc", "rc"), (("", 2, 2), (ACK, 2, 2), ("", 0, 0)), ids=("refused", "refused-acked", "no-ack"))
+def test_a_run_that_ends_at_the_plan_publishes_its_report_once(
+    tmp_path: Path, ack: str, tool_rc: int, rc: int, phase: str
+) -> None:
+    result, recorded = _drive(tmp_path, "run_adopt_phase_plan", ack=ack, tool_rc=tool_rc, gha=True, phase=phase)
+
+    assert result.returncode == rc, result.stdout + result.stderr
+    (published,) = _published(tmp_path)
+    report = _argv(recorded)[_argv(recorded).index("--report-out") + 1]
+    assert _argv(recorded)[:3] == ["plan", "--phase", phase]
+    assert published == {"argv": _publish_argv(report), "full": f'{{"phase": "{phase}"}}'}
+    assert "reached-the-lease" not in result.stdout
+    if tool_rc == 0:
+        assert result.stdout.index("plan_report_publish publish") < result.stdout.index("adopt-live-planned"), (
+            "published before adopt-live's plan can refuse"
+        )
+    # The published report is the run's one write: its closing line says so, never "read-only".
+    wrote = (
+        "no governed resource was changed (its one write, under GitHub Actions only, is the create-only "
+        "report in the deployer's plan-reports folder as 4242-2.json)"
+    )
+    closing = (result.stdout if tool_rc == 0 else result.stderr).rstrip().splitlines()[-1]
+    assert wrote in closing and "nothing was changed" not in closing and "read-only" not in closing
+    if tool_rc == 0:
+        assert f"[deploy] {phase} plan complete: stopped before the lease; {wrote}. Review it" in closing
+    else:
+        assert f"[deploy] the {phase} plan refused before the lease;" in closing
+
+
+def test_an_acked_plan_that_passes_leaves_the_publish_to_the_apply(tmp_path: Path) -> None:
+    result, _recorded = _drive(tmp_path, "run_adopt_phase_plan", ack=ACK, tool_rc=0, gha=True)
+
+    assert result.returncode == 0 and "reached-the-lease" in result.stdout
+    assert _published(tmp_path) == []
+
+
+@pytest.mark.parametrize("phase", ("adopt", "unadopt"))
+@pytest.mark.parametrize(("tool_rc", "rc"), ((0, 0), (2, 2), (3, 3)))
+@pytest.mark.parametrize("publish_rc", (0, 2))
+def test_the_apply_publishes_its_report_and_a_failed_publish_never_changes_the_verdict(
+    tmp_path: Path, tool_rc: int, rc: int, publish_rc: int, phase: str
+) -> None:
+    result, recorded = _drive(
+        tmp_path, "run_adopt_phase_apply", ack=ACK, tool_rc=tool_rc, gha=True, publish_rc=publish_rc, phase=phase
+    )
+
+    assert result.returncode == rc, result.stdout + result.stderr
+    (published,) = _published(tmp_path)
+    assert _argv(recorded)[:3] == ["apply", "--phase", phase]
+    assert published["argv"] == _publish_argv(_argv(recorded)[_argv(recorded).index("--report-out") + 1])
+    assert published["full"] == f'{{"phase": "{phase}"}}'
+    failed = f"the private {phase} report could not be written to the deployer's plan-reports folder"
+    assert (failed in result.stderr) == (publish_rc != 0)
+
+
+def test_a_failed_publish_of_a_plan_that_ended_the_run_refuses(tmp_path: Path) -> None:
+    result, _recorded = _drive(tmp_path, "run_adopt_phase_plan", ack="", tool_rc=0, gha=True, publish_rc=2)
+
+    assert result.returncode == 2
+    assert "the full plan report could not be written to the deployer's plan-reports folder" in result.stderr
+
+
+@pytest.mark.parametrize("name", ("run_adopt_phase_plan", "run_adopt_phase_apply"))
+def test_outside_github_actions_or_without_a_report_nothing_is_published(tmp_path: Path, name: str) -> None:
+    local, _recorded = _drive(tmp_path / "local", name, ack=ACK, tool_rc=2)
+    # A run id without GITHUB_ACTIONS=true is not a GitHub Actions run: the sink stays CI-only.
+    run_id_only, _recorded = _drive(tmp_path / "run-id-only", name, ack=ACK, tool_rc=2, run_id="4242")
+    empty, _recorded = _drive(tmp_path / "empty", name, ack=ACK, tool_rc=2, gha=True, writes_report=False)
+
+    assert local.returncode == run_id_only.returncode == empty.returncode == 2
+    assert _published(tmp_path / "local") == [] and _published(tmp_path / "run-id-only") == []
+    assert _published(tmp_path / "empty") == []
+    if name == "run_adopt_phase_plan":
+        for run in (local, run_id_only, empty):
+            assert run.stderr.rstrip().endswith("; nothing was changed."), "a run that published nothing wrote nothing"
+    assert "no adopt report to publish: the tool wrote none" in empty.stdout
+
+
+def test_a_dry_run_says_it_would_publish_the_private_report(tmp_path: Path) -> None:
+    result, _recorded = _drive(tmp_path, "run_adopt_phase_plan", ack="", tool_rc=0, dry_run=1, gha=True)
+
+    assert result.returncode == 0
+    assert "would publish: the private adopt report to the deployer's plan-reports folder (CI only)" in result.stdout
+    assert _published(tmp_path) == []
 
 
 # --- the whole dry run, offline ---------------------------------------------------------

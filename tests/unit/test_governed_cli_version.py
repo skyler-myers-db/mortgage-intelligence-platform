@@ -109,7 +109,7 @@ def test_the_gates_name_the_reviewed_cli_version() -> None:
         f"Databricks CLI {tag}, plan_version {PLAN_VERSION})"
         in bundle_plan_gate.REMEDIES["malformed_plan"]
     )
-    assert f"the installed\ntag, {tag}, not from a live capture" in (
+    assert f"the installed\ntag, {tag}, and measured live on that version" in (
         bundle_plan_shape.__doc__ or ""
     )
     assert f"the reviewed {tag} shape" in (bundle_plan_shape.PlanShapeError.__doc__ or "")

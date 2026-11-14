@@ -65,7 +65,7 @@ journals the tools write name resources: keep them in `<private-dir>`.
 path, and each was a code change; nothing in this runbook works around one.
 All of them are fixed on `main` now, and their rows stay for the record: B1
 (#344 and #348), B2, B4(a), B4(b) and B6 (#345), B3 (#349), B4(c) (#347), B5
-(#343) and S0(b) (#346). B1's adopt-phase part (#344) no longer stops this
+(#343), S0(b) (#346) and the CLI pin (#355). B1's adopt-phase part (#344) no longer stops this
 cutover, and its first-install part (#348: the profile's
 `MIP_BOOTSTRAP_WAREHOUSE_ID`) no longer stops a new client's first install.
 What is left is no code change:
@@ -117,6 +117,7 @@ while 10B or 12 cannot run leaves the install half handed over.
 | B4 | fixed | (a) and (b): `genie_pin` (`MIP_GENIE_PIN_ACK`) and `accepted_exposure_plan` (`MIP_ACK_ACCEPTED_EXPOSURE_PLAN`) are admitted in `plan`, `release`, `adopt` and `unadopt` (never `data`), for the two readers the adopt phases reach: the step-0 Genie pin check (`provision_genie_space --plan-pin`, no phase guard, `scripts/lib/deploy_step_preflight_gates.sh`) and the pre-stop probes in their adopt mode. So 10B-0 refuses at the pin check and prints the pin plan's sha256, and 10B-1 carries it. (c): before an adoption no pin record and no signed rollback record names the governed space (an older one, if any, is signed with another key than the one step 4 generates, and refuses as well: step 7's rollback-scope check looks for it), so the adopt phases' bundle plan (`install_state_adopt`'s `bundle_env plan`), its binds and unbinds and adopt-live's bundle summary refused `no pin names the governed Genie space yet` (exit 2) whatever `genie_pin` said. Those calls, and no others, now pass `bundle_env --adopt-acked-genie-pin`: while nothing pins a space, bundle_env binds the one title match whose pin plan sha256 is that exact `genie_pin`, through the step-0 check's own resolution (a pin always wins; no ack, another plan's ack, no title match or two of them refuse). bundle_env builds the deployer's client the provisioner's way, so it recomputes the very digest 10B-0 printed. Nothing writes a pin: adopt-live's signed v7 record then names the space (`genie_space_id`), and no later dispatch needs `genie_pin`. Each of those calls re-resolves the match, so a direct `CAN_MANAGE` change mid-run refuses (10B, Refusals). | Fixed on `main`: (a) and (b) by the carrier fix, (c) by the acked title pin. `phase=unadopt` reads the same `genie_pin` while no record names the space (10B, Rollback). |
 | B5 (fixed: #343) | step 10B | The deploy job's checkout was shallow (`actions/checkout@v6` at depth 1), so adopt-live refused `health_sha_not_on_main` for every live health `git_sha` older than the run's own commit. `deploy-dev.yml`'s adopt phase now checks out main's full history (`fetch-depth` 2147483647, git's infinite depth: the run's commit at `refs/remotes/origin/main`, unshallow, and no other branch or tag); every other phase stays at depth 1, and a shallow checkout refuses saying so. adopt-live still refuses, by design, a health sha `main` does not hold: in CI, `the health sha resolves to no single commit in this checkout's history of main` (step 10A's source check finds it first). | Done. Keep the two history rules in "Decisions taken". |
 | B6 | step 11 | Fixed. Plan #3 plans run 1's WR2 window, and it always exited 2: `quiesce_window` was release-only, so a plan could not carry the window's ack and the pre-lease window plan refused `window_unacked`; and the window's admission was judged against the plan job's own 30 minutes, which admit no window (each needs about an hour), so an acked plan would still refuse `window_budget_refused`. Plan #3 never printed the active deployment's sha256 or published the PlanReport step 12 needs. | Fixed on `main`: a plan carries `quiesce_window` (read-only) and forecasts the window's admission for a release dispatched now; step 11 is two dispatches. A release refuses an unacked or unadmitted window exactly as before. |
+| CLI pin (fixed: #355) | step 10B-1 | Spike S10 passed the plan parser, the adopt map and the pre-lease gate on the whole bundle's fresh-root plan on Databricks CLI 1.10.0 only, while `deploy-dev.yml` installed CLI 1.7.0, whose plan JSON no spike measured. The first live parse of the whole bundle's plan is 10B-1's, after steps 7 and 8, so an unknown shape there would stop the cutover with UC and Lakebase handed over. | Done: `deploy-dev.yml` pins `databricks/setup-cli` to its `v1.10.0` tag's commit with no `with:`, and tests/unit/test_governed_cli_version.py holds that pin equal to the parser's `REVIEWED_CLI_VERSION`. A move to another CLI re-runs S10 on it before step 7. |
 | S0(b) | steps 10B, 11 and 12 | **Fixed in code; plan #1 measures it.** The pre-stop owner probe, the owner-equivalent probe, the treatment-access converger and the client live checks read the metastore's owner from `metastores.summary()` through one reader (`tools/databricks/uc_metastore_read.py`), never the metastore-admin-only `metastores.get` (docs/deployment.md, "Metastore owner"). A throwaway non-admin service principal received the owner on 2026-11-11. Check 4b of the live checks reads it as the real CI deployer, so step 6's plan #1 answers S0(b) for this client. | Read plan #1's live-check lines with the decision rule in step 6. If the summary withholds the owner from the CI deployer, stop before step 7: a follow-up must read the owner another way (`system.information_schema.metastores` through a warehouse, after B1, or an owner attestation). |
 | S0(b′) | steps 10B, 11 and 12, and `phase=unadopt` | **A proof route is in code; it needs the owner.** Once the owner is read, the converger, adopt-live's `treatment_unverified` fact and the pre-stop owner probe prove that the App's service principal holds no metastore privilege outside `USE_MARKETPLACE_ASSETS`. That read (`grants.get_effective` on the metastore for the App) is denied to a deployer that is not a metastore admin (HTTP 403, measured 2026-11-11), and the CI deployer is not one. So every `plan`, `adopt`, `unadopt` and `release` run refuses before the lease, `[mip-prestop] REFUSED: metastore_authority: the deploying identity is not a metastore admin ...`, unless it carries the metastore owner's attestation: `metastore_app_grants=<sha256>` in `operation_acks` (docs/deployment.md, "Metastore authority"). Closing S0(b) does not clear this. Under `single_maintainer_audited` the ack is the dispatcher's unauthenticated assertion that the App holds only reviewed metastore privileges, not a proof that the owner read them (review-modes.md). | The owner takes the attestation (step 10B, first block) at most 29 days before each run that reads it, and again after any change to the App's metastore grants. Only the pre-stop probe adds the run's 24-hour margin, so a run that starts before the printed last start keeps the ack through its last converger after the lease. |
 
@@ -775,6 +776,16 @@ before the pre-stop probes, so the plan's other expected refusals (UC owner
 policy, Lakebase executor) are not reached until the adopt phase. The public
 summary leaks no identifier.
 
+**Plan #1 does not test the plan parser.** It stops at the client live
+checks, so it runs no bundle validate and no bundle plan (plan #2 neither).
+The first live parse of the whole bundle's plan is 10B-1's pre-bind plan,
+after steps 7 and 8. Spike S10 parsed that class of document on a throwaway
+root, on CLI 1.10.0: the fresh-root plan of the whole bundle (18 creates over
+the 8 kinds) passed the parser, the adopt map's name extraction and the
+pre-lease gate, and tests/fixtures/bundle_plans/ rebuilds it. A shape the
+parser does not know still stops 10B-1 (10B, Refusals); the governed job
+installs the CLI version S10 measured (#355; step 7's preconditions).
+
 **Blue's env-name parity (B3), the step-7 gate.** Before that exit the plan
 measures, read-only and names only, whether this CI profile rebuilds the live
 App's newest deployment's env-name set, the set 10A's start copies (spike S7)
@@ -979,12 +990,18 @@ and peers as one contiguous sequence; the App stays stopped until step 10A.
 **Preconditions:**
 
 - **Every blocker of steps 10B and 12 has landed on `main`** (B1's adopt
-  part, B2, B3, B4 (all three parts) and B5 have landed); plan #1 showed no
+  part, B2, B3, B4 (all three parts), B5 and the CLI pin have landed); plan #1 showed no
   `metastore owner:` line beside its positive control (step 6), so S0(b) is
   closed; and the owner is ready to take S0(b′)'s attestation before 10B
   (Blockers, above). Closing S0(b) alone does not clear this step. This step starts a sequence that must finish inside the
   pairs' 14 days; started while 10B cannot run, it leaves UC (and, after
   step 8, Lakebase) handed over with no adoption to follow.
+- The governed job installs Databricks CLI 1.10.0, the version spike S10
+  passed the plan parser on (step 6). Satisfied on `main` since #355:
+  `deploy-dev.yml` pins `databricks/setup-cli` to its `v1.10.0` tag's commit,
+  and tests/unit/test_governed_cli_version.py holds that pin equal to the
+  parser's `REVIEWED_CLI_VERSION`. A move to another CLI re-runs S10 on it
+  first: a shape the parser does not know stops 10B-1 after the handovers.
 - Step 6 showed only the expected set, and its `env-name parity holds` (no
   env-name difference; B3); the interim membership (step 4) is in place.
 - Step 10A's source check passes (it is read-only and reads the stopped App):
@@ -1403,7 +1420,10 @@ equal step 6c's preflight digest; if it does not, the legacy state, an object
 or a name moved since, or CI saw another estate: read why before 10B-2. Keep
 the adopt-live plan's
 `deployment_sha256`: it is the `supersedes_deployment` selector should a
-supersede ever be needed.
+supersede ever be needed. Read-only here, and in every read-only adopt or
+unadopt dispatch below, means no governed resource changes: the run's one
+write is its private report, create-only in the deployer's plan-reports folder
+as `<run id>-<attempt>.json`, which its closing line names.
 
 **10B-2, the adoption.**
 
@@ -1449,7 +1469,9 @@ so take it again; `owner_policy` with `the metastore summary returned no
 owner` is S0(b) and means stop); bind plan: `[mip-adopt] REFUSED: bundle plan
 failed (exit 2)` with no plan line before it means bundle_env refused the
 bundle call, and the job log does not say why (bundle_env's own line goes to
-the run's private report, a file on the runner that no step uploads). In the
+the run's private report, `cli_errors`, which the deploy publishes create-only
+to `<deployer root>/plan-reports/<run id>-<attempt>.json`; a workspace admin
+reads it there). In the
 adopt phases one cause is the Genie binding, which every bundle call
 re-resolves: a direct holder of the space changed since this run's pin check
 (bundle_env's `the ack names another plan`), or the title match is gone or
@@ -1486,6 +1508,41 @@ Each is in docs/deployment.md ("Adopting an existing install",
 "Signing the live deployment as an adopted blue"). Exit 3 from the bind: its
 undo is unproven; dispatch `phase=unadopt`.
 
+**More bind-plan, apply and post-bind refusals.** The bind plan also refuses
+`ambiguous_key` (two declared resources share one bare key),
+`not_an_adopted_install` (the profile names no `MIP_LEGACY_BUNDLE_ROOT`) and
+`legacy_state_missing` (that root holds no bundle state). A plan document the
+parser does not know prints only `[mip-adopt] REFUSED malformed_plan
+<kind>.<key> (<field class>)` wherever it meets that plan before a bind (at
+10B-1, and at 10B-2 in the plan before the lease or the plan recomputed under
+it), and there it is exit 2 with no governed resource changed. The parser's message and
+the document's value-free skeleton are in the run's private report
+(`malformed_plan`, in the deployer's plan-reports folder); the remedy is a
+parser follow-up from them (a fixture and a test on `main`), then 10B-1 again,
+with steps 7 and 8 left as they are. Only the post-bind plan's parser refusal
+differs: `[mip-adopt] REFUSED bind_failed: PlanShapeError during the binds
+(malformed_plan <kind>.<key> (<field class>))`, which starts the undo: exit 2
+once every bind is proven undone, exit 3 when not (dispatch `phase=unadopt`).
+
+Under the lease, before any edit, the recomputed plan of an acked adopt or
+unadopt refuses `plan_refused` (a bind-plan code above now holds; each prints
+before it) or `ack_mismatch` (the recomputed plan is not the acked
+`adopt_plan` digest): exit 2, nothing changed; start again at 10B-0. After the
+binds the adopt refuses `state_unverified` (the state does not bind every
+planned key to its id) or `gate_refused` (the post-bind plan gate refuses: the
+`post-bind plan gate:` line before it and the refusal itself name the gate's
+codes), each starting the same undo, exit 2 or 3. An acked `phase=unadopt`
+refuses `unbind_failed` (an unbind failed; nothing re-binds automatically) or
+`state_unverified` (the state still binds a key it unbound), both exit 3:
+dispatch `phase=unadopt` again. The post-bind gate's codes are its adopt-mode
+codes above and its base codes, each starting the adopt's undo:
+`delete`; `recreate` (a database catalog recreates on any settable field it
+does not match, a pipeline on a storage change); `id_change`; `unknown_kind`
+(a child `permissions` or `grants` node, with `create_set_mismatch`);
+`collision` and `lookup_failed` (a create's name, one of the 2 new jobs, or a
+rename's new name not proven free); and `malformed_plan` (no `apps.mip_app`
+entry, or an instance update without its `new_state`).
+
 **A Genie holder that changes mid-run.** Until adopt-live signs, every bundle
 call of 10B-2 re-resolves the Genie title match (the space list, the space's
 permissions and the deploying identity): the plan recomputed under the lease,
@@ -1508,9 +1565,10 @@ capture bundle_env's output, and the log names only the call that failed.
   bindings_differ: the bundle summary failed (exit 2)`; exit 2, no record is
   written and the binds stay as acknowledged.
 
-The Genie cause is written only to the run's private report on the runner
-(`cli_errors`; adopt-live's summary keeps none), which no step uploads. A
-read-only dispatch without `genie_pin` reveals it: the unadopt's (or 10B-0's)
+The Genie cause is written only to the run's private report (`cli_errors`;
+adopt-live's summary keeps none), never to the log; the deploy publishes that
+report to the deployer's plan-reports folder (one per run). A read-only
+dispatch without `genie_pin` reveals it as well: the unadopt's (or 10B-0's)
 refuses at the step-0 pin check, whose lines the log does print, and a pin
 plan sha256 other than the acked one says a holder or the deployer changed.
 

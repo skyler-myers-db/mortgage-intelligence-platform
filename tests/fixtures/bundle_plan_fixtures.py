@@ -1,7 +1,10 @@
 """Sanitized ``databricks bundle plan -o json`` documents, and a recording workspace.
 
-No governed plan has run yet, so these are not captures. They mirror the
-structs of the Databricks CLI at the installed tag, v1.10.0, field for field:
+These are not captures. They mirror the structs of the Databricks CLI at the
+installed tag, v1.10.0, field for field, and carry only the name fields the
+gate reads; the shapes spikes S9 and S10 measured live (``depends_on``,
+``vars``, every value field, ``remote_state`` and ``changes``) are rebuilt in
+tests/fixtures/bundle_plans/:
 
 * ``bundle/deployplan/plan.go``: ``Plan`` (``plan_version`` = 2,
   ``cli_version``, ``lineage``, ``serial``, ``plan``) and ``PlanEntry``
@@ -17,8 +20,11 @@ structs of the Databricks CLI at the installed tag, v1.10.0, field for field:
 * ``cmd/bundle/plan.go``: the document is ``json.MarshalIndent(plan, "", "  ")``.
 
 Names are symbolic placeholders, never an install's: ``synthetic-<key>`` for a
-resolved name and ``deployer@example.invalid`` for the deployer. A live
-capture is owed at the first governed plan phase (M1-PR7).
+resolved name and ``deployer@example.invalid`` for the deployer. No governed
+run has parsed a plan yet: plans #1 and #2 of an adoption stop at the client
+live checks and run no bundle validate or plan, so the first governed parse
+is the adopt phase's pre-bind plan (the first-client cutover's 10B-1), and
+for a new client the first plan phase past the live checks.
 """
 
 from __future__ import annotations

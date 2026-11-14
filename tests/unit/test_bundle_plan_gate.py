@@ -1,8 +1,9 @@
 """The bundle plan gate refuses deletes, recreates, collisions and unadopted installs (M0-PR4).
 
 Every plan here is a sanitized fixture that mirrors the Databricks CLI
-v1.10.0 plan structs (tests/fixtures/bundle_plan_fixtures.py); a live capture
-is owed at the first governed plan phase. The lookups run against a recording
+v1.10.0 plan structs (tests/fixtures/bundle_plan_fixtures.py); the shapes
+spikes S9 and S10 measured live are pinned in
+tests/unit/test_bundle_plan_measured_shapes.py. The lookups run against a recording
 workspace, so each test also proves the gate made only GET and list calls.
 """
 

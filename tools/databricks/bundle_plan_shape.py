@@ -1,9 +1,17 @@
 """The ``databricks bundle plan -o json`` document, parsed fail closed (spike S1).
 
 The shape is derived from the Databricks CLI's own source at the installed
-tag, v1.10.0, not from a live capture. No governed plan has run yet; the first
-live capture is owed at the first governed plan phase (M1-PR7), and until then
-this parser refuses every shape it does not know:
+tag, v1.10.0, and measured live on that version on throwaway bundle roots:
+spike S9 parsed 14 documents for one experiment (create, skip, update and
+recreate, with ``remote_state`` and ``changes``), and spike S10 the whole
+bundle's fresh-root plan (18 creates over the 8 declared kinds, with
+``depends_on`` and ``vars``; tests/fixtures/bundle_plans/ rebuilds both
+synthetically). No governed run has parsed one yet. Plans #1 and #2 of an
+adoption stop at the client live checks and run no bundle validate or plan;
+the first governed parse is the adopt phase's pre-bind plan (the first-client
+cutover's 10B-1, ``install_state_adopt plan``), and for a new client the
+first plan phase that passes the live checks. The parser refuses every shape
+it does not know:
 
 * ``bundle/deployplan/plan.go``: ``Plan`` is ``plan_version``,
   ``cli_version``, ``lineage``, ``serial`` and ``plan`` (resource key to
@@ -27,7 +35,13 @@ The CLI's own loader (``LoadPlanFromFile``) decodes with
 ``DisallowUnknownFields`` and refuses another plan version. This parser is at
 least as strict: an unknown or duplicate field at any level, a wrong type, an
 unknown action or a key outside the ``resources.<kind>.<key>`` grammar raises
-``PlanShapeError``. Error messages name fields and keys only, never values.
+``PlanShapeError``. Its message names fields, keys and change paths, never
+values, and stays private all the same: in a plan over bound objects a change
+path or a duplicate field can be a remote map key (a tag key, a task key). A
+public line prints only ``PlanShapeError.public``: the symbolic resource
+(``<kind>.<key>``, or ``bundle.plan`` for the document) and a field class
+from ``FIELD_CLASSES``. Each one also carries the document's value-free
+skeleton (``bundle_plan_skeleton``) for the private report.
 """
 
 from __future__ import annotations
@@ -39,10 +53,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from tools.databricks.bundle_plan_skeleton import skeleton
+
 # The one Databricks CLI version the governed path was reviewed on: this
 # parser, the plan gate and every cutover spike. deploy-dev.yml's setup-cli pin
 # must install exactly it (tests/unit/test_governed_cli_version.py).
 REVIEWED_CLI_VERSION = "1.10.0"
+
 PLAN_VERSION = 2
 ACTIONS = frozenset({"skip", "resize", "update", "update_id", "create", "recreate", "delete"})
 CHILD_NODES = frozenset({"permissions", "grants"})
@@ -59,8 +76,54 @@ _RESOURCE_KEY = re.compile(
 )
 
 
+# What a refusal's public line may say about where the document broke.
+FIELD_CLASSES = frozenset(
+    {
+        "json", "duplicate_field", "number_constant", "document", "plan_version",
+        "cli_version", "lineage", "serial", "plan", "key", "child_node", "entry",
+        "id", "gone", "depends_on", "new_state", "action", "changes",
+    }
+)  # fmt: skip
+DOCUMENT_RESOURCE = "bundle.plan"
+
+
 class PlanShapeError(ValueError):
-    """The plan JSON is not the reviewed v1.10.0 shape."""
+    """The plan JSON is not the reviewed v1.10.0 shape.
+
+    ``str()`` is the private message. ``resource`` is the entry's symbolic
+    ``<kind>.<key>[.<child>]`` when its key is in the grammar, else
+    ``DOCUMENT_RESOURCE``; ``field`` is one of ``FIELD_CLASSES``; ``public``
+    joins the two for a public line. ``parse_plan`` sets ``skeleton``.
+    """
+
+    def __init__(self, message: str, *, field: str, key: str = "") -> None:
+        super().__init__(message)
+        if field not in FIELD_CLASSES:
+            raise ValueError("a plan shape refusal names an unreviewed field class")
+        match = _RESOURCE_KEY.fullmatch(key)
+        child = match.group("child") if match is not None else None
+        self.field = field
+        self.resource = DOCUMENT_RESOURCE
+        if match is not None and (child is None or child in CHILD_NODES):
+            self.resource = f"{match.group('kind')}.{match.group('name')}" + (f".{child}" if child else "")
+        self.skeleton: dict[str, Any] | None = None
+
+    @property
+    def public(self) -> str:
+        """``<resource> (<field class>)``: no change path, no map key, no value."""
+
+        return f"{self.resource} ({self.field})"
+
+    def private(self) -> dict[str, Any]:
+        """The private report's record: the message and the document's skeleton."""
+
+        return {
+            "code": "malformed_plan",
+            "resource": self.resource,
+            "field": self.field,
+            "message": str(self),
+            "skeleton": self.skeleton,
+        }
 
 
 @dataclass(frozen=True)
@@ -124,54 +187,55 @@ def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise PlanShapeError(f"duplicate field {key!r}")
+            raise PlanShapeError(f"duplicate field {key!r}", field="duplicate_field")
         result[key] = value
     return result
 
 
 def _refuse_constant(name: str) -> Any:
-    raise PlanShapeError(f"non-JSON number constant {name}")
+    raise PlanShapeError(f"non-JSON number constant {name}", field="number_constant")
 
 
-def _object(value: Any, where: str, allowed: frozenset[str]) -> dict[str, Any]:
+def _object(value: Any, where: str, allowed: frozenset[str], field: str, key: str = "") -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise PlanShapeError(f"{where} is not an object")
+        raise PlanShapeError(f"{where} is not an object", field=field, key=key)
     unknown = sorted(set(value) - allowed)
     if unknown:
-        raise PlanShapeError(f"{where} has unknown field(s) {', '.join(unknown)}")
+        raise PlanShapeError(f"{where} has unknown field(s) {', '.join(unknown)}", field=field, key=key)
     return value
 
 
-def _text(value: Any, where: str) -> str:
+def _text(value: Any, where: str, field: str, key: str = "") -> str:
     if not isinstance(value, str):
-        raise PlanShapeError(f"{where} is not a string")
+        raise PlanShapeError(f"{where} is not a string", field=field, key=key)
     return value
 
 
-def _integer(value: Any, where: str) -> int:
+def _integer(value: Any, where: str, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise PlanShapeError(f"{where} is not an integer")
+        raise PlanShapeError(f"{where} is not an integer", field=field)
     return value
 
 
-def _action(value: Any, where: str) -> str:
-    action = _text(value, where)
+def _action(value: Any, where: str, field: str, key: str) -> str:
+    action = _text(value, where, field, key)
     if action not in ACTIONS:
-        raise PlanShapeError(f"{where} is not a known action")
+        raise PlanShapeError(f"{where} is not a known action", field=field, key=key)
     return action
 
 
-def _changes(value: Any, where: str) -> dict[str, PlanChange]:
+def _changes(value: Any, where: str, key: str) -> dict[str, PlanChange]:
     if not isinstance(value, dict):
-        raise PlanShapeError(f"{where} is not an object")
+        raise PlanShapeError(f"{where} is not an object", field="changes", key=key)
     changes: dict[str, PlanChange] = {}
     for path, raw in value.items():
-        body = _object(raw, f"{where}[{path!r}]", _CHANGE_FIELDS)
+        at = f"{where}[{path!r}]"
+        body = _object(raw, at, _CHANGE_FIELDS, "changes", key)
         if "action" not in body:
-            raise PlanShapeError(f"{where}[{path!r}] has no action")
+            raise PlanShapeError(f"{at} has no action", field="changes", key=key)
         changes[path] = PlanChange(
-            action=_action(body["action"], f"{where}[{path!r}].action"),
-            reason=_text(body.get("reason", ""), f"{where}[{path!r}].reason"),
+            action=_action(body["action"], f"{at}.action", "changes", key),
+            reason=_text(body.get("reason", ""), f"{at}.reason", "changes", key),
             old=body.get("old"),
             new=body.get("new"),
             remote=body.get("remote"),
@@ -183,79 +247,90 @@ def _entry(key: str, raw: Any) -> PlanEntry:
     where = f"plan[{key!r}]"
     match = _RESOURCE_KEY.fullmatch(key)
     if match is None:
-        raise PlanShapeError(f"{where}: the key is not resources.<kind>.<key>[.<child>]")
+        raise PlanShapeError(f"{where}: the key is not resources.<kind>.<key>[.<child>]", field="key")
     child = match.group("child")
     if child is not None and child not in CHILD_NODES:
-        raise PlanShapeError(f"{where}: unknown child node")
-    body = _object(raw, where, _ENTRY_FIELDS)
+        raise PlanShapeError(f"{where}: unknown child node", field="child_node")
+    body = _object(raw, where, _ENTRY_FIELDS, "entry", key)
     if "action" not in body:
-        raise PlanShapeError(f"{where} has no action")
+        raise PlanShapeError(f"{where} has no action", field="entry", key=key)
     if "id" in body:
-        _text(body["id"], f"{where}.id")
+        _text(body["id"], f"{where}.id", "id", key)
     gone = body.get("gone", False)
     if not isinstance(gone, bool):
-        raise PlanShapeError(f"{where}.gone is not a boolean")
+        raise PlanShapeError(f"{where}.gone is not a boolean", field="gone", key=key)
     depends = body.get("depends_on", [])
     if not isinstance(depends, list):
-        raise PlanShapeError(f"{where}.depends_on is not a list")
+        raise PlanShapeError(f"{where}.depends_on is not a list", field="depends_on", key=key)
     for index, item in enumerate(depends):
-        edge = _object(item, f"{where}.depends_on[{index}]", _DEPENDS_FIELDS)
-        _text(edge.get("node"), f"{where}.depends_on[{index}].node")
-        _text(edge.get("label", ""), f"{where}.depends_on[{index}].label")
+        at = f"{where}.depends_on[{index}]"
+        edge = _object(item, at, _DEPENDS_FIELDS, "depends_on", key)
+        _text(edge.get("node"), f"{at}.node", "depends_on", key)
+        _text(edge.get("label", ""), f"{at}.label", "depends_on", key)
     new_value: Mapping[str, Any] | None = None
     new_vars: dict[str, str] = {}
     if "new_state" in body:
-        state = _object(body["new_state"], f"{where}.new_state", _STATE_FIELDS)
+        state = _object(body["new_state"], f"{where}.new_state", _STATE_FIELDS, "new_state", key)
         if "value" not in state:
-            raise PlanShapeError(f"{where}.new_state has no value")
+            raise PlanShapeError(f"{where}.new_state has no value", field="new_state", key=key)
         if not isinstance(state["value"], dict):
-            raise PlanShapeError(f"{where}.new_state.value is not an object")
+            raise PlanShapeError(f"{where}.new_state.value is not an object", field="new_state", key=key)
         new_value = state["value"]
         refs = state.get("vars", {})
         if not isinstance(refs, dict):
-            raise PlanShapeError(f"{where}.new_state.vars is not an object")
-        new_vars = {path: _text(ref, f"{where}.new_state.vars") for path, ref in refs.items()}
+            raise PlanShapeError(f"{where}.new_state.vars is not an object", field="new_state", key=key)
+        new_vars = {path: _text(ref, f"{where}.new_state.vars", "new_state", key) for path, ref in refs.items()}
     kind = match.group("kind") + (f".{child}" if child else "")
     return PlanEntry(
         key=key,
         kind=kind,
         name=match.group("name"),
-        action=_action(body["action"], f"{where}.action"),
+        action=_action(body["action"], f"{where}.action", "action", key),
         gone=gone,
         new_value=new_value,
         new_vars=new_vars,
-        changes=_changes(body.get("changes", {}), f"{where}.changes"),
+        changes=_changes(body.get("changes", {}), f"{where}.changes", key),
     )
 
 
-def parse_plan(text: str) -> BundlePlan:
-    """Parse ``bundle plan -o json`` output, or raise ``PlanShapeError``."""
-
+def _parse(text: str) -> BundlePlan:
     try:
         document = json.loads(
             text, object_pairs_hook=_no_duplicate_keys, parse_constant=_refuse_constant
         )
     except json.JSONDecodeError as exc:
-        raise PlanShapeError(f"the plan is not JSON (line {exc.lineno})") from None
-    top = _object(document, "the plan document", _TOP_FIELDS)
-    version = _integer(top.get("plan_version", 0), "plan_version")
+        raise PlanShapeError(f"the plan is not JSON (line {exc.lineno})", field="json") from None
+    top = _object(document, "the plan document", _TOP_FIELDS, "document")
+    version = _integer(top.get("plan_version", 0), "plan_version", "plan_version")
     if version != PLAN_VERSION:
-        raise PlanShapeError(f"plan_version {version} is not the reviewed version {PLAN_VERSION}")
+        raise PlanShapeError(
+            f"plan_version {version} is not the reviewed version {PLAN_VERSION}", field="plan_version"
+        )
     if "plan" not in top:
-        raise PlanShapeError("the plan document has no plan map")
+        raise PlanShapeError("the plan document has no plan map", field="document")
     if not isinstance(top["plan"], dict):
-        raise PlanShapeError("plan is not an object")
-    serial = _integer(top.get("serial", 0), "serial")
+        raise PlanShapeError("plan is not an object", field="plan")
+    serial = _integer(top.get("serial", 0), "serial", "serial")
     if serial < 0:
-        raise PlanShapeError("serial is negative")
+        raise PlanShapeError("serial is negative", field="serial")
     entries = tuple(
         sorted((_entry(key, raw) for key, raw in top["plan"].items()), key=lambda e: e.key)
     )
     return BundlePlan(
         plan_version=version,
-        cli_version=_text(top.get("cli_version", ""), "cli_version"),
-        lineage=_text(top.get("lineage", ""), "lineage"),
+        cli_version=_text(top.get("cli_version", ""), "cli_version", "cli_version"),
+        lineage=_text(top.get("lineage", ""), "lineage", "lineage"),
         serial=serial,
         entries=entries,
         sha256=sha256_hex(document),
     )
+
+
+def parse_plan(text: str) -> BundlePlan:
+    """Parse ``bundle plan -o json`` output, or raise ``PlanShapeError`` carrying its skeleton."""
+
+    try:
+        return _parse(text)
+    except PlanShapeError as exc:
+        exc.skeleton = skeleton(text)
+        raise

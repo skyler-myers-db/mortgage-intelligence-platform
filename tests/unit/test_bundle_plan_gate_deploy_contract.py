@@ -50,6 +50,7 @@ GATE_MODULES = (
     "bundle_plan_instance_ack.py",
     "bundle_plan_lookups.py",
     "bundle_plan_shape.py",
+    "bundle_plan_skeleton.py",
     "deploy_plan_report.py",
 )
 
@@ -495,6 +496,6 @@ def test_the_harness_runs_the_real_gate(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert (
-        "REFUSED malformed_plan bundle.plan (plan_version 1 is not the reviewed version 2)"
+        "REFUSED malformed_plan bundle.plan (plan_version)"
         in result.stderr
     )

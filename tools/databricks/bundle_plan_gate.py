@@ -120,6 +120,7 @@ JOURNAL_OWNED_NOTE = (
     "journal; the recovery under the lease reconciles (deletes) it, and the pre-apply gate "
     "judges the create again, strictly"
 )
+# bundle_plan_shape.DOCUMENT_RESOURCE, where a parser refusal names the document.
 PLAN_RESOURCE = "bundle.plan"
 PUBLIC_REASON_CODES = frozenset({"malformed_plan", "lookup_failed"})
 _PREFIX = "[mip-plan-gate]"
@@ -429,14 +430,35 @@ def evaluate(
     )
 
 
-def malformed(position: str, app_key: str, reason: str) -> PlanReport:
-    """The report for a plan the parser refused."""
+def malformed(
+    position: str, app_key: str, reason: str, *, resource: str = PLAN_RESOURCE, **detail: Any
+) -> PlanReport:
+    """The report for a plan that could not be read or parsed; ``reason`` is public."""
 
     return PlanReport(
         position=position,
         app_resource=f"apps.{app_key}",
         app_bound=False,
-        refusals=(_refuse("malformed_plan", PLAN_RESOURCE, reason=reason),),
+        refusals=(_refuse("malformed_plan", resource, reason=reason, **detail),),
+    )
+
+
+def malformed_shape(position: str, app_key: str, exc: PlanShapeError) -> PlanReport:
+    """A parser refusal: its field class is public, its message and skeleton are not.
+
+    The message can name a change path, and in a plan over bound objects a
+    change path can carry a remote map key (a tag key, a task key); the repo's
+    run logs are public.
+    """
+
+    private = exc.private()
+    return malformed(
+        position,
+        app_key,
+        exc.field,
+        resource=exc.resource,
+        message=private["message"],
+        skeleton=private["skeleton"],
     )
 
 
@@ -485,7 +507,8 @@ def _refusal_line(report: PlanReport, refusal: Refusal) -> str:
     if refusal.related:
         extra = f" ({len(refusal.related)} collisions: {', '.join(refusal.related)})"
     elif refusal.code in PUBLIC_REASON_CODES:
-        # These reasons name plan fields and error classes only, never a value.
+        # These reasons are a field class, a plan field or an error class, never a
+        # value or a change path (a parser message stays in the full report).
         extra = f" ({refusal.detail.get('reason', '')})"
     remedy = refusal.remedy
     if refusal.code == "instance_update_unacked":
@@ -575,7 +598,7 @@ def main(
     except (OSError, UnicodeDecodeError) as exc:
         report = malformed(args.position, args.app_key, f"unreadable: {type(exc).__name__}")
     except PlanShapeError as exc:
-        report = malformed(args.position, args.app_key, str(exc))
+        report = malformed_shape(args.position, args.app_key, exc)
     else:
         report = evaluate(
             plan,

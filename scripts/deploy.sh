@@ -279,8 +279,12 @@ fi
 # --phase unadopt (M2-PR6, scripts/lib/deploy_adopt_phase_lifecycle.sh) run the
 # same read-only steps, plan the bundle state edit in place of the gate, and
 # edit only the deployer's bundle state under the lease. A live phase is
-# CI-only (attack O13): the client deployer has no secret a person can use, and
-# a person's bundle plan against a deployer root trips the CLI's run_as check.
+# CI-only (attack O13): the client deployer has no secret a person can use;
+# bundle_env takes the bundle root from the profile's deployer, and even a
+# read-only bundle validate writes into that root (spike S10: it creates
+# <root>/files); and the adopt phases bind the Genie space only by its pin or
+# by an acked pin plan, whose digest covers the deploying identity. (The
+# bundle declares no bundle-wide run_as, so the CLI's run_as check is not why.)
 # A dry run makes no Databricks call, so it stays available everywhere.
 case "$PHASE_SEEN:$DEPLOY_PHASE" in
   0:|1:plan|1:release|1:data|1:adopt|1:unadopt) ;;

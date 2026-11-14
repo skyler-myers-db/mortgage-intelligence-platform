@@ -172,7 +172,28 @@ def test_an_unreadable_live_state_or_plan_refuses() -> None:
     assert gate.check(_plan({"schedule": PAUSED}), workspace_factory=broken) == [
         "its live state could not be read (PermissionError)"
     ]
-    assert gate.check("{", workspace_factory=broken)[0].startswith("the bundle plan could not be read")
+    assert gate.check("{", workspace_factory=broken)[0] == (
+        "the bundle plan could not be read (malformed_plan bundle.plan (json))"
+    )
+
+
+def test_a_parser_refusal_prints_its_field_class_never_its_change_path() -> None:
+    map_key = "zyrplax-remote-map-key"
+    text = json.dumps(
+        {
+            "plan_version": 2,
+            "plan": {
+                "resources.jobs.mip_ref_seed": {
+                    "action": "update",
+                    "changes": {f"tags['{map_key}']": {"action": "update", "why": "x"}},
+                }
+            },
+        }
+    )
+
+    reasons = gate.check(text, workspace_factory=lambda: None)
+
+    assert reasons == ["the bundle plan could not be read (malformed_plan jobs.mip_ref_seed (changes))"]
 
 
 def test_the_cli_exits_2_with_value_free_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

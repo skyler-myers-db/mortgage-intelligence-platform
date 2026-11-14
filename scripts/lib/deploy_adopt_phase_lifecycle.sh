@@ -15,7 +15,11 @@
 # plan's sha256. Without MIP_ADOPT_PLAN_ACK (shell only, never .env.local) the
 # run ends here, read-only; with it, the plan must be exactly that digest
 # (the deferred owner attestation's substitute) and the run continues to the
-# lease. A dry run prints both commands and stops before the lease.
+# lease. A dry run prints both commands and stops before the lease. A run that
+# ends at the plan publishes its private report (publish_plan_report, CI only:
+# the deployer's plan-reports folder), before adopt-live's plan can refuse;
+# that create-only report is then the run's one write, and its closing line
+# says so (plan_report_write_note) instead of "read-only".
 run_adopt_phase_plan() {
   local phase="${1:?adopt phase is required}"
   local report_json
@@ -28,15 +32,22 @@ run_adopt_phase_plan() {
     report_json="$(mktemp -t "mip-${phase}-plan-report.XXXXXX.json")"
     chmod 600 "$report_json"
   fi
+  BUNDLE_PLAN_REPORT_JSON="$report_json"
+  BUNDLE_PLAN_PUBLIC_JSON=""
   if ! run "$PYTHON" -m tools.databricks.install_state_adopt plan \
       --phase "$phase" --report-out "$report_json" "${ack_args[@]}"; then
-    echo "${RED}[deploy] the ${phase} plan refused before the lease; its full report, which names resources and stays private, is ${report_json}. Nothing was changed.${RST}" >&2
+    publish_plan_report
+    echo "${RED}[deploy] the ${phase} plan refused before the lease; its full report, which names resources and stays private, is ${report_json}; $(plan_report_write_note).${RST}" >&2
     exit 2
   fi
   [[ "$DRY_RUN" -eq 1 ]] || echo "  ${phase} plan report (private): ${report_json}"
+  # With the ack the apply's report is the run's one; without it the run ends here.
+  [[ "${#ack_args[@]}" -ne 0 ]] || publish_plan_report
   run_adopt_live_plan "$phase"
   if [[ "${#ack_args[@]}" -eq 0 ]]; then
-    echo "${GRN}[deploy] ${phase} plan complete: read-only, stopped before the lease; nothing was changed. Review it, then re-run with MIP_ADOPT_PLAN_ACK=<its sha256> exported in the shell.${RST}"
+    local read_only="read-only, "
+    [[ -z "${BUNDLE_PLAN_REPORT_PUBLISHED:-}" ]] || read_only=""
+    echo "${GRN}[deploy] ${phase} plan complete: ${read_only}stopped before the lease; $(plan_report_write_note). Review it, then re-run with MIP_ADOPT_PLAN_ACK=<its sha256> exported in the shell.${RST}"
     exit 0
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -54,7 +65,9 @@ run_adopt_phase_plan() {
 # the tool means the undo is unproven: the report says which keys the state may
 # still bind, --phase unadopt recovers that half-bound state (its live checks
 # accept an unbound App), and the next release's own plan gate refuses it (its
-# unbound legacy keys plan creates of existing names).
+# unbound legacy keys plan creates of existing names). Its private report is
+# published whatever the verdict (CI only), and a failed publish never changes it.
+# shellcheck disable=SC2034  # publish_plan_report reads the BUNDLE_PLAN_* this sets.
 run_adopt_phase_apply() {
   local phase="${1:?adopt phase is required}"
   local report_json rc=0
@@ -70,6 +83,10 @@ run_adopt_phase_apply() {
     --source-git-sha "$SOURCE_GIT_SHA" \
     --report-out "$report_json" || rc=$?
   echo "  ${phase} report (private): ${report_json}"
+  BUNDLE_PLAN_REPORT_JSON="$report_json"
+  BUNDLE_PLAN_PUBLIC_JSON=""
+  BUNDLE_PLAN_REPORT_AFTER_EDIT=1
+  publish_plan_report
   if [[ "$rc" -eq 3 ]]; then
     echo "${RED}[deploy] the ${phase} refused and its undo is unproven; read the report, then run --phase unadopt. The App was never stopped.${RST}" >&2
     exit 3

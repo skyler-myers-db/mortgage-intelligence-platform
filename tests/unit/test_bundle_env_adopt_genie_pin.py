@@ -408,7 +408,9 @@ def test_the_docs_say_how_a_mid_run_holder_change_ends_and_recovers() -> None:
         f"`{adopt._PREFIX} REFUSED: bundle plan failed (exit 2)`",
         f"`{adopt._PREFIX} REFUSED bind_failed: BundleCliError during the binds`",
         f"`{adopt_live._PREFIX} REFUSED bindings_differ: the bundle summary failed (exit 2)`",
-        "written only to the run's private report on the runner",
+        "written only to the run's private report (`cli_errors`",
+        # Wave 7f: the adopt phases publish that report; the log still never carries it.
+        "never to the log; the deploy publishes that report to the deployer's plan-reports folder",
         "A read-only dispatch without `genie_pin` reveals it",
         # A summary-time refusal: the binds stay, so the adopt plan digest moved too.
         "re-running 10B-2 with only a fresh `genie_pin` cannot pass",
